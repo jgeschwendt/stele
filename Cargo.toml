@@ -1,0 +1,17 @@
+[package]
+name = "stele-cli"
+version = "0.1.0"
+edition = "2024"
+description = "stele — typed agent-doc graph reconciled against extracted code truth"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "stele"
+path = "src/lib.rs"
+
+[[bin]]
+name = "stele"
+path = "src/main.rs"
+
+[dev-dependencies]
+tempfile = "3"

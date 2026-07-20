@@ -25,3 +25,6 @@ This repo eats its own convention: the block above is a stele node in the plain-
 - Design decisions in SPEC.md's decision log and §10 are settled — relitigate only with new evidence, in a PR that updates the log.
 - Doc edits own the whole file: verify external claims (harness behavior, tool capabilities) against live sources, and date-stamp negative claims — several in SPEC.md carry `(as of 2026-07…)` markers that rot by design.
 - When implementation starts: the §4 assertion suite is the test-fixture contract; EXAMPLE.md's CI failure gallery is the expected-output oracle.
+
+<!-- stele:begin router -->
+<!-- stele:end -->

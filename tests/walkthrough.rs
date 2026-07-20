@@ -18,7 +18,6 @@ const ACME_AGENTS: [&str; 6] = [
 
 // (a) On a bare two-directory tree with no AGENTS.md, the full adoption path is green.
 #[test]
-#[ignore = "phase E"]
 fn walkthrough_bare_tree_init_build_check() {
     let fixture = Fixture::bare();
     fixture.write(
@@ -44,7 +43,6 @@ fn walkthrough_bare_tree_init_build_check() {
 
 // (b) On acme, init leaves every existing AGENTS.md byte-identical, then build → check.
 #[test]
-#[ignore = "phase E"]
 fn walkthrough_init_is_idempotent_on_acme() {
     let fixture = Fixture::acme();
     let before: Vec<String> = ACME_AGENTS.iter().map(|p| fixture.read(p)).collect();

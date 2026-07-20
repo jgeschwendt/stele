@@ -5,7 +5,8 @@
 //! canonical lock (§5.1 pipeline). `check` requires a committed lock, rebuilds
 //! in-memory, and byte-compares the canonical serialization against the on-disk
 //! file (§5.3); the six assertion classes land in Phase D, after that compare.
-//! `emit`/`node` are Phase B stubs that only enforce the lock-presence gate.
+//! `emit` reads the committed lock and renders each AGENTS.md generated region in
+//! place plus the transpose indexes (§3.1/§6.1); `node` is still a lock-gated stub.
 //! `build_graph` resolves comment anchors and the ADR index (Phase C1) and derives
 //! import edges (Phase C2), so `build` stamps `resolved` and `verified {sha}` and
 //! fills `landmarks{}`/`adrs{}`/`extracted.imports`; the freshness `digest` (C3) is
@@ -14,12 +15,17 @@
 use crate::anchors::{self, SymbolResolution};
 use crate::assert::{self, Context, Finding};
 use crate::config::{self, AssertionClass};
+use crate::emit;
 use crate::extract;
-use crate::lock::{self, Lock};
-use crate::model::{AdrEntry, Graph, Node, Resolution, Result, SteleError, Verified};
+use crate::lock::{self, Lock, LockClaim, LockNode};
+use crate::model::{
+    AdrEntry, ExitCode, Graph, Node, NodeKind, PURPOSE_MAX_CHARS, Resolution, Result, SYSTEM_ID,
+    SteleError, Verified, normalize_id,
+};
 use crate::parse;
 use serde::Serialize;
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -45,6 +51,11 @@ const FREEZE_FLAG: &str = "--freeze";
 /// resolve it (off by default — the bonfires tier).
 const RUN_COMMANDS_FLAG: &str = "--run-commands";
 
+/// The `check --report` flag (§4.2): after the findings (or on a clean repo), print
+/// every `allow` entry with its node, edge, and verbatim reason — the sole governance
+/// against `# noqa`-style accumulation (reason-plus-visibility).
+const REPORT_FLAG: &str = "--report";
+
 /// The stable machine contract (§5.3 `--json` envelope). `findings` is reserved for
 /// assertion results (Phase D populates it); input/internal errors surface via
 /// `ok:false` + `exit` + `data.error`, never as findings.
@@ -59,12 +70,16 @@ struct Envelope<'a> {
 }
 
 /// A command's result: the `--json` `data` payload, an optional human-readable line
-/// (printed only when `--json` is absent), and any assertion findings (§4). Findings
-/// are `check`-only today; a non-empty list makes the process exit 1 (§5.3).
+/// (printed only when `--json` is absent), any assertion findings (§4), and an
+/// optional trailing human-readable report block (`check --report`, §4.2). Findings
+/// are `check`-only today; a non-empty list makes the process exit 1 (§5.3). The
+/// `report` block prints (non-`--json`) after the summary/findings regardless of
+/// outcome; under `--json` its content is folded into `data` instead.
 struct CommandOutput {
     data: Value,
     summary: Option<String>,
     findings: Vec<Finding>,
+    report: Option<String>,
 }
 
 impl CommandOutput {
@@ -75,12 +90,8 @@ impl CommandOutput {
             data,
             summary,
             findings: Vec::new(),
+            report: None,
         }
-    }
-
-    /// A stub command's empty success (no data, no human line, no findings).
-    fn empty() -> Self {
-        Self::new(json!({}), None)
     }
 }
 
@@ -106,12 +117,19 @@ pub fn run(args: &[String]) -> i32 {
             if json {
                 let findings = output.findings.iter().map(Finding::to_json).collect();
                 print_envelope(command, exit == 0, exit, output.data, findings);
-            } else if output.findings.is_empty() {
-                if let Some(summary) = output.summary {
-                    println!("{summary}");
-                }
             } else {
-                print!("{}", assert::render_human(&output.findings));
+                if output.findings.is_empty() {
+                    if let Some(summary) = &output.summary {
+                        println!("{summary}");
+                    }
+                } else {
+                    print!("{}", assert::render_human(&output.findings));
+                }
+                // The `check --report` block trails the summary/findings on the human
+                // path (§4.2 reason-plus-visibility); under `--json` it rides in `data`.
+                if let Some(report) = &output.report {
+                    print!("{report}");
+                }
             }
             exit
         }
@@ -132,13 +150,18 @@ fn dispatch(root: &Path, args: &[&str]) -> Result<CommandOutput> {
         Some("blame") => blame(root, args),
         Some("build") => build(root),
         Some("check") => check(root, args),
-        Some("emit") => emit(root),
-        Some("node") => node(root),
-        Some(other) => Err(SteleError::input_msg(format!(
-            "unknown or not-yet-implemented command: {other:?} (the full surface lands in Phase E)"
-        ))),
+        Some("emit") => emit(root, args),
+        Some("hazards") => hazards(root, args),
+        Some("init") => init(root),
+        Some("invariants") => invariants(root, args),
+        Some("node") => node(root, args),
+        Some("nodes") => nodes(root, args),
+        Some("root") => cmd_root(root),
+        Some("unfold") => unfold(root, args),
+        Some(other) => Err(SteleError::input_msg(format!("unknown command: {other:?}"))),
         None => Err(SteleError::input_msg(
-            "usage: stele build | check | emit | node <id>   (the full surface lands in Phase E)",
+            "usage: stele root | node <id> | unfold <id> | invariants | hazards | nodes | \
+             check | emit | blame | build | init   (add --json for the machine envelope)",
         )),
     }
 }
@@ -247,11 +270,52 @@ fn check(root: &Path, args: &[&str]) -> Result<CommandOutput> {
     }
 
     let findings = assert::run(&ctx, only)?;
+    let report_requested = args.contains(&REPORT_FLAG);
+    let allow = collect_allow_entries(&graph);
+    let data = if report_requested {
+        json!({
+            "nodes": graph.nodes.len(),
+            "allow": allow
+                .iter()
+                .map(|(node, edge, reason)| json!({ "node": node, "edge": edge, "reason": reason }))
+                .collect::<Vec<_>>(),
+        })
+    } else {
+        json!({ "nodes": graph.nodes.len() })
+    };
     Ok(CommandOutput {
-        data: json!({ "nodes": graph.nodes.len() }),
+        data,
         summary: None,
         findings,
+        report: report_requested.then(|| render_allow_report(&allow)),
     })
+}
+
+/// Every `allow` entry across the graph (§4.2), as `(node id, edge target, reason)`,
+/// ordered by node id then declared order — the `check --report` payload.
+fn collect_allow_entries(graph: &Graph) -> Vec<(String, String, String)> {
+    let mut entries = Vec::new();
+    for node in &graph.nodes {
+        for allow in &node.edges.allow {
+            entries.push((node.id.clone(), allow.edge.clone(), allow.reason.clone()));
+        }
+    }
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries
+}
+
+/// The `check --report` human section (§4.2): one line per `allow` entry, reason
+/// verbatim. A leading blank line separates it from any findings above; an empty set
+/// still prints the header so the governance surface is always visible.
+fn render_allow_report(entries: &[(String, String, String)]) -> String {
+    let mut out = format!("\nallow entries ({}):\n", entries.len());
+    if entries.is_empty() {
+        out.push_str("  (none)\n");
+    }
+    for (node, edge, reason) in entries {
+        out.push_str(&format!("  {node} · {edge} · {reason}\n"));
+    }
+    out
 }
 
 /// `stele blame <node-id>/<slug>` (§5.1, §4.5): require a committed lock, rebuild the
@@ -310,19 +374,978 @@ fn parse_only(args: &[&str]) -> Result<Option<AssertionClass>> {
     }
 }
 
-/// `stele emit` (§5.1): a Phase B stub. It loads config (§3.4) and enforces the §5.3
-/// lock-presence gate; rendering lands in Phase E.
-fn emit(root: &Path) -> Result<CommandOutput> {
+/// The `emit --check` flag (§3.1): render to memory and diff against on-disk regions
+/// and index files, failing CI on divergence instead of rewriting.
+const EMIT_CHECK_FLAG: &str = "--check";
+/// The `emit --claude-rules` flag (§3.3): additionally render path-scoped
+/// `.claude/rules/*.md` from node claims (opt-in).
+const EMIT_CLAUDE_RULES_FLAG: &str = "--claude-rules";
+/// The transpose-index directory (§6.1), relative to the repo root.
+const INDEX_DIR: &str = ".stele/index";
+const INVARIANTS_INDEX: &str = "invariants.md";
+const HAZARDS_INDEX: &str = "hazards.md";
+/// The `.claude/rules/` directory (§3.3), relative to the repo root.
+const CLAUDE_RULES_DIR: &str = ".claude/rules";
+/// The CLAUDE.md shim (§3.3): one line pointing Claude Code at AGENTS.md.
+const CLAUDE_SHIM: &str = "CLAUDE.md";
+const CLAUDE_SHIM_CONTENT: &str = "@AGENTS.md\n";
+
+/// `stele emit` (§5.1): read the COMMITTED lock (never rebuild, §3.2/§5.1) and render
+/// every node's generated region in place — only between its markers — plus the
+/// transpose indexes (§6.1) and the CLAUDE.md shim (§3.3). `--check` diffs instead of
+/// writing (divergence → exit 1, §3.1); `--claude-rules` additionally renders
+/// path-scoped `.claude/rules/*.md` (§3.3, opt-in). Like `node`/`blame` it trusts the
+/// committed lock and does not byte-compare — staleness is `check`'s job (§5.3).
+fn emit(root: &Path, args: &[&str]) -> Result<CommandOutput> {
     let _config = config::load(root)?;
-    read_committed_lock(root)?;
-    Ok(CommandOutput::empty())
+    let on_disk = read_committed_lock(root)?;
+    let version = lock::read_version(&on_disk)?;
+    if version != lock::LOCK_VERSION {
+        return Err(SteleError::input_msg(format!(
+            "committed lock is version {version}; this engine writes version {}. {RUN_BUILD_HINT}",
+            lock::LOCK_VERSION
+        )));
+    }
+    let lock = lock::parse_lock(&on_disk)?;
+
+    if args.contains(&EMIT_CHECK_FLAG) {
+        return emit_check(root, &lock);
+    }
+    emit_write(root, &lock, args.contains(&EMIT_CLAUDE_RULES_FLAG))
 }
 
-/// `stele node <id>` (§5.1): a Phase B stub. It enforces only the §5.3 lock-presence
-/// gate; the query lands in Phase E. Config tunes `check`/`emit`, not queries (§3.4).
-fn node(root: &Path) -> Result<CommandOutput> {
-    read_committed_lock(root)?;
-    Ok(CommandOutput::empty())
+/// Render every region in place, write both transpose indexes, ensure the CLAUDE.md
+/// shim, and (when `claude_rules`) render `.claude/rules/*.md`. `emit` rewrites strictly
+/// between markers and under `.stele/`/`.claude/` — never the marker lines or authored
+/// prose (§5.1).
+fn emit_write(root: &Path, lock: &Lock, claude_rules: bool) -> Result<CommandOutput> {
+    for (id, node) in &lock.nodes {
+        let path = node_agents_path(id);
+        let contents = read_node_agents(root, &path)?;
+        let region = require_region(&path, &contents)?;
+        let rendered = emit::render_region(lock, node);
+        let updated = format!(
+            "{}{}{}",
+            &contents[..region.content_start],
+            rendered,
+            &contents[region.content_end..]
+        );
+        if updated != contents {
+            std::fs::write(root.join(&path), &updated)
+                .map_err(|e| SteleError::internal(format!("write {}: {e}", path.display())))?;
+        }
+    }
+
+    write_under_root(
+        root,
+        INDEX_DIR,
+        INVARIANTS_INDEX,
+        &emit::render_invariants_index(lock),
+    )?;
+    write_under_root(
+        root,
+        INDEX_DIR,
+        HAZARDS_INDEX,
+        &emit::render_hazards_index(lock),
+    )?;
+    ensure_claude_shim(root, lock)?;
+    if claude_rules {
+        write_claude_rules(root, lock)?;
+    }
+
+    let regions = lock.nodes.len();
+    Ok(CommandOutput::new(
+        json!({ "regions": regions, "indexes": 2 }),
+        Some(format!(
+            "stele emit: rendered {regions} region(s) and 2 index file(s)"
+        )),
+    ))
+}
+
+/// Render to memory and byte-diff against on-disk regions and index files (§3.1); any
+/// divergence is an assertion failure (exit 1) naming each divergent file. Missing
+/// regions and malformed markers remain input errors (exit 2), same as `emit`.
+fn emit_check(root: &Path, lock: &Lock) -> Result<CommandOutput> {
+    let mut divergent: Vec<String> = Vec::new();
+    for (id, node) in &lock.nodes {
+        let path = node_agents_path(id);
+        let contents = read_node_agents(root, &path)?;
+        let region = require_region(&path, &contents)?;
+        if contents[region.content_start..region.content_end] != *emit::render_region(lock, node) {
+            divergent.push(path.display().to_string());
+        }
+    }
+    check_index(
+        root,
+        INVARIANTS_INDEX,
+        &emit::render_invariants_index(lock),
+        &mut divergent,
+    );
+    check_index(
+        root,
+        HAZARDS_INDEX,
+        &emit::render_hazards_index(lock),
+        &mut divergent,
+    );
+
+    if divergent.is_empty() {
+        return Ok(CommandOutput::new(
+            json!({ "checked": lock.nodes.len() }),
+            Some("stele emit --check: every generated region and index is up to date".to_string()),
+        ));
+    }
+    Err(SteleError {
+        exit: ExitCode::Assertion,
+        file: None,
+        line: None,
+        message: format!(
+            "emit --check: {} generated file(s) diverge from the graph; run stele emit:\n{}",
+            divergent.len(),
+            divergent.join("\n")
+        ),
+    })
+}
+
+/// The AGENTS.md path for a node id (§2.1 default id ⇔ declaring directory): the repo
+/// root's node lives at `AGENTS.md`, every other at `<id>/AGENTS.md`.
+fn node_agents_path(id: &str) -> PathBuf {
+    if id == crate::model::SYSTEM_ID {
+        PathBuf::from("AGENTS.md")
+    } else {
+        PathBuf::from(format!("{id}/AGENTS.md"))
+    }
+}
+
+/// Read a node's AGENTS.md (an IO failure is exit 3).
+fn read_node_agents(root: &Path, path: &Path) -> Result<String> {
+    std::fs::read_to_string(root.join(path))
+        .map_err(|e| SteleError::internal(format!("read {}: {e}", path.display())))
+}
+
+/// Locate a node's generated region, mapping its absence to the §3.1 exit-2 error that
+/// points the user at `stele init` (`emit` never scaffolds the region itself).
+fn require_region(path: &Path, contents: &str) -> Result<parse::Region> {
+    parse::find_region(path, contents)?.ok_or_else(|| {
+        SteleError::input(
+            path,
+            1,
+            "node AGENTS.md has no generated region; run stele init to scaffold it (§3.1)",
+        )
+    })
+}
+
+/// Write a file under a repo-root-relative directory, creating the directory tree.
+fn write_under_root(root: &Path, dir: &str, name: &str, content: &str) -> Result<()> {
+    let dir_path = root.join(dir);
+    std::fs::create_dir_all(&dir_path)
+        .map_err(|e| SteleError::internal(format!("create {dir}: {e}")))?;
+    std::fs::write(dir_path.join(name), content)
+        .map_err(|e| SteleError::internal(format!("write {dir}/{name}: {e}")))
+}
+
+/// Ensure `CLAUDE.md` exists as the `@AGENTS.md` shim when the repo root declares a
+/// node (§3.3). A CLAUDE.md that already exists is the team's and is never overwritten,
+/// even when it differs.
+fn ensure_claude_shim(root: &Path, lock: &Lock) -> Result<()> {
+    if !lock.nodes.contains_key(crate::model::SYSTEM_ID) {
+        return Ok(());
+    }
+    let path = root.join(CLAUDE_SHIM);
+    if path.exists() {
+        return Ok(());
+    }
+    std::fs::write(&path, CLAUDE_SHIM_CONTENT)
+        .map_err(|e| SteleError::internal(format!("write {CLAUDE_SHIM}: {e}")))
+}
+
+/// Render one `.claude/rules/<slug>.md` per node that declares claims (§3.3, opt-in).
+fn write_claude_rules(root: &Path, lock: &Lock) -> Result<()> {
+    for (id, node) in &lock.nodes {
+        if node.claims.is_empty() {
+            continue;
+        }
+        write_under_root(
+            root,
+            CLAUDE_RULES_DIR,
+            &format!("{}.md", emit::rule_slug(id)),
+            &emit::render_claude_rule(id, node),
+        )?;
+    }
+    Ok(())
+}
+
+/// Byte-diff one on-disk index file against its freshly-rendered content; a missing or
+/// divergent file is recorded for the `emit --check` failure list.
+fn check_index(root: &Path, name: &str, expected: &str, divergent: &mut Vec<String>) {
+    let path = root.join(INDEX_DIR).join(name);
+    if std::fs::read_to_string(&path).ok().as_deref() != Some(expected) {
+        divergent.push(format!("{INDEX_DIR}/{name}"));
+    }
+}
+
+// ─── the read/query surface (§5.1, §5.3) ─────────────────────────────────────
+//
+// Every verb below reads the COMMITTED lock and never rebuilds (§5.3): a missing
+// lock is exit 2 "run stele build", they trust the lock's freshness (staleness is
+// `check`'s job). None writes anything.
+
+/// Load + version-check + strict-parse the committed lock (§5.3), the shared front
+/// door for the read/query verbs. A missing lock → exit 2 "run stele build"; an
+/// unknown `version` → exit 2 (never best-effort parsed, §3.2).
+fn load_committed(root: &Path) -> Result<Lock> {
+    let on_disk = read_committed_lock(root)?;
+    let version = lock::read_version(&on_disk)?;
+    if version != lock::LOCK_VERSION {
+        return Err(SteleError::input_msg(format!(
+            "committed lock is version {version}; this engine writes version {}. {RUN_BUILD_HINT}",
+            lock::LOCK_VERSION
+        )));
+    }
+    lock::parse_lock(&on_disk)
+}
+
+/// `stele root` (§6): the initialContext as text — the six items in order. Items 1–2
+/// (identity, commands) render from the system node here; items 3–6 (hazards, router,
+/// indexes, engine) reuse the `emit` region renderer so `root` and the materialized
+/// root AGENTS.md never diverge.
+fn cmd_root(root: &Path) -> Result<CommandOutput> {
+    let lock = load_committed(root)?;
+    let system = lock.nodes.get(SYSTEM_ID).ok_or_else(|| {
+        SteleError::input_msg("the repo root declares no `kind: system` node; nothing to render")
+    })?;
+    Ok(CommandOutput::new(
+        root_json(&lock, system),
+        Some(render_root_text(&lock, system)),
+    ))
+}
+
+/// `stele node <id>` (§5.1): one node, all fields, human-readable. Accepts an
+/// abbreviated id when it names exactly one node (§2.4); an unknown id is exit 2
+/// listing near-miss candidates.
+fn node(root: &Path, args: &[&str]) -> Result<CommandOutput> {
+    let Some(query) = args.get(1) else {
+        return Err(SteleError::input_msg("usage: stele node <id>"));
+    };
+    let lock = load_committed(root)?;
+    let id = resolve_node_id(&lock, query)?;
+    let node = &lock.nodes[&id];
+    Ok(CommandOutput::new(node_json(node), Some(render_node(node))))
+}
+
+/// The default `unfold` radius (§5.1): the node plus its one-hop neighbours.
+const DEFAULT_UNFOLD_DEPTH: u32 = 1;
+
+/// `stele unfold <id> [--depth N]` (§5.1): the full node, then its neighbours out to
+/// `depth` hops as `id · kind · purpose` summaries. A neighbour is a child (`contains`)
+/// or a `depends` target; depth 2 expands each neighbour's neighbours in turn.
+fn unfold(root: &Path, args: &[&str]) -> Result<CommandOutput> {
+    let Some(query) = args.get(1) else {
+        return Err(SteleError::input_msg(
+            "usage: stele unfold <id> [--depth N]",
+        ));
+    };
+    let depth = parse_depth(args)?;
+    let lock = load_committed(root)?;
+    let id = resolve_node_id(&lock, query)?;
+    let node = &lock.nodes[&id];
+    let hops = collect_hops(&lock, &id, depth);
+    Ok(CommandOutput::new(
+        json!({
+            "node": node_json(node),
+            "depth": depth,
+            "hops": hops.iter().map(|(d, nb)| json!({
+                "depth": d,
+                "id": nb.id,
+                "kind": nb.kind,
+                "purpose": nb.purpose,
+            })).collect::<Vec<_>>(),
+        }),
+        Some(render_unfold(node, depth, &hops)),
+    ))
+}
+
+/// `stele invariants [--touching <path>]` (§5.1): every invariant claim repo-wide, or
+/// — with `--touching` — the claims of the node owning `<path>` PLUS all its ancestors.
+/// Invariant EXPOSURE surfaces upward (a root invariant reaches every descendant), the
+/// §4.2 contrast to structural permission, which never inherits.
+fn invariants(root: &Path, args: &[&str]) -> Result<CommandOutput> {
+    let lock = load_committed(root)?;
+    let touching = flag_value(args, "--touching")?;
+    let scope: Option<Vec<String>> = touching.map(|path| owning_chain(&lock, path));
+    let rows = collect_claims(&lock, "invariant", scope.as_deref());
+    Ok(CommandOutput::new(
+        claims_data(&rows),
+        Some(render_claim_rows("invariants", &rows)),
+    ))
+}
+
+/// `stele hazards [--node <id>]` (§5.1): every active hazard repo-wide, or just the
+/// hazards declared by `<id>` (abbreviations accepted). No upward exposure — a hazard
+/// is reported by the node that owns it.
+fn hazards(root: &Path, args: &[&str]) -> Result<CommandOutput> {
+    let lock = load_committed(root)?;
+    let scope: Option<Vec<String>> = match flag_value(args, "--node")? {
+        Some(query) => Some(vec![resolve_node_id(&lock, query)?]),
+        None => None,
+    };
+    let rows = collect_claims(&lock, "hazard", scope.as_deref());
+    Ok(CommandOutput::new(
+        claims_data(&rows),
+        Some(render_claim_rows("hazards", &rows)),
+    ))
+}
+
+/// `stele nodes [--kind <kind>]` (§5.1): every node as `id · kind · purpose`, optionally
+/// filtered to a single kind.
+fn nodes(root: &Path, args: &[&str]) -> Result<CommandOutput> {
+    let lock = load_committed(root)?;
+    let kind = flag_value(args, "--kind")?;
+    let rows: Vec<&LockNode> = lock
+        .nodes
+        .values()
+        .filter(|n| kind.is_none_or(|k| n.kind == k))
+        .collect();
+    let data = json!({
+        "nodes": rows.iter().map(|n| json!({
+            "id": n.id, "kind": n.kind, "purpose": n.purpose,
+        })).collect::<Vec<_>>(),
+    });
+    let mut text = String::new();
+    for n in &rows {
+        text.push_str(&format!(
+            "{} · {} · {}\n",
+            n.id,
+            n.kind,
+            n.purpose.as_deref().unwrap_or("")
+        ));
+    }
+    Ok(CommandOutput::new(data, Some(text)))
+}
+
+// ─── query rendering + resolution helpers ────────────────────────────────────
+
+/// Resolve a node query to a canonical lock id (§2.4): an exact id (including the
+/// system root's `/`·`.`·`` forms) wins; else the query must abbreviate exactly one
+/// node by final path segment. Ambiguous or unknown queries are exit-2 errors, the
+/// unknown case listing near-miss candidates.
+fn resolve_node_id(lock: &Lock, query: &str) -> Result<String> {
+    let canonical = normalize_id(query).unwrap_or_else(|_| query.to_string());
+    if lock.nodes.contains_key(&canonical) {
+        return Ok(canonical);
+    }
+    if lock.nodes.contains_key(query) {
+        return Ok(query.to_string());
+    }
+    let abbrev: Vec<&String> = lock
+        .nodes
+        .keys()
+        .filter(|id| last_segment(id) == query)
+        .collect();
+    match abbrev.as_slice() {
+        [only] => return Ok((*only).clone()),
+        [] => {}
+        many => {
+            return Err(SteleError::input_msg(format!(
+                "node {query:?} is ambiguous — it abbreviates {}",
+                many.iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+    }
+    let near: Vec<&str> = lock
+        .nodes
+        .keys()
+        .filter(|id| id.contains(query))
+        .map(String::as_str)
+        .collect();
+    let candidates = if near.is_empty() {
+        lock.nodes.keys().map(String::as_str).collect::<Vec<_>>()
+    } else {
+        near
+    };
+    Err(SteleError::input_msg(format!(
+        "no node {query:?}; candidates: {}",
+        candidates.join(", ")
+    )))
+}
+
+/// The final path segment of a node id (§2.4 abbreviation); the system id `/` is its
+/// own segment.
+fn last_segment(id: &str) -> &str {
+    if id == SYSTEM_ID {
+        return id;
+    }
+    id.rsplit('/').next().unwrap_or(id)
+}
+
+/// The value following `name` in `args`, or `None` when the flag is absent. A flag
+/// present with no following value is an exit-2 error.
+fn flag_value<'a>(args: &'a [&str], name: &str) -> Result<Option<&'a str>> {
+    match args.iter().position(|a| *a == name) {
+        None => Ok(None),
+        Some(i) => args
+            .get(i + 1)
+            .copied()
+            .map(Some)
+            .ok_or_else(|| SteleError::input_msg(format!("{name} requires a value"))),
+    }
+}
+
+/// Parse `unfold --depth N` (§5.1): a positive integer, defaulting to
+/// [`DEFAULT_UNFOLD_DEPTH`]. A non-integer or zero is an exit-2 error.
+fn parse_depth(args: &[&str]) -> Result<u32> {
+    let Some(value) = flag_value(args, "--depth")? else {
+        return Ok(DEFAULT_UNFOLD_DEPTH);
+    };
+    match value.parse::<u32>() {
+        Ok(n) if n >= 1 => Ok(n),
+        _ => Err(SteleError::input_msg(format!(
+            "--depth expects a positive integer, got {value:?}"
+        ))),
+    }
+}
+
+/// A node's one-hop neighbours (§5.1 unfold): its child nodes (`contains`) and its
+/// `depends` targets, id-sorted and de-duplicated.
+fn neighbours(node: &LockNode) -> Vec<String> {
+    let mut ids: Vec<String> = node.contains.clone();
+    ids.extend(node.declared.depends.clone());
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+/// BFS out to `depth` hops from `start`, returning `(hop-distance, node)` for each
+/// node reachable through the neighbour relation, nearest first, each node once.
+fn collect_hops<'a>(lock: &'a Lock, start: &str, depth: u32) -> Vec<(u32, &'a LockNode)> {
+    let mut seen: BTreeSet<String> = BTreeSet::from([start.to_string()]);
+    let mut frontier = vec![start.to_string()];
+    let mut hops = Vec::new();
+    for d in 1..=depth {
+        let mut next = Vec::new();
+        for id in &frontier {
+            let Some(node) = lock.nodes.get(id) else {
+                continue;
+            };
+            for nb in neighbours(node) {
+                if seen.insert(nb.clone())
+                    && let Some(neighbour) = lock.nodes.get(&nb)
+                {
+                    hops.push((d, neighbour));
+                    next.push(nb);
+                }
+            }
+        }
+        frontier = next;
+    }
+    hops
+}
+
+/// The human render of `unfold`: the full node, then a hop list indented by distance.
+fn render_unfold(node: &LockNode, depth: u32, hops: &[(u32, &LockNode)]) -> String {
+    let mut out = render_node(node);
+    out.push_str(&format!("\nneighbours (depth {depth}):\n"));
+    if hops.is_empty() {
+        out.push_str("  (none)\n");
+    }
+    for (d, nb) in hops {
+        out.push_str(&format!(
+            "{}{} · {} · {}\n",
+            "  ".repeat(*d as usize),
+            nb.id,
+            nb.kind,
+            nb.purpose.as_deref().unwrap_or("")
+        ));
+    }
+    out
+}
+
+/// A claim table row for the transpose queries: the owning node, the claim slug, its
+/// prose, and its anchor.
+struct ClaimRow {
+    anchor: String,
+    node: String,
+    slug: String,
+    text: String,
+}
+
+/// Collect claims of one kind (`invariant`/`hazard`) across the lock, optionally
+/// restricted to the node ids in `scope`. Ordered by node id then slug.
+fn collect_claims(lock: &Lock, kind: &str, scope: Option<&[String]>) -> Vec<ClaimRow> {
+    let mut rows = Vec::new();
+    for (id, node) in &lock.nodes {
+        if scope.is_some_and(|s| !s.iter().any(|n| n == id)) {
+            continue;
+        }
+        for claim in &node.claims {
+            if claim.kind == kind {
+                rows.push(ClaimRow {
+                    anchor: claim.anchor.clone(),
+                    node: id.clone(),
+                    slug: claim.id.clone(),
+                    text: claim.text.clone(),
+                });
+            }
+        }
+    }
+    rows.sort_by(|a, b| (&a.node, &a.slug).cmp(&(&b.node, &b.slug)));
+    rows
+}
+
+/// The node ids whose invariants a `--touching <path>` query surfaces (§4.2 upward
+/// exposure): the node owning `path` plus every ancestor node (the system root `/`
+/// included). Empty when no node owns the path.
+fn owning_chain(lock: &Lock, path: &str) -> Vec<String> {
+    let path = normalize_id(path).unwrap_or_else(|_| path.to_string());
+    let Some(owner) = lock
+        .nodes
+        .keys()
+        .filter(|id| id_contains(id, &path))
+        .max_by_key(|id| id_depth(id))
+    else {
+        return Vec::new();
+    };
+    lock.nodes
+        .keys()
+        .filter(|id| id_contains(id, owner))
+        .cloned()
+        .collect()
+}
+
+/// Whether node id `container` covers `path` by territory nesting: the system id `/`
+/// covers everything; otherwise `path` equals or is nested under `container`.
+fn id_contains(container: &str, path: &str) -> bool {
+    if container == SYSTEM_ID {
+        return true;
+    }
+    path == container || path.starts_with(&format!("{container}/"))
+}
+
+/// A node id's nesting depth (the system root is shallowest at 0), for deepest-owner
+/// selection.
+fn id_depth(id: &str) -> usize {
+    if id == SYSTEM_ID {
+        0
+    } else {
+        id.split('/').count()
+    }
+}
+
+/// The `--json` `data` for a claim query: the rows as `{node, claim, text, anchor}`.
+fn claims_data(rows: &[ClaimRow]) -> Value {
+    json!({
+        "claims": rows.iter().map(|r| json!({
+            "node": r.node, "claim": r.slug, "text": r.text, "anchor": r.anchor,
+        })).collect::<Vec<_>>(),
+    })
+}
+
+/// The human render of a claim query: one line per row, `node · claim → anchor`.
+fn render_claim_rows(title: &str, rows: &[ClaimRow]) -> String {
+    let mut out = format!("{title} ({}):\n", rows.len());
+    if rows.is_empty() {
+        out.push_str("  (none)\n");
+    }
+    for row in rows {
+        out.push_str(&format!(
+            "  {} · {} — {} (→ {})\n",
+            row.node, row.slug, row.text, row.anchor
+        ));
+    }
+    out
+}
+
+/// `stele root` items 1–6 as text: identity line, command table, then the `emit`
+/// region body (hazards banner, router, index pointers, engine lines).
+fn render_root_text(lock: &Lock, system: &LockNode) -> String {
+    let mut out = String::new();
+    out.push_str(system.purpose.as_deref().unwrap_or(""));
+    out.push('\n');
+    out.push('\n');
+    out.push_str(&render_commands_section(&system.commands));
+    // Items 3–6 reuse the shared `emit` renderer (leading `\n`, no trailing newline).
+    out.push_str(&emit::render_region(lock, system));
+    out.push('\n');
+    out
+}
+
+/// The §6 item 2 command table for `stele root` (not oracle-pinned): a compact
+/// `| command | run |` markdown table, or a `(none)` note when the node declares none.
+fn render_commands_section(commands: &std::collections::BTreeMap<String, String>) -> String {
+    let mut out = String::from("## Commands\n\n");
+    if commands.is_empty() {
+        out.push_str("(none)\n");
+        return out;
+    }
+    out.push_str("| command | run |\n| --- | --- |\n");
+    for (name, cmd) in commands {
+        out.push_str(&format!("| {name} | {cmd} |\n"));
+    }
+    out
+}
+
+/// The `--json` `data` for `stele root`: the six items as structured fields.
+fn root_json(lock: &Lock, system: &LockNode) -> Value {
+    let router: Vec<Value> = neighbours(system)
+        .iter()
+        .filter_map(|id| lock.nodes.get(id))
+        .map(|n| json!({ "id": n.id, "kind": n.kind, "purpose": n.purpose }))
+        .collect();
+    let hazards = collect_claims(lock, "hazard", None);
+    json!({
+        "purpose": system.purpose,
+        "commands": system.commands,
+        "hazards": hazards.iter().map(|h| json!({
+            "node": h.node, "claim": h.slug, "text": h.text, "anchor": h.anchor,
+        })).collect::<Vec<_>>(),
+        "router": router,
+        "indexes": [
+            format!("{INDEX_DIR}/{INVARIANTS_INDEX}"),
+            format!("{INDEX_DIR}/{HAZARDS_INDEX}"),
+        ],
+    })
+}
+
+/// The human render of one node (`stele node`): kind header, then every populated
+/// field — purpose, commands, edges, claims, containment, extracted imports, budget.
+fn render_node(node: &LockNode) -> String {
+    let mut out = format!("{} ({})\n", node.id, node.kind);
+    if let Some(purpose) = &node.purpose {
+        out.push_str(&format!("purpose: {purpose}\n"));
+    }
+    if !node.commands.is_empty() {
+        out.push_str("commands:\n");
+        for (name, cmd) in &node.commands {
+            out.push_str(&format!("  {name}: {cmd}\n"));
+        }
+    }
+    out.push_str(&format!(
+        "depends: {}\n",
+        join_or_none(&node.declared.depends)
+    ));
+    if !node.declared.decided_by.is_empty() {
+        out.push_str(&format!(
+            "decided_by: {}\n",
+            node.declared.decided_by.join(", ")
+        ));
+    }
+    for allow in &node.declared.allow {
+        out.push_str(&format!("allow: {} — {}\n", allow.edge, allow.reason));
+    }
+    render_claim_group(&mut out, node, "invariant", "invariants");
+    render_claim_group(&mut out, node, "hazard", "hazards");
+    if !node.contains.is_empty() {
+        out.push_str(&format!("contains: {}\n", node.contains.join(", ")));
+    }
+    if !node.extracted.imports.is_empty() {
+        out.push_str(&format!("imports: {}\n", node.extracted.imports.join(", ")));
+    }
+    if let Some(budget) = node.budget {
+        out.push_str(&format!("budget: {budget}\n"));
+    }
+    out
+}
+
+/// Append a node's claims of one kind to the human render, each as
+/// `- [slug] text (anchor → resolved)`.
+fn render_claim_group(out: &mut String, node: &LockNode, kind: &str, heading: &str) {
+    let group: Vec<&LockClaim> = node.claims.iter().filter(|c| c.kind == kind).collect();
+    if group.is_empty() {
+        return;
+    }
+    out.push_str(&format!("{heading}:\n"));
+    for claim in group {
+        let resolved = claim
+            .resolved
+            .as_deref()
+            .map(|r| format!(" → {r}"))
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "  - [{}] {} ({}{})\n",
+            claim.id, claim.text, claim.anchor, resolved
+        ));
+    }
+}
+
+/// The `--json` `data` for `stele node`: every field of the lock node.
+fn node_json(node: &LockNode) -> Value {
+    json!({
+        "id": node.id,
+        "kind": node.kind,
+        "purpose": node.purpose,
+        "budget": node.budget,
+        "commands": node.commands,
+        "depends": node.declared.depends,
+        "decided_by": node.declared.decided_by,
+        "allow": node.declared.allow.iter().map(|a| json!({
+            "edge": a.edge, "reason": a.reason,
+        })).collect::<Vec<_>>(),
+        "contains": node.contains,
+        "imports": node.extracted.imports,
+        "invariants": claims_json(node, "invariant"),
+        "hazards": claims_json(node, "hazard"),
+    })
+}
+
+/// A node's claims of one kind as JSON objects (`stele node` / `unfold` payload).
+fn claims_json(node: &LockNode, kind: &str) -> Vec<Value> {
+    node.claims
+        .iter()
+        .filter(|c| c.kind == kind)
+        .map(|c| {
+            json!({
+                "claim": c.id,
+                "text": c.text,
+                "anchor": c.anchor,
+                "enforced_by": c.enforced_by,
+                "resolved": c.resolved,
+            })
+        })
+        .collect()
+}
+
+/// Join a string list with `, `, or `(none)` when empty.
+fn join_or_none(values: &[String]) -> String {
+    if values.is_empty() {
+        "(none)".to_string()
+    } else {
+        values.join(", ")
+    }
+}
+
+// ─── init: the adoption scaffold (§7) ────────────────────────────────────────
+
+/// The empty generated region `init` writes (§3.1/§7): the router markers with no body
+/// between them, for `emit` to fill later.
+const EMPTY_REGION: &str = "<!-- stele:begin router -->\n<!-- stele:end -->\n";
+
+/// `stele init` (§7): scan the tracked tree, propose node boundaries, and scaffold a
+/// skeleton `stele` block + empty generated region for each proposed node that has no
+/// stele block yet. Proposals: the repo root (system) plus each top-level directory
+/// that holds tracked files, is not the ADR directory, and is not already covered by an
+/// existing node (component/import-cluster proposals are out of scope for v1). A file
+/// that already carries a stele block is left byte-identical (the §7 idempotency
+/// promise); a prose-only file gets the skeleton prepended and its prose preserved.
+/// Scaffolded files are `git add`-ed so the next `stele build` (tracked-files scan,
+/// §2.4) sees them. `init` never deletes content, never writes inside a generated
+/// region, and never writes the lock.
+fn init(root: &Path) -> Result<CommandOutput> {
+    let tracked = tracked_files(root)?;
+    let adr_dir = detect_adr_dir(&tracked);
+    let existing = existing_node_dirs(root, &tracked)?;
+
+    let mut written: Vec<String> = Vec::new();
+    if !existing.contains("") {
+        scaffold_node(root, "AGENTS.md", NodeKind::System, &adr_dir, &mut written)?;
+    }
+    for dir in proposable_top_dirs(&tracked, &existing, &adr_dir) {
+        let path = format!("{dir}/AGENTS.md");
+        scaffold_node(root, &path, NodeKind::Container, &adr_dir, &mut written)?;
+    }
+    if !written.is_empty() {
+        git_add(root, &written)?;
+    }
+    Ok(CommandOutput::new(
+        json!({ "wrote": written }),
+        Some(format!("stele init: scaffolded {} node(s)", written.len())),
+    ))
+}
+
+/// The declaring directories of every tracked AGENTS.md that carries a stele block
+/// (`""` = repo root). A file whose block is malformed still counts as carrying one, so
+/// `init` leaves it untouched (§7 non-destructive) rather than prepending a second.
+fn existing_node_dirs(root: &Path, tracked: &[PathBuf]) -> Result<BTreeSet<String>> {
+    let mut dirs = BTreeSet::new();
+    for rel in tracked {
+        if rel.file_name().is_none_or(|name| name != "AGENTS.md") {
+            continue;
+        }
+        let contents = std::fs::read_to_string(root.join(rel))
+            .map_err(|e| SteleError::internal(format!("read {}: {e}", rel.display())))?;
+        // Ok(None) is "no stele block"; Ok(Some)/Err both mean a block is present.
+        if !matches!(parse::parse_agents_file(rel, &contents), Ok(None)) {
+            dirs.insert(declaring_dir_str(rel));
+        }
+    }
+    Ok(dirs)
+}
+
+/// The top-level directories `init` proposes as containers: each first-level directory
+/// holding ≥1 tracked file that is neither the ADR directory (nor its ancestor) nor
+/// already covered by an existing node at or below it.
+fn proposable_top_dirs(
+    tracked: &[PathBuf],
+    existing: &BTreeSet<String>,
+    adr_dir: &str,
+) -> Vec<String> {
+    let mut tops: BTreeSet<String> = BTreeSet::new();
+    for path in tracked {
+        let rel = path.to_string_lossy().replace('\\', "/");
+        if let Some((top, _)) = rel.split_once('/') {
+            tops.insert(top.to_string());
+        }
+    }
+    tops.into_iter()
+        .filter(|top| {
+            let is_adr = top == adr_dir || adr_dir.starts_with(&format!("{top}/"));
+            let covered = existing
+                .iter()
+                .any(|dir| dir == top || dir.starts_with(&format!("{top}/")));
+            !is_adr && !covered
+        })
+        .collect()
+}
+
+/// Scaffold one proposed node's AGENTS.md (§7). No file → write the heading + skeleton
+/// block + empty region. Prose-only file → prepend the skeleton (after any leading `#`
+/// heading), preserve every existing byte, and append an empty region if the file has
+/// none. Records the written path for staging.
+fn scaffold_node(
+    root: &Path,
+    rel_path: &str,
+    kind: NodeKind,
+    adr_dir: &str,
+    written: &mut Vec<String>,
+) -> Result<()> {
+    let full = root.join(rel_path);
+    let contents = match std::fs::read_to_string(&full) {
+        Ok(existing) => prepend_skeleton(rel_path, &existing, kind, adr_dir)?,
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            new_skeleton_file(rel_path, root, kind, adr_dir)
+        }
+        Err(e) => return Err(SteleError::internal(format!("read {rel_path}: {e}"))),
+    };
+    if let Some(parent) = full.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| SteleError::internal(format!("create dir for {rel_path}: {e}")))?;
+    }
+    std::fs::write(&full, contents)
+        .map_err(|e| SteleError::internal(format!("write {rel_path}: {e}")))?;
+    written.push(rel_path.to_string());
+    Ok(())
+}
+
+/// A brand-new node AGENTS.md (§7): `# <name>` heading, the skeleton block, then an
+/// empty generated region.
+fn new_skeleton_file(rel_path: &str, root: &Path, kind: NodeKind, adr_dir: &str) -> String {
+    let name = node_display_name(rel_path, root);
+    format!(
+        "# {name}\n\n{}\n{EMPTY_REGION}",
+        skeleton_block(kind, adr_dir)
+    )
+}
+
+/// Prepend the skeleton block to a prose-only file (§7): keep a leading `# heading`
+/// first, then the block, then every existing byte of prose, then an empty region if
+/// the file carries none. Preserves all prior content.
+fn prepend_skeleton(rel_path: &str, prose: &str, kind: NodeKind, adr_dir: &str) -> Result<String> {
+    let (heading, body) = split_leading_heading(prose);
+    let mut out = String::new();
+    if let Some(heading) = heading {
+        out.push_str(heading);
+        out.push_str("\n\n");
+    }
+    out.push_str(&skeleton_block(kind, adr_dir));
+    out.push('\n');
+    out.push_str(body);
+    // Append an empty region only when the (now-combined) file has none.
+    if parse::find_region(Path::new(rel_path), &out)?.is_none() {
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push('\n');
+        out.push_str(EMPTY_REGION);
+    }
+    Ok(out)
+}
+
+/// Split a leading `# heading` line off the front of a file: `(Some(heading), rest)`
+/// when the first non-empty line is an ATX heading, else `(None, whole)`. The rest
+/// keeps its bytes verbatim (leading blank lines after the heading are dropped from
+/// `rest` only to the extent the reassembler re-adds a single separator).
+fn split_leading_heading(prose: &str) -> (Option<&str>, &str) {
+    let trimmed = prose.trim_start_matches(['\n', '\r']);
+    let Some(first_end) = trimmed.find('\n') else {
+        // Single line: a heading with no body, or bare prose.
+        return if trimmed.starts_with('#') {
+            (Some(trimmed.trim_end()), "")
+        } else {
+            (None, prose)
+        };
+    };
+    let first = trimmed[..first_end].trim_end();
+    if first.starts_with('#') {
+        let rest = trimmed[first_end + 1..].trim_start_matches(['\n', '\r']);
+        (Some(first), rest)
+    } else {
+        (None, prose)
+    }
+}
+
+/// The skeleton `stele` block (§7): the required `kind` active, every other typed field
+/// present but commented out so nothing is auto-filled (purpose/invariants stay the
+/// human's to write, §7). The `decided_by` hint names the detected ADR directory.
+fn skeleton_block(kind: NodeKind, adr_dir: &str) -> String {
+    format!(
+        "```stele\nkind: {}\n# purpose:            # \u{2264}{PURPOSE_MAX_CHARS}-char scent \u{2014} fill it in (never auto-generated, \u{00A7}7)\n# commands: {{}}\n# invariants: []\n# hazards: []\n# edges:\n#   depends: []\n#   decided_by: [{adr_dir}/0001]\n# budget:\n```\n",
+        kind.as_str()
+    )
+}
+
+/// The `# heading` name for a scaffolded node: the declaring directory's final segment,
+/// or the repo directory name for the root system node.
+fn node_display_name(rel_path: &str, root: &Path) -> String {
+    match rel_path.rsplit_once('/') {
+        Some((dir, _)) => dir.rsplit('/').next().unwrap_or(dir).to_string(),
+        None => root
+            .canonicalize()
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| "root".to_string()),
+    }
+}
+
+/// A tracked AGENTS.md's declaring directory as a string (`""` = repo root).
+fn declaring_dir_str(rel: &Path) -> String {
+    match rel.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir.to_string_lossy().replace('\\', "/"),
+        _ => String::new(),
+    }
+}
+
+/// Detect the repo's ADR directory (§10.5): the first of [`ADR_DIRS`] holding a tracked
+/// `NNNN-*.md`, else the greenfield default `adr/` for the skeleton's `decided_by` hint.
+fn detect_adr_dir(tracked: &[PathBuf]) -> String {
+    let paths: Vec<String> = tracked
+        .iter()
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .collect();
+    ADR_DIRS
+        .iter()
+        .find(|dir| paths.iter().any(|p| adr_number(dir, p).is_some()))
+        .map(|d| d.to_string())
+        .unwrap_or_else(|| ADR_DIRS[0].to_string())
+}
+
+/// Stage the files `init` wrote (`git add`) so the next `stele build` — which scans
+/// VCS-tracked files only (§2.4) — compiles them.
+fn git_add(root: &Path, paths: &[String]) -> Result<()> {
+    let output = Command::new("git")
+        .arg("add")
+        .arg("--")
+        .args(paths)
+        .current_dir(root)
+        .output()
+        .map_err(|e| SteleError::internal(format!("run `git add`: {e}")))?;
+    if !output.status.success() {
+        return Err(SteleError::internal(format!(
+            "`git add` failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(())
 }
 
 // ─── the source pipeline (§5.1) ──────────────────────────────────────────────

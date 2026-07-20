@@ -263,6 +263,87 @@ fn resolve_id(rel_path: &Path, block: &SteleBlock, override_id: Option<&str>) ->
     normalize_id(&raw).map_err(|message| SteleError::input(rel_path, block.fence_line, message))
 }
 
+// ─── generated-region markers (§3.1 item 2) ──────────────────────────────────
+
+/// The opening-marker prefix: `<!-- stele:begin` then the region name (and any free
+/// annotation) then `-->`.
+const REGION_BEGIN_PREFIX: &str = "<!-- stele:begin";
+/// The closing marker, matched exactly (after trimming) — no name, no annotation.
+const REGION_END_MARKER: &str = "<!-- stele:end -->";
+/// The trailing `-->` every marker line closes with.
+const MARKER_CLOSE: &str = "-->";
+
+/// A located generated region (§3.1 item 2): the single marker-fenced span `emit`
+/// owns. `content_start`/`content_end` bracket the engine-owned bytes strictly
+/// between the markers (the begin marker line's trailing LF through the byte before
+/// the end marker line), so the markers and everything outside them stay verbatim.
+pub struct Region {
+    pub content_end: usize,
+    pub content_start: usize,
+    pub name: String,
+}
+
+/// Locate the one generated region in a node's AGENTS.md (§3.1 item 2). `Ok(None)` =
+/// no region (an authored-only file `emit` reports needing `init`). Malformed —
+/// begin without end, end without begin, or a second begin (two regions or nesting)
+/// — is a §5.3 input error (exit 2) naming the file.
+pub fn find_region(rel_path: &Path, contents: &str) -> Result<Option<Region>> {
+    // (name, content_start, begin_line) of an open, not-yet-closed begin marker.
+    let mut open: Option<(String, usize, usize)> = None;
+    let mut region: Option<Region> = None;
+    let mut offset = 0;
+    for (index, raw_line) in contents.split_inclusive('\n').enumerate() {
+        let line_no = index + 1;
+        let line_start = offset;
+        offset += raw_line.len();
+        let line = raw_line.trim();
+        if let Some(name) = parse_begin_marker(line) {
+            if open.is_some() || region.is_some() {
+                return Err(SteleError::input(
+                    rel_path,
+                    line_no,
+                    "a second stele:begin marker; exactly one generated region per file (§3.1)",
+                ));
+            }
+            open = Some((name, offset, line_no));
+        } else if line == REGION_END_MARKER {
+            match open.take() {
+                Some((name, content_start, _)) => {
+                    region = Some(Region {
+                        content_end: line_start,
+                        content_start,
+                        name,
+                    });
+                }
+                None => {
+                    return Err(SteleError::input(
+                        rel_path,
+                        line_no,
+                        "a stele:end marker with no matching stele:begin (§3.1)",
+                    ));
+                }
+            }
+        }
+    }
+    if let Some((_, _, begin_line)) = open {
+        return Err(SteleError::input(
+            rel_path,
+            begin_line,
+            "a stele:begin marker with no matching stele:end (§3.1)",
+        ));
+    }
+    Ok(region)
+}
+
+/// If `line` is a begin marker, return its region name — the first whitespace token
+/// after `<!-- stele:begin` (any further text before `-->` is free annotation the
+/// parser ignores, §3.1). `None` for any other line, the end marker included.
+fn parse_begin_marker(line: &str) -> Option<String> {
+    let inner = line.strip_prefix(REGION_BEGIN_PREFIX)?;
+    let inner = inner.strip_suffix(MARKER_CLOSE)?;
+    Some(inner.split_whitespace().next()?.to_string())
+}
+
 // ─── markdown fence scanner (§3.1 item 1) ────────────────────────────────────
 
 /// The located authored block: its body (for YAML parsing) and the 1-based file

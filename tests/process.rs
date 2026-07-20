@@ -10,7 +10,6 @@ use common::Fixture;
 // Two nodes normalizing to the same id → exit 2 (§2.1). A second AGENTS.md explicitly
 // declares the apps/web id already held by apps/web/AGENTS.md.
 #[test]
-#[ignore = "phase B"]
 fn exit_2_on_duplicate_node_id() {
     let fixture = Fixture::acme();
     fixture.replace(
@@ -26,7 +25,6 @@ fn exit_2_on_duplicate_node_id() {
 
 // Two `stele` blocks in one file → exit 2 (§3.1 item 1).
 #[test]
-#[ignore = "phase B"]
 fn exit_2_on_two_stele_blocks_in_one_file() {
     let fixture = Fixture::acme();
     fixture.append(
@@ -41,7 +39,6 @@ fn exit_2_on_two_stele_blocks_in_one_file() {
 
 // Unknown lock `version` → exit 2, never best-effort parse (§3.2).
 #[test]
-#[ignore = "phase B"]
 fn exit_2_on_unknown_lock_version() {
     let fixture = Fixture::acme();
     fixture.write(
@@ -57,7 +54,6 @@ fn exit_2_on_unknown_lock_version() {
 // A read command with no committed lock → exit 2 + "run stele build" (§5.3). `build` is
 // the only writer of the lock; check/emit/query refuse without one.
 #[test]
-#[ignore = "phase B"]
 fn exit_2_without_a_lock_says_run_stele_build() {
     let fixture = Fixture::acme();
     for args in [vec!["check"], vec!["emit"], vec!["node", "apps/web"]] {

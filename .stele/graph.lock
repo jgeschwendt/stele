@@ -14,7 +14,7 @@
           "text": "every [Cn] citation must stay licensed by research/claims.md's status for that claim — never state a `reported` claim as settled fact",
           "verified": {
             "digest": null,
-            "sha": "b7ae55ea3703010964f2e5f6150d24b8e2ff7d0a"
+            "sha": "35f09c1df0c3db8412ccb5a4d0a3a73f4aa13824"
           }
         },
         {
@@ -26,7 +26,7 @@
           "text": "SPEC.md outranks everything here — code and examples conform to it; changing behavior means revising the spec (and its decision log) first",
           "verified": {
             "digest": null,
-            "sha": "b7ae55ea3703010964f2e5f6150d24b8e2ff7d0a"
+            "sha": "35f09c1df0c3db8412ccb5a4d0a3a73f4aa13824"
           }
         }
       ],
@@ -46,7 +46,7 @@
       },
       "id": "/",
       "kind": "system",
-      "purpose": "Spec repo for stele — typed agent-doc graph reconciled against extracted code truth. Pre-implementation; SPEC.md is the contract."
+      "purpose": "stele — typed agent-doc graph reconciled against extracted code truth. SPEC.md is the contract; the Rust engine implements it and self-hosts on this repo."
     },
     "research": {
       "budget": null,

@@ -192,7 +192,7 @@ Every top-level directory (configurable depth) maps into some node's territory �
 Accounting per materialized artifact per harness profile; the unit is explicit per profile — `claude` counts TOKENS, `codex` counts BYTES (UTF-8, the unit the harness truncates on):
 
 - `claude`: root AGENTS.md + ancestor chain (always-loaded set) against a configured ceiling; default 2,000 tokens for the root [C12 — folklore-grade, therefore configurable].
-- `codex`: full root→leaf concatenation chain against the 32 KiB default cap (`project_doc_max_bytes`, configurable) with margin — overflow truncation (reported silent) becomes a build failure [C4].
+- `codex`: full root→leaf concatenation chain against the 32 KiB default cap (`project_doc_max_bytes`, configurable, as of 2026-07 vendor docs) with margin — overflow truncation (reported silent) becomes a build failure [C4].
 - Per-node `budget` fields enforced at emit.
 
 **Tokenizer:** a bundled cl100k_base-class BPE approximation — no network, deterministic across platforms, accurate to ±10%; ceilings carry margin to absorb the error. The tokenizer identity is folded into the lock-format `version`, so a tokenizer change is a visible, reviewable bump.

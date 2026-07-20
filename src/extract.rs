@@ -75,9 +75,14 @@ impl<'a> Ctx<'a> {
         self.files.iter().filter(move |f| basename(f) == name)
     }
 
-    fn read(&self, rel: &str) -> Result<String> {
-        std::fs::read_to_string(self.root.join(rel))
-            .map_err(|e| SteleError::internal(format!("read {rel}: {e}")))
+    /// Read a tracked source as UTF-8, or `None` when it is not valid UTF-8 — a
+    /// binary blob the extractor skips rather than aborting on (§2.4, parity with the
+    /// anchor scan). A genuine IO failure is still a §5.3 internal error naming the file.
+    fn read(&self, rel: &str) -> Result<Option<String>> {
+        match std::fs::read(self.root.join(rel)) {
+            Ok(bytes) => Ok(String::from_utf8(bytes).ok()),
+            Err(e) => Err(SteleError::internal(format!("read {rel}: {e}"))),
+        }
     }
 
     fn is_tracked(&self, rel: &str) -> bool {
@@ -163,7 +168,9 @@ impl Extractor for Elixir {
         let mut modules: BTreeMap<String, String> = BTreeMap::new();
         let mut parsed: Vec<(&String, String, Tree)> = Vec::new();
         for file in ctx.with_ext(&EXTS) {
-            let src = ctx.read(file)?;
+            let Some(src) = ctx.read(file)? else {
+                continue;
+            };
             let tree = parse(&mut parser, &language, &src, file)?;
             collect_defmodules(tree.root_node(), src.as_bytes(), &mut |name| {
                 modules.entry(name).or_insert_with(|| file.clone());
@@ -175,7 +182,7 @@ impl Extractor for Elixir {
         let mut refs = Vec::new();
         for (file, src, tree) in &parsed {
             let mut aliases = Vec::new();
-            collect_kind_occurrences(tree.root_node(), src.as_bytes(), "alias", &mut aliases);
+            collect_module_refs(tree.root_node(), src.as_bytes(), &mut aliases);
             for (alias, row) in aliases {
                 if let Some(defining) = modules.get(&alias) {
                     refs.push(FileRef {
@@ -258,7 +265,9 @@ impl Extractor for TsJs {
         let mut parser = Parser::new();
         let mut refs = Vec::new();
         for file in ctx.with_ext(&EXTS) {
-            let src = ctx.read(file)?;
+            let Some(src) = ctx.read(file)? else {
+                continue;
+            };
             let language = ts_language(&ext_of(file).unwrap_or_default());
             let tree = parse(&mut parser, &language, &src, file)?;
             let mut sources = Vec::new();
@@ -284,7 +293,9 @@ impl Extractor for TsJs {
 fn workspace_packages(ctx: &Ctx) -> Result<Vec<Package>> {
     let mut packages = Vec::new();
     for file in ctx.with_name("package.json") {
-        let src = ctx.read(file)?;
+        let Some(src) = ctx.read(file)? else {
+            continue;
+        };
         let Ok(parsed) = serde_json::from_str::<PackageJson>(&src) else {
             continue;
         };
@@ -429,7 +440,9 @@ impl Extractor for RustLang {
         // Crate identifier (underscored) → the member directory that defines it.
         let mut crates: BTreeMap<String, String> = BTreeMap::new();
         for file in ctx.with_name("Cargo.toml") {
-            let src = ctx.read(file)?;
+            let Some(src) = ctx.read(file)? else {
+                continue;
+            };
             if let Ok(CargoToml {
                 package: Some(package),
             }) = toml::from_str::<CargoToml>(&src)
@@ -444,7 +457,9 @@ impl Extractor for RustLang {
         let language: Language = tree_sitter_rust::LANGUAGE.into();
         let mut refs = Vec::new();
         for file in ctx.with_ext(&["rs"]) {
-            let src = ctx.read(file)?;
+            let Some(src) = ctx.read(file)? else {
+                continue;
+            };
             let tree = parse(&mut parser, &language, &src, file)?;
             let mut heads = Vec::new();
             collect_rust_crate_heads(tree.root_node(), src.as_bytes(), &mut heads);
@@ -546,7 +561,9 @@ impl Extractor for Python {
         let language: Language = tree_sitter_python::LANGUAGE.into();
         let mut refs = Vec::new();
         for file in &files {
-            let src = ctx.read(file)?;
+            let Some(src) = ctx.read(file)? else {
+                continue;
+            };
             let tree = parse(&mut parser, &language, &src, file)?;
             let mut dotted = Vec::new();
             collect_python_modules(tree.root_node(), src.as_bytes(), &mut dotted);
@@ -628,17 +645,40 @@ fn parse(parser: &mut Parser, language: &Language, src: &str, file: &str) -> Res
         .ok_or_else(|| SteleError::internal(format!("tree-sitter failed to parse {file}")))
 }
 
-/// Collect the text of every node of kind `kind` in the tree paired with its 0-based
-/// line — one entry per occurrence, so the structural class can locate each reference.
-fn collect_kind_occurrences(node: Node, src: &[u8], kind: &str, out: &mut Vec<(String, usize)>) {
+/// Collect every Elixir module reference paired with its 0-based line — one entry per
+/// occurrence, so the structural class can locate each reference. A dotted module name
+/// is a single `alias` node in this grammar, but a multi-alias brace group
+/// (`alias A.B.{C, D}`, and the analogous `import`/`require`/`use` forms) parses as a
+/// `dot` whose `left` is the shared prefix `alias` and whose `right` is a `tuple` of
+/// leaf `alias`es. Such a group is EXPANDED into its component modules (`A.B.C`,
+/// `A.B.D`); the bare prefix `A.B` is NOT itself a reference, so the group's inner
+/// aliases are consumed here and never collected standalone.
+fn collect_module_refs(node: Node, src: &[u8], out: &mut Vec<(String, usize)>) {
+    if node.kind() == "dot"
+        && let Some(tuple) = node
+            .child_by_field_name("right")
+            .filter(|r| r.kind() == "tuple")
+        && let Some(prefix) = node
+            .child_by_field_name("left")
+            .and_then(|l| l.utf8_text(src).ok())
+    {
+        let mut cursor = tuple.walk();
+        for member in tuple.children(&mut cursor).filter(|c| c.kind() == "alias") {
+            if let Ok(name) = member.utf8_text(src) {
+                out.push((format!("{prefix}.{name}"), member.start_position().row));
+            }
+        }
+        return;
+    }
+    if node.kind() == "alias"
+        && let Ok(text) = node.utf8_text(src)
+    {
+        out.push((text.to_string(), node.start_position().row));
+        return;
+    }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        if child.kind() == kind
-            && let Ok(text) = child.utf8_text(src)
-        {
-            out.push((text.to_string(), child.start_position().row));
-        }
-        collect_kind_occurrences(child, src, kind, out);
+        collect_module_refs(child, src, out);
     }
 }
 
@@ -697,6 +737,44 @@ fn join(base: &str, rel: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The module references [`collect_module_refs`] finds in one Elixir source, in
+    /// occurrence order (lines dropped) — the harness for the brace-expansion tests.
+    fn module_refs(src: &str) -> Vec<String> {
+        let mut parser = Parser::new();
+        let language: Language = tree_sitter_elixir::LANGUAGE.into();
+        parser.set_language(&language).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        let mut out = Vec::new();
+        collect_module_refs(tree.root_node(), src.as_bytes(), &mut out);
+        out.into_iter().map(|(name, _)| name).collect()
+    }
+
+    #[test]
+    fn elixir_brace_group_expands_to_component_modules() {
+        // Every directive form parses to the same dot+tuple shape, so all four expand.
+        for directive in ["alias", "import", "require", "use"] {
+            let refs = module_refs(&format!("{directive} A.B.{{C, D}}\n"));
+            assert!(refs.contains(&"A.B.C".to_string()), "{directive}: {refs:?}");
+            assert!(refs.contains(&"A.B.D".to_string()), "{directive}: {refs:?}");
+            // The bare prefix and the tuple members are NOT references on their own —
+            // collecting `A.B`/`C`/`D` standalone is exactly the F3 false-finding bug.
+            assert!(!refs.contains(&"A.B".to_string()), "{directive}: {refs:?}");
+            assert!(!refs.contains(&"C".to_string()), "{directive}: {refs:?}");
+        }
+    }
+
+    #[test]
+    fn elixir_single_alias_group_expands() {
+        assert_eq!(module_refs("alias A.{B}\n"), vec!["A.B".to_string()]);
+    }
+
+    #[test]
+    fn elixir_plain_and_qualified_refs_are_unchanged() {
+        // A plain dotted alias is one node; a qualified call receiver is the left alias.
+        assert_eq!(module_refs("alias A.B.C\n"), vec!["A.B.C".to_string()]);
+        assert_eq!(module_refs("A.B.C.call()\n"), vec!["A.B.C".to_string()]);
+    }
 
     #[test]
     fn join_collapses_dot_and_parent_segments() {

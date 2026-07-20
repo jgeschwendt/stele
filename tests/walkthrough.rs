@@ -56,3 +56,36 @@ fn walkthrough_init_is_idempotent_on_acme() {
     let check = fixture.run(&["check"]);
     assert_eq!(check.code, 0, "{}", check.combined());
 }
+
+// P2 (F10): `stele init` must NEVER abort mid-scaffold when a proposed target is
+// gitignored. It pre-filters the ignored proposal (skipping it with a notice), scaffolds
+// and stages the rest, and exits 0 — no half-done tree, no orphaned file at the ignored
+// path.
+#[test]
+fn init_skips_a_gitignored_proposal_and_exits_zero() {
+    let fixture = Fixture::bare();
+    fixture.write("apps/web/app.ex", "defmodule Acme.App do\nend\n");
+    fixture.write("vendor/thing.txt", "opaque\n");
+    // The container `init` would propose for `vendor/` is gitignored.
+    fixture.write(".gitignore", "vendor/AGENTS.md\n");
+    fixture.commit("bare tree with a gitignored vendor node target");
+
+    let init = fixture.run(&["init"]);
+    assert_eq!(init.code, 0, "init must not abort: {}", init.combined());
+    assert!(
+        init.stderr.contains("vendor/AGENTS.md") && init.stderr.contains(".gitignore"),
+        "expected a skip notice for the ignored target: {}",
+        init.combined()
+    );
+    // The ignored path was never written (no orphaned, unstageable scaffold).
+    assert!(
+        !fixture.path("vendor/AGENTS.md").exists(),
+        "init wrote into a gitignored path"
+    );
+    // The un-ignored proposals were scaffolded and staged; the tree builds cleanly. (The
+    // skipped vendor/ dir stays legitimately uncovered — that is the correct consequence
+    // of an untrackable node target, not a scaffolding failure.)
+    assert!(fixture.path("AGENTS.md").exists());
+    assert!(fixture.path("apps/AGENTS.md").exists());
+    assert_eq!(fixture.run(&["build"]).code, 0);
+}

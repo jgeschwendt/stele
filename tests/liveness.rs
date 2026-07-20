@@ -12,6 +12,7 @@
 mod common;
 
 use common::Fixture;
+use serde_json::Value;
 
 /// Count the `✗ liveness:` finding lines in a `check` render.
 fn liveness_lines(out: &str) -> usize {
@@ -171,4 +172,48 @@ fn probe6_run_commands_executes_and_reports_nonzero() {
         "{out}"
     );
     assert_eq!(liveness_lines(&out), 1, "{out}");
+}
+
+// P4 (F7) — under `--json --run-commands`, an executed command's stdout must NEVER reach
+// the engine's stdout: the §5.3 single-JSON-object contract must hold. The child output is
+// captured and folded into the finding instead.
+#[test]
+fn probe7_run_commands_json_keeps_stdout_a_single_object() {
+    let fixture = Fixture::acme();
+    // The child's OUTPUT token is computed (`LEAK_$((21+21))` → `LEAK_42`), so it appears
+    // only if the child's stdout actually leaked — never merely because the command text
+    // (which the finding message echoes) contains it.
+    add_root_commands(
+        &fixture,
+        "  noisy: sh -c \"echo LEAK_$((21+21)); exit 3\"\n",
+    );
+    assert_eq!(fixture.run(&["build"]).code, 0);
+
+    let run = fixture.run(&["check", "--json", "--run-commands"]);
+    assert_eq!(run.code, 1, "{}", run.combined());
+    // The child's stdout is captured — it must not corrupt the envelope.
+    assert!(
+        !run.stdout.contains("LEAK_42"),
+        "child stdout leaked onto the engine stdout:\n{}",
+        run.stdout
+    );
+    let value: Value =
+        serde_json::from_str(run.stdout.trim()).expect("check --json stdout is one JSON object");
+    let findings = value["findings"].as_array().expect("findings array");
+    assert!(
+        findings.iter().any(|f| f["message"]
+            .as_str()
+            .is_some_and(|m| m.contains(":noisy") && m.contains("exited 3"))),
+        "the non-zero command must surface as a finding:\n{}",
+        run.stdout
+    );
+
+    // On the human path (no --json) the captured output folds into the finding detail —
+    // preserved, just never on the pure-JSON stdout.
+    let human = fixture.run(&["check", "--run-commands"]);
+    assert!(
+        human.combined().contains("LEAK_42"),
+        "captured output must fold into the finding:\n{}",
+        human.combined()
+    );
 }

@@ -9,6 +9,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        # Full history: stele's freshness class (§4.5) walks verified.sha..HEAD; a shallow
+        # (fetch-depth 1) clone prunes the watermark commit and makes churn uncountable.
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt

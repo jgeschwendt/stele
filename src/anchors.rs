@@ -131,8 +131,9 @@ pub fn scan(root: &Path, tracked: &[PathBuf]) -> Result<AnchorData> {
         if file.starts_with(STELE_DIR_PREFIX) {
             continue;
         }
-        let contents = std::fs::read_to_string(root.join(rel))
-            .map_err(|e| SteleError::internal(format!("read {file}: {e}")))?;
+        let Some(contents) = read_optional_text(&root.join(rel), &file)? else {
+            continue;
+        };
         match extension(rel).as_deref() {
             Some("markdown" | "md") => scan_markdown(&contents, &file, &mut data)?,
             other => match other.and_then(lang_for_extension) {
@@ -347,12 +348,10 @@ pub fn resolve_symbol(root: &Path, rel_path: &str, symbol: &str) -> Result<Symbo
     let Some(lang) = ext.as_deref().and_then(lang_for_extension) else {
         return Ok(SymbolResolution::Unresolved);
     };
-    let contents = match std::fs::read_to_string(root.join(path)) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(SymbolResolution::Unresolved);
-        }
-        Err(e) => return Err(SteleError::internal(format!("read {rel_path}: {e}"))),
+    // A binary blob (not valid UTF-8) cannot resolve a symbol; the anchor simply
+    // does not bind (§2.4), same as a missing file — never a hard read failure.
+    let Some(contents) = read_optional_text(&root.join(path), rel_path)? else {
+        return Ok(SymbolResolution::Unresolved);
     };
     let mut parser = Parser::new();
     let tree = parse(&mut parser, lang, &contents, rel_path)?;
@@ -406,12 +405,8 @@ fn resolve_markdown_heading(
     rel_path: &str,
     symbol: &str,
 ) -> Result<SymbolResolution> {
-    let contents = match std::fs::read_to_string(root.join(path)) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(SymbolResolution::Unresolved);
-        }
-        Err(e) => return Err(SteleError::internal(format!("read {rel_path}: {e}"))),
+    let Some(contents) = read_optional_text(&root.join(path), rel_path)? else {
+        return Ok(SymbolResolution::Unresolved);
     };
     let mut lines = Vec::new();
     for (index, line) in contents.lines().enumerate() {
@@ -512,8 +507,11 @@ pub fn region_digest_for_claim(
     let Some(lang) = extension(path).as_deref().and_then(lang_for_extension) else {
         return Ok(None);
     };
-    let contents = std::fs::read_to_string(root.join(path))
-        .map_err(|e| SteleError::internal(format!("read {file}: {e}")))?;
+    // A binary blob (not valid UTF-8) has no parse-able region; fall to the §4.5
+    // churn path (`None`), the same treatment a parser-less file gets above.
+    let Some(contents) = read_optional_text(&root.join(path), file)? else {
+        return Ok(None);
+    };
     let mut parser = Parser::new();
     let tree = parse(&mut parser, lang, &contents, file)?;
     // A landmark line came from `resolved`, so binding never fails here.
@@ -807,6 +805,20 @@ fn parse(parser: &mut Parser, lang: Lang, contents: &str, file: &str) -> Result<
     parser
         .parse(contents, None)
         .ok_or_else(|| SteleError::internal(format!("tree-sitter failed to parse {file}")))
+}
+
+/// Read a scanned file as UTF-8, distinguishing the three outcomes a scan cares
+/// about: `Ok(Some)` valid text, `Ok(None)` the file is absent OR not valid UTF-8 —
+/// a binary blob (PNG, font, icon) the scan skips rather than aborting on (§2.4),
+/// `Err` a genuine IO failure (§5.3 internal, exit 3). Node sources (AGENTS.md) are
+/// read elsewhere and never routed through here: an invalid-UTF-8 node source is a
+/// hard input error naming the file, never a silent skip.
+fn read_optional_text(path: &Path, file: &str) -> Result<Option<String>> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(String::from_utf8(bytes).ok()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(SteleError::internal(format!("read {file}: {e}"))),
+    }
 }
 
 /// A path's lowercased extension without the dot, or `None` when it has none.

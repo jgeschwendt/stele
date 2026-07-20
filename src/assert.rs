@@ -23,7 +23,7 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
 /// The `stele:landmark` comment token (§2.5), quoted verbatim in the §4.1 unresolved
@@ -978,7 +978,7 @@ fn budget_codex(ctx: &Context) -> Result<Vec<Finding>> {
     let cap = ctx.config.budget.codex_cap as usize;
     let mut worst: Option<(&Node, usize)> = None;
     for node in &ctx.graph.nodes {
-        let chain = emit::chain(&ctx.graph.nodes, node);
+        let chain = emit::chain_files(ctx.tracked, node);
         let bytes = emit::chain_content(ctx.root, &chain)?.len();
         if bytes > cap && worst.is_none_or(|(_, w)| bytes > w) {
             worst = Some((node, bytes));
@@ -1286,6 +1286,14 @@ fn freshness_claim(ctx: &Context, node: &Node, claim: &Claim) -> Result<Option<F
             else {
                 return Ok(None);
             };
+            // A watermark absent from history (shallow clone) makes churn uncountable —
+            // `verified_sha..HEAD` would silently yield 0 and pass a possibly-staled claim
+            // (F11). Report the honest failure instead.
+            if !sha_reachable(ctx.root, &verified.sha)? {
+                return Ok(Some(history_unavailable_finding(
+                    ctx.graph, node, claim, verified, file,
+                )));
+            }
             let count = churn_count(ctx.root, file, &verified.sha)?;
             if count <= threshold as usize {
                 return Ok(None);
@@ -1340,16 +1348,10 @@ fn digest_drift_finding(
     verified: &LockVerified,
     old_digest: &str,
     current: &RegionDigest,
-    staling: Option<StalingCommit>,
+    staling: Staling,
 ) -> Finding {
     let addr = claim_address(graph, &node.id, &claim.slug);
-    let staling_line = match staling {
-        Some(commit) => format!(
-            "staling commit: {} {:?} — `stele blame {addr}`",
-            commit.short, commit.subject
-        ),
-        None => format!("staling commit: (uncommitted working-tree change) — `stele blame {addr}`"),
-    };
+    let staling_line = staling.line(&addr, true);
     Finding::error(
         AssertionClass::Freshness,
         Some(node.id.clone()),
@@ -1390,6 +1392,29 @@ fn churn_finding(
     .fix("re-read the region, re-affirm or amend the claim, `stele build` re-stamps {sha}")
 }
 
+/// The shallow-clone freshness finding (§4.5): the watermark commit is not in this repo's
+/// history, so churn is uncountable — an honest failure rather than a silent pass (F11).
+/// Points at the fetch-depth fix.
+fn history_unavailable_finding(
+    graph: &Graph,
+    node: &Node,
+    claim: &Claim,
+    verified: &LockVerified,
+    file: &str,
+) -> Finding {
+    let addr = claim_address(graph, &node.id, &claim.slug);
+    Finding::error(
+        AssertionClass::Freshness,
+        Some(node.id.clone()),
+        format!("claim {addr} — cannot verify freshness: history unavailable (shallow clone?)"),
+    )
+    .detail(format!(
+        "verified at {}, a commit absent from this repo's history — a shallow / fetch-depth 1 clone cannot compute churn for {file} — `stele blame {addr}`",
+        short_sha(&verified.sha),
+    ))
+    .fix("fetch full history (git fetch --unshallow, or actions/checkout with fetch-depth: 0), then re-run stele check")
+}
+
 // ─── the staling-commit walk (§4.5, `stele blame`) ─────────────────────────────
 
 /// A commit that staled a claim: its short sha and subject (EXAMPLE 8.4
@@ -1399,21 +1424,70 @@ struct StalingCommit {
     subject: String,
 }
 
+/// Why a digest-backed claim staled (§4.5), the three honest outcomes of the walk:
+///   • `Commit`             — the oldest committed version whose digest diverges;
+///   • `Uncommitted`        — no committed version diverges AND the working tree differs
+///                            from HEAD, so a local uncommitted edit is the cause;
+///   • `HistoryUnavailable` — the watermark commit is not in this repo's history (a
+///                            shallow / fetch-depth 1 clone), so the walk cannot run — an
+///                            uncommitted-edit claim would be a LIE (F11/F12).
+enum Staling {
+    Commit(StalingCommit),
+    HistoryUnavailable,
+    Uncommitted,
+}
+
+impl Staling {
+    /// The `staling commit: …` attribution line (§4.5). `blame_hint` appends the
+    /// `stele blame <addr>` pointer the freshness finding carries (EXAMPLE 8.4); `stele
+    /// blame`'s own render omits it.
+    fn line(&self, addr: &str, blame_hint: bool) -> String {
+        let hint = if blame_hint {
+            format!(" — `stele blame {addr}`")
+        } else {
+            String::new()
+        };
+        match self {
+            Staling::Commit(c) => format!("staling commit: {} {:?}{hint}", c.short, c.subject),
+            Staling::HistoryUnavailable => {
+                format!("staling commit: history unavailable (shallow clone?){hint}")
+            }
+            Staling::Uncommitted => {
+                format!("staling commit: (uncommitted working-tree change){hint}")
+            }
+        }
+    }
+
+    /// The `--json` `staling_commit` value (§5.3): the commit object, `null` for a local
+    /// edit, or a `{status}` marker when history is unavailable.
+    fn to_json(&self) -> Value {
+        match self {
+            Staling::Commit(c) => json!({ "sha": c.short, "subject": c.subject }),
+            Staling::HistoryUnavailable => json!({ "status": "history-unavailable" }),
+            Staling::Uncommitted => Value::Null,
+        }
+    }
+}
+
 /// The commit that staled a digest-backed claim (§4.5): walk every commit touching the
 /// anchored `file` from `verified_sha` forward to `HEAD`, recomputing the bound-def
 /// digest at each (`git show <sha>:<file>` → parse → digest), and return the FIRST
-/// (oldest) whose digest diverges from `verified_digest`. `None` when no committed
-/// version diverges (the drift is an uncommitted working-tree change) or `verified_sha`
-/// is unreachable.
+/// (oldest) whose digest diverges from `verified_digest`. When no committed version
+/// diverges the drift is a working-tree edit — but ONLY when the tree actually differs
+/// from HEAD; a `verified_sha` absent from history (shallow clone) yields
+/// `HistoryUnavailable`, never a false "uncommitted" attribution (F12).
 fn staling_commit(
     root: &Path,
     file: &str,
     anchor: &str,
     verified_sha: &str,
     verified_digest: &str,
-) -> Result<Option<StalingCommit>> {
+) -> Result<Staling> {
+    if !sha_reachable(root, verified_sha)? {
+        return Ok(Staling::HistoryUnavailable);
+    }
     let Some(commits) = commits_touching(root, file, verified_sha)? else {
-        return Ok(None);
+        return Ok(Staling::HistoryUnavailable);
     };
     // `git rev-list` is newest-first; the staling commit is the OLDEST divergence.
     for sha in commits.iter().rev() {
@@ -1428,15 +1502,50 @@ fn staling_commit(
             }
         };
         if diverges {
-            return Ok(Some(commit_meta(root, sha)?));
+            return Ok(Staling::Commit(commit_meta(root, sha)?));
         }
     }
-    Ok(None)
+    // No committed version diverges: a genuine uncommitted edit iff the tree differs from
+    // HEAD; otherwise history is unavailable (never claim an edit that is not there).
+    if working_tree_differs(root, file)? {
+        Ok(Staling::Uncommitted)
+    } else {
+        Ok(Staling::HistoryUnavailable)
+    }
+}
+
+/// Whether the watermark commit `sha` is present in this repo's object database (§4.5).
+/// A shallow / `fetch-depth: 1` clone prunes ancestor commits, so a watermark from before
+/// the shallow boundary is absent — freshness must then report "history unavailable"
+/// honestly, never silently pass a churn claim (F11) nor misattribute a digest drift to
+/// an uncommitted edit (F12). A spawn failure is a §5.3 internal error.
+fn sha_reachable(root: &Path, sha: &str) -> Result<bool> {
+    let output = Command::new("git")
+        .args(["cat-file", "-e", sha])
+        .current_dir(root)
+        .output()
+        .map_err(|e| SteleError::internal(format!("run `git cat-file -e`: {e}")))?;
+    Ok(output.status.success())
+}
+
+/// Whether `file`'s working-tree bytes differ from HEAD (§4.5), via `git diff --quiet
+/// HEAD -- <file>`: exit 1 = differ, exit 0 = identical. Any other status (e.g. unborn
+/// HEAD) is treated as "no diff" so the caller does not assert a local edit it cannot
+/// prove. A spawn failure is a §5.3 internal error.
+fn working_tree_differs(root: &Path, file: &str) -> Result<bool> {
+    let output = Command::new("git")
+        .args(["diff", "--quiet", "HEAD", "--", file])
+        .current_dir(root)
+        .output()
+        .map_err(|e| SteleError::internal(format!("run `git diff --quiet`: {e}")))?;
+    Ok(output.status.code() == Some(1))
 }
 
 /// The commits touching `file` in `(verified_sha, HEAD]`, newest first (§4.5); `None`
-/// when `verified_sha` is unreachable (a rebased/rewritten watermark — blame degrades
-/// to "unknown" rather than erroring).
+/// when `verified_sha` is unreachable. Callers now pre-check reachability via
+/// [`sha_reachable`] and map both this `None` and an unreachable sha to
+/// `Staling::HistoryUnavailable`, so an unreachable watermark is reported honestly rather
+/// than silently swallowed.
 fn commits_touching(root: &Path, file: &str, verified_sha: &str) -> Result<Option<Vec<String>>> {
     let output = Command::new("git")
         .args(["rev-list", &format!("{verified_sha}..HEAD"), "--", file])
@@ -1552,12 +1661,7 @@ pub fn blame(ctx: &Context, address: &str) -> Result<(String, Value)> {
                 Some(region) if &region.digest != old_digest => {
                     let staling =
                         staling_commit(ctx.root, file, &claim.anchor, &verified.sha, old_digest)?;
-                    let staling_line = match &staling {
-                        Some(commit) => {
-                            format!("staling commit: {} {:?}", commit.short, commit.subject)
-                        }
-                        None => "staling commit: (uncommitted working-tree change)".to_string(),
-                    };
+                    let staling_line = staling.line(&addr, false);
                     let summary = format!(
                         "{addr}: STALE — region {} digest drifted\n  verified at {} (digest {}) → now {}\n  {}",
                         region.name,
@@ -1574,8 +1678,7 @@ pub fn blame(ctx: &Context, address: &str) -> Result<(String, Value)> {
                         "verified_sha": verified.sha,
                         "old_digest": old_digest,
                         "new_digest": region.digest,
-                        "staling_commit": staling
-                            .map(|c| json!({ "sha": c.short, "subject": c.subject })),
+                        "staling_commit": staling.to_json(),
                     });
                     Ok((summary, data))
                 }
@@ -1602,6 +1705,23 @@ pub fn blame(ctx: &Context, address: &str) -> Result<(String, Value)> {
             }
         }
         None => {
+            // A watermark absent from history (shallow clone) cannot anchor a churn count
+            // — `git rev-list` would silently return 0 and read as "fresh" (F11). Report
+            // the honest failure instead.
+            if !sha_reachable(ctx.root, &verified.sha)? {
+                return Ok((
+                    format!(
+                        "{addr}: parser-less anchor — history unavailable (shallow clone?); cannot count churn for {file} since {}",
+                        short_sha(&verified.sha),
+                    ),
+                    json!({
+                        "claim": addr,
+                        "node": node_id,
+                        "status": "history-unavailable",
+                        "verified_sha": verified.sha,
+                    }),
+                ));
+            }
             let count = churn_count(ctx.root, file, &verified.sha)?;
             Ok((
                 format!(
@@ -1713,9 +1833,9 @@ fn liveness(ctx: &Context) -> Result<Vec<Finding>> {
                 }
             }
             if ctx.run_commands
-                && let Some(code) = execute_command(ctx.root, command)?
+                && let Some(failure) = execute_command(ctx.root, command)?
             {
-                findings.push(command_exited(node, name, command, code));
+                findings.push(command_exited(node, name, command, &failure));
             }
         }
     }
@@ -1735,30 +1855,88 @@ fn unresolved_command(node: &Node, name: &str, segment: &str, reason: &str) -> F
 
 /// The `--run-commands` execution finding (§4.6): a declared command exited non-zero
 /// when run from the repo root. Scoping is cwd-only — no sandbox (SPEC §4.6 bonfires).
-fn command_exited(node: &Node, name: &str, command: &str, code: i32) -> Finding {
-    Finding::error(
+/// The child's captured stdout+stderr (see [`execute_command`]) fold into the finding as
+/// a detail so the diagnostic is preserved WITHOUT leaking onto the engine's own stdout —
+/// the §5.3 `--json` envelope stays a single object.
+fn command_exited(node: &Node, name: &str, command: &str, failure: &CommandFailure) -> Finding {
+    let finding = Finding::error(
         AssertionClass::Liveness,
         Some(node.id.clone()),
-        format!("command {} :{name} → `{command}` — exited {code}", node.id),
-    )
+        format!(
+            "command {} :{name} → `{command}` — exited {}",
+            node.id, failure.code
+        ),
+    );
+    if failure.output.is_empty() {
+        finding
+    } else {
+        finding.detail(format!("captured output:\n{}", failure.output))
+    }
 }
 
-/// Execute `command` from the repo root via `sh -c`, returning `Some(exit_code)` on a
-/// non-zero exit (or `Some(-1)` when a signal killed it) and `None` on success. Spawn
-/// failure is an internal error (§5.3 exit 3). NO sandbox: the command runs with the
-/// engine's full environment, scoped only to the repo root as its cwd (§4.6).
-fn execute_command(root: &Path, command: &str) -> Result<Option<i32>> {
-    let status = Command::new("sh")
+/// The maximum bytes of a failed command's captured output folded into its finding
+/// (§4.6); a runaway command's output cannot bloat the findings payload unboundedly. The
+/// TAIL is kept — the error a command dies on is almost always its last output.
+const CAPTURED_OUTPUT_CAP: usize = 4096;
+
+/// A non-zero `--run-commands` execution result (§4.6): the exit code plus the child's
+/// captured, interleaved stdout+stderr.
+struct CommandFailure {
+    code: i32,
+    output: String,
+}
+
+/// Execute `command` from the repo root via `sh -c`, returning `Some(CommandFailure)` on a
+/// non-zero exit (or code `-1` when a signal killed it) and `None` on success. The child's
+/// stdout AND stderr are CAPTURED (never inherited) so nothing the command prints reaches
+/// the engine's stdout — the §5.3 single-JSON-object contract holds under `--json`; the
+/// captured bytes fold into the finding instead. stdin is `/dev/null` so a command that
+/// reads input cannot hang the check. Spawn failure is an internal error (§5.3 exit 3). NO
+/// sandbox: the command runs with the engine's full environment, scoped only to the repo
+/// root as its cwd (§4.6).
+fn execute_command(root: &Path, command: &str) -> Result<Option<CommandFailure>> {
+    let output = Command::new("sh")
         .arg("-c")
         .arg(command)
         .current_dir(root)
-        .status()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
         .map_err(|e| SteleError::internal(format!("run `sh -c {command:?}`: {e}")))?;
-    if status.success() {
-        Ok(None)
-    } else {
-        Ok(Some(status.code().unwrap_or(-1)))
+    if output.status.success() {
+        return Ok(None);
     }
+    Ok(Some(CommandFailure {
+        code: output.status.code().unwrap_or(-1),
+        output: fold_captured(&output.stdout, &output.stderr),
+    }))
+}
+
+/// Interleave a child's captured stdout then stderr into one display string (§4.6),
+/// trimmed and capped to the trailing [`CAPTURED_OUTPUT_CAP`] bytes so a noisy command
+/// cannot bloat the finding.
+fn fold_captured(stdout: &[u8], stderr: &[u8]) -> String {
+    let mut out = String::new();
+    for stream in [stdout, stderr] {
+        let text = String::from_utf8_lossy(stream);
+        let text = text.trim();
+        if !text.is_empty() {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(text);
+        }
+    }
+    if out.len() > CAPTURED_OUTPUT_CAP {
+        let start = out.len() - CAPTURED_OUTPUT_CAP;
+        // Snap to a char boundary so the truncation never splits a UTF-8 sequence.
+        let start = (start..out.len())
+            .find(|&i| out.is_char_boundary(i))
+            .unwrap_or(out.len());
+        out = format!("…{}", &out[start..]);
+    }
+    out
 }
 
 /// Runner manifests detected at the repo root (§4.6). `Some(set)` means the runner is
@@ -2178,4 +2356,72 @@ fn parse_just_recipes(source: &str) -> BTreeSet<String> {
         }
     }
     recipes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// P5 (F11/F12): an unreachable-watermark drift must NEVER be attributed to an
+    /// uncommitted edit — the honest attribution is "history unavailable (shallow clone?)".
+    #[test]
+    fn staling_history_unavailable_line_is_honest() {
+        let line = Staling::HistoryUnavailable.line("billing/refund-cap", true);
+        assert_eq!(
+            line,
+            "staling commit: history unavailable (shallow clone?) — `stele blame billing/refund-cap`"
+        );
+        // Without the blame hint (the `stele blame` render), the pointer is dropped.
+        assert_eq!(
+            Staling::HistoryUnavailable.line("x/y", false),
+            "staling commit: history unavailable (shallow clone?)"
+        );
+        // The lie the fix removes — the uncommitted phrasing — is reserved for a genuine
+        // working-tree edit and must not surface for the history-unavailable case.
+        assert!(!line.contains("uncommitted"));
+    }
+
+    /// The parser-less churn fallback's shallow-clone finding (F11) names the honest
+    /// failure and points at the fetch-depth fix, never a silent pass.
+    #[test]
+    fn history_unavailable_finding_names_shallow_clone() {
+        let graph = Graph::default();
+        let node = Node {
+            kind: NodeKind::System,
+            id: "/".to_string(),
+            purpose: None,
+            commands: std::collections::BTreeMap::new(),
+            invariants: Vec::new(),
+            hazards: Vec::new(),
+            edges: crate::model::Edges::default(),
+            budget: None,
+            source: std::path::PathBuf::from("AGENTS.md"),
+            extracted_imports: Vec::new(),
+            contains: Vec::new(),
+        };
+        let claim = Claim::authored(
+            crate::model::ClaimKind::Invariant,
+            "the documented rule holds".to_string(),
+            "lm:doc-rule".to_string(),
+            None,
+            "doc-rule".to_string(),
+        );
+        let verified = LockVerified {
+            digest: None,
+            sha: "0123456789abcdef0123456789abcdef01234567".to_string(),
+        };
+        let finding = history_unavailable_finding(&graph, &node, &claim, &verified, "notes.txt");
+        assert!(
+            finding
+                .message
+                .contains("history unavailable (shallow clone?)")
+        );
+        assert!(finding.details.iter().any(|d| d.contains("notes.txt")));
+        assert!(
+            finding
+                .fix
+                .as_deref()
+                .is_some_and(|f| f.contains("fetch-depth: 0"))
+        );
+    }
 }

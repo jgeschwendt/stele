@@ -7,6 +7,62 @@ mod common;
 
 use common::Fixture;
 
+// P1 (F9): `stele build` on an UNBORN HEAD (git init → author files → build, no commit
+// yet — the §7 greenfield order) must succeed (exit 0), stamp every claim `verified:null`
+// (no commit to anchor a watermark to), and keep the `--json` stdout a single clean
+// object with the notice on stderr. After the first commit, rebuild → check is green
+// (null-watermark byte-compare consistency).
+#[test]
+fn exit_0_on_build_with_unborn_head() {
+    let fixture = Fixture::bare();
+    // A claim whose landmark anchor RESOLVES — so it would normally be stamped; on an
+    // unborn HEAD it must stay verified:null (no commit to anchor to).
+    fixture.write(
+        "rules.py",
+        "# stele:landmark greenfield-rule\ndef f():\n    return 1\n",
+    );
+    fixture.write(
+        "AGENTS.md",
+        "# proj\n\n```stele\nkind: system\npurpose: greenfield probe\ninvariants:\n\
+         \x20 - claim: the rule holds\n    anchor: lm:greenfield-rule\n```\n\n\
+         <!-- stele:begin router -->\n<!-- stele:end -->\n",
+    );
+    // Stage (so `git ls-files` sees the node) but do NOT commit — HEAD is unborn.
+    fixture.stage_all();
+
+    let build = fixture.run(&["build"]);
+    assert_eq!(
+        build.code,
+        0,
+        "unborn-HEAD build must exit 0: {}",
+        build.combined()
+    );
+    // The notice is on stderr, so the human/JSON stdout is uncorrupted.
+    assert!(
+        build.stderr.contains("unborn HEAD"),
+        "expected a clean stderr notice: {}",
+        build.combined()
+    );
+    let lock = fixture.read(".stele/graph.lock");
+    assert!(
+        lock.contains("\"verified\": null"),
+        "every claim must stamp verified:null pre-first-commit:\n{lock}"
+    );
+
+    // `--json` stdout is exactly one object even with the notice printed.
+    let json = fixture.run(&["build", "--json"]);
+    assert_eq!(json.code, 0, "{}", json.combined());
+    let value: serde_json::Value =
+        serde_json::from_str(json.stdout.trim()).expect("build --json stdout is one JSON object");
+    assert_eq!(value["ok"], true, "{}", json.stdout);
+
+    // First commit, then rebuild → check is green (null carried over, byte-compare holds).
+    fixture.commit("first commit");
+    assert_eq!(fixture.run(&["build"]).code, 0);
+    let check = fixture.run(&["check"]);
+    assert_eq!(check.code, 0, "{}", check.combined());
+}
+
 // Two nodes normalizing to the same id → exit 2 (§2.1). A second AGENTS.md explicitly
 // declares the apps/web id already held by apps/web/AGENTS.md.
 #[test]

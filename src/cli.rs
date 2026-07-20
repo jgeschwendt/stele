@@ -34,8 +34,9 @@ use std::process::Command;
 /// The committed lock, relative to the repo root.
 const LOCK_DIR: &str = ".stele";
 const LOCK_FILE: &str = "graph.lock";
-/// Temp name a fresh lock is written to before the atomic rename (§5.3 build
-/// atomicity: never a partial lock on disk).
+/// Temp-name prefix a fresh lock is written to before the atomic rename (§5.3 build
+/// atomicity: never a partial lock on disk). A per-writer `.{pid}.{seq}` suffix is
+/// appended so concurrent builds never collide on one temp file.
 const LOCK_TEMP: &str = ".graph.lock.tmp";
 
 /// The message every read command emits when the committed lock is missing or
@@ -194,13 +195,24 @@ fn error_data(error: &SteleError) -> Value {
     })
 }
 
+/// The one-line stderr notice `build` prints on an unborn HEAD (§7 greenfield: `git
+/// init` → `stele init` → `stele build` with no commit yet). Every claim stamps
+/// `verified: null` and build still succeeds — there is simply no commit to anchor a
+/// watermark to; the first `stele build` after the first commit stamps them.
+const UNBORN_HEAD_NOTICE: &str = "stele build: no commit yet (unborn HEAD) — every claim left verified:null; commit, then \
+     re-run stele build to stamp watermarks";
+
 /// `stele build` (§5.1): sources → in-memory graph → atomically written lock.
 /// Any input error aborts before a single byte is written (§5.3 atomicity).
 /// `build` never reads `.stele/config.toml` — config tunes `check`/`emit`, not the
 /// graph (§3.4).
 fn build(root: &Path) -> Result<CommandOutput> {
     let mut graph = build_graph(root)?;
-    stamp_verified(root, &mut graph)?;
+    if !stamp_verified(root, &mut graph)? {
+        // Unborn HEAD: notice goes to stderr so the `--json` stdout envelope stays a
+        // single object (§5.3), and build proceeds to write a fully-null-watermark lock.
+        eprintln!("{UNBORN_HEAD_NOTICE}");
+    }
     let lock = Lock::from_graph(&graph);
     let bytes = lock::to_canonical_string(&lock);
     write_lock_atomic(root, &bytes)?;
@@ -560,19 +572,40 @@ fn ensure_claude_shim(root: &Path, lock: &Lock) -> Result<()> {
 }
 
 /// Render one `.claude/rules/<slug>.md` per node that declares claims (§3.3, opt-in).
+/// Each write is gated on the stele marker: a target that is absent or already opens with
+/// [`emit::CLAUDE_RULE_MARKER`] is (re)generated; a foreign file (a hand-authored rule
+/// with no marker) is NEVER clobbered — it is an exit-2 input error naming the file.
 fn write_claude_rules(root: &Path, lock: &Lock) -> Result<()> {
     for (id, node) in &lock.nodes {
         if node.claims.is_empty() {
             continue;
         }
-        write_under_root(
+        write_claude_rule_file(
             root,
-            CLAUDE_RULES_DIR,
             &format!("{}.md", emit::rule_slug(id)),
             &emit::render_claude_rule(id, node),
         )?;
     }
     Ok(())
+}
+
+/// Write one generated `.claude/rules/<name>` (§3.3), guarding a hand-authored file. When
+/// the target exists and does NOT open with [`emit::CLAUDE_RULE_MARKER`] it is a foreign
+/// file — refuse with an exit-2 input error naming it (never overwrite a team's rule); an
+/// absent or marker-carrying target is (re)generated.
+fn write_claude_rule_file(root: &Path, name: &str, content: &str) -> Result<()> {
+    let path = root.join(CLAUDE_RULES_DIR).join(name);
+    if let Ok(existing) = std::fs::read_to_string(&path)
+        && !existing.starts_with(emit::CLAUDE_RULE_MARKER)
+    {
+        return Err(SteleError::input(
+            format!("{CLAUDE_RULES_DIR}/{name}"),
+            1,
+            "refusing to overwrite a hand-authored .claude/rules file (no stele marker line); \
+             move it aside or delete it, then re-run stele emit --claude-rules",
+        ));
+    }
+    write_under_root(root, CLAUDE_RULES_DIR, name, content)
 }
 
 /// Byte-diff one on-disk index file against its freshly-rendered content; a missing or
@@ -1129,8 +1162,11 @@ const EMPTY_REGION: &str = "<!-- stele:begin router -->\n<!-- stele:end -->\n";
 /// existing node (component/import-cluster proposals are out of scope for v1). A file
 /// that already carries a stele block is left byte-identical (the §7 idempotency
 /// promise); a prose-only file gets the skeleton prepended and its prose preserved.
-/// Scaffolded files are `git add`-ed so the next `stele build` (tracked-files scan,
-/// §2.4) sees them. `init` never deletes content, never writes inside a generated
+/// A proposed target that a `.gitignore` matches is skipped with a stderr notice (never
+/// scaffolded into an untrackable path). All writes happen first; then the whole set is
+/// staged in ONE `git add` batch so the next `stele build` (tracked-files scan, §2.4)
+/// sees them — a staging failure is a warning plus a `git add` instruction, never a
+/// post-write abort. `init` never deletes content, never writes inside a generated
 /// region, and never writes the lock.
 fn init(root: &Path) -> Result<CommandOutput> {
     let tracked = tracked_files(root)?;
@@ -1138,27 +1174,63 @@ fn init(root: &Path) -> Result<CommandOutput> {
     let existing = existing_node_dirs(root, &tracked)?;
 
     let mut written: Vec<String> = Vec::new();
-    if !existing.contains("") {
+    if !existing.contains("") && !skip_if_ignored(root, "AGENTS.md")? {
         scaffold_node(root, "AGENTS.md", NodeKind::System, &adr_dir, &mut written)?;
     }
     for dir in proposable_top_dirs(&tracked, &existing, &adr_dir) {
         let path = format!("{dir}/AGENTS.md");
+        if skip_if_ignored(root, &path)? {
+            continue;
+        }
         scaffold_node(root, &path, NodeKind::Container, &adr_dir, &mut written)?;
     }
     // An already-authored AGENTS.md that carries a stele block but no generated region
     // gets an empty region appended (§3.1: `emit` exits 2 pointing here — `init` must
     // actually scaffold it). Authored bytes above are byte-preserved; a file with BOTH
-    // block and region is left byte-identical (the acme idempotency oracle).
+    // block and region is left byte-identical (the acme idempotency oracle). These are
+    // already VCS-tracked, so they never hit the gitignore pre-filter.
     for rel in &tracked {
         ensure_region_for_block(root, rel, &mut written)?;
     }
+    // One batch, after every write — staging is best-effort (a warning, never an abort).
     if !written.is_empty() {
-        git_add(root, &written)?;
+        git_add(root, &written);
     }
     Ok(CommandOutput::new(
         json!({ "wrote": written }),
-        Some(format!("stele init: scaffolded {} node(s)", written.len())),
+        Some(format!(
+            "stele init: scaffolded {} node(s), staged for the next stele build",
+            written.len()
+        )),
     ))
+}
+
+/// Whether `path` (a repo-root-relative POSIX path `init` is about to scaffold) is
+/// matched by a `.gitignore`, printing a one-line stderr notice when it is. A scaffold
+/// written to an ignored path could never be VCS-tracked, so `stele build` would never
+/// see it (§2.4) — skipping keeps `init` from leaving an orphaned, unstageable file (and
+/// from aborting mid-scaffold when the later `git add` rejects it).
+fn skip_if_ignored(root: &Path, path: &str) -> Result<bool> {
+    if git_check_ignore(root, path)? {
+        eprintln!(
+            "stele init: {path} is matched by a .gitignore — skipped (an ignored path can never \
+             be tracked, so stele build would never see it)"
+        );
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+/// Whether `git check-ignore` matches `path` (§2.4). Exit 0 = ignored, 1 = not ignored;
+/// any other status is treated as "not ignored" so the scaffold proceeds. A spawn failure
+/// is a §5.3 internal error.
+fn git_check_ignore(root: &Path, path: &str) -> Result<bool> {
+    let output = Command::new("git")
+        .args(["check-ignore", "-q", "--", path])
+        .current_dir(root)
+        .output()
+        .map_err(|e| SteleError::internal(format!("run `git check-ignore`: {e}")))?;
+    Ok(output.status.code() == Some(0))
 }
 
 /// Append an empty generated region to an already-authored AGENTS.md that carries a
@@ -1374,22 +1446,30 @@ fn detect_adr_dir(tracked: &[PathBuf]) -> String {
 }
 
 /// Stage the files `init` wrote (`git add`) so the next `stele build` — which scans
-/// VCS-tracked files only (§2.4) — compiles them.
-fn git_add(root: &Path, paths: &[String]) -> Result<()> {
-    let output = Command::new("git")
+/// VCS-tracked files only (§2.4) — compiles them. Staging is best-effort: the scaffold is
+/// already on disk, so a `git add` failure (or a git that will not spawn) is a stderr
+/// warning naming the paths to stage by hand, NEVER a post-write abort (`init` still
+/// exits 0). Ignored targets were pre-filtered by [`skip_if_ignored`], so the common
+/// failure mode is already gone.
+fn git_add(root: &Path, paths: &[String]) {
+    let result = Command::new("git")
         .arg("add")
         .arg("--")
         .args(paths)
         .current_dir(root)
-        .output()
-        .map_err(|e| SteleError::internal(format!("run `git add`: {e}")))?;
-    if !output.status.success() {
-        return Err(SteleError::internal(format!(
+        .output();
+    let warning = match result {
+        Ok(output) if output.status.success() => return,
+        Ok(output) => format!(
             "`git add` failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    Ok(())
+        ),
+        Err(e) => format!("could not run `git add`: {e}"),
+    };
+    eprintln!(
+        "stele init: {warning}\n  stage the scaffold yourself so stele build sees it: git add -- {}",
+        paths.join(" ")
+    );
 }
 
 // ─── the source pipeline (§5.1) ──────────────────────────────────────────────
@@ -1407,8 +1487,7 @@ fn build_graph(root: &Path) -> Result<Graph> {
         if rel.file_name().is_none_or(|name| name != "AGENTS.md") {
             continue;
         }
-        let contents = std::fs::read_to_string(root.join(rel))
-            .map_err(|e| SteleError::internal(format!("read {}: {e}", rel.display())))?;
+        let contents = read_node_source(root, rel)?;
         if let Some(node) = parse::parse_agents_file(rel, &contents)? {
             graph.insert(node)?;
         }
@@ -1432,6 +1511,22 @@ fn build_graph(root: &Path) -> Result<Graph> {
     }
     graph.import_edges = extraction.edges;
     Ok(graph)
+}
+
+/// Read a node source (AGENTS.md, §3.1). Unlike the scan's binary-skip (§2.4), a
+/// declared node source that is not valid UTF-8 is a hard §5.3 input error naming the
+/// file — a node whose own bytes cannot be read is a repo-out-of-spec condition, never
+/// silently dropped. A genuine IO failure stays a §5.3 internal error.
+fn read_node_source(root: &Path, rel: &Path) -> Result<String> {
+    match std::fs::read(root.join(rel)) {
+        Ok(bytes) => String::from_utf8(bytes).map_err(|_| {
+            SteleError::input_msg(format!(
+                "{}: node source is not valid UTF-8 (§3.1)",
+                rel.display()
+            ))
+        }),
+        Err(e) => Err(SteleError::internal(format!("read {}: {e}", rel.display()))),
+    }
 }
 
 /// Resolve every claim's anchor to a `file:line` (§2.4), recomputed every build. An
@@ -1481,9 +1576,14 @@ fn resolve_claim_anchors(
 /// byte-match) and the tree-sitter structural digest of the claim's bound definition
 /// (§4.5; `null` only where the anchored file's language has no bundled parser).
 /// Unresolved claims stay `verified:null`. `build` is the sole stamper — `check`
-/// carries `verified` over instead (§4.5).
-fn stamp_verified(root: &Path, graph: &mut Graph) -> Result<()> {
-    let sha = head_sha(root)?;
+/// carries `verified` over instead (§4.5). Returns `false` when HEAD is unborn (no
+/// commit yet): every claim is left `verified:null` and the caller prints one notice
+/// — a greenfield `stele build` still succeeds (§7), it simply has no watermark to
+/// anchor to until the first commit.
+fn stamp_verified(root: &Path, graph: &mut Graph) -> Result<bool> {
+    let Some(sha) = head_sha(root)? else {
+        return Ok(false);
+    };
     for node in &mut graph.nodes {
         for claim in node.invariants.iter_mut().chain(node.hazards.iter_mut()) {
             if let Some(resolved) = claim.resolved.clone() {
@@ -1494,24 +1594,26 @@ fn stamp_verified(root: &Path, graph: &mut Graph) -> Result<()> {
             }
         }
     }
-    Ok(())
+    Ok(true)
 }
 
-/// The full `HEAD` commit sha (§4.5 watermark). A repo with no commit yet is a §5.3
-/// internal error — `build` needs a watermark to stamp.
-fn head_sha(root: &Path) -> Result<String> {
+/// The full `HEAD` commit sha (§4.5 watermark), or `None` when HEAD is unborn — a repo
+/// with no commit yet (§7 greenfield). `git rev-parse --verify HEAD` fails on an unborn
+/// HEAD; since `build_graph` already ran `git ls-files` successfully, that failure means
+/// "no commit", never "not a git repo". A genuine spawn failure stays a §5.3 internal
+/// error.
+fn head_sha(root: &Path) -> Result<Option<String>> {
     let output = Command::new("git")
-        .args(["rev-parse", "HEAD"])
+        .args(["rev-parse", "--verify", "HEAD"])
         .current_dir(root)
         .output()
-        .map_err(|e| SteleError::internal(format!("run `git rev-parse HEAD`: {e}")))?;
+        .map_err(|e| SteleError::internal(format!("run `git rev-parse --verify HEAD`: {e}")))?;
     if !output.status.success() {
-        return Err(SteleError::internal(format!(
-            "`git rev-parse HEAD` failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
+        return Ok(None);
     }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    Ok(Some(
+        String::from_utf8_lossy(&output.stdout).trim().to_string(),
+    ))
 }
 
 /// The source-scan file set (§2.4 scan scope): VCS-tracked files (so `.gitignore` is
@@ -1604,16 +1706,88 @@ fn adr_number<'a>(dir: &str, path: &'a str) -> Option<&'a str> {
     digits.bytes().all(|b| b.is_ascii_digit()).then_some(digits)
 }
 
-/// The ADR status (§2.6): the lowercased first token after `Status:` in the file,
-/// or `"unknown"` when there is no `Status:` line. §4.1 checks `≠ superseded`.
+/// The ADR status (§2.6): the lowercased status token, drawn from whichever of the three
+/// conventions in the wild the file uses, or `"unknown"` when none is present. §4.1
+/// checks `≠ superseded`.
+///   • MADR YAML frontmatter — a `status:` key inside a leading `---`-fenced block;
+///   • adr-tools/Nygard inline — a `Status: X` on any line (the original form);
+///   • adr-tools/Nygard heading — a `## Status` ATX heading, the value on the first
+///     non-empty line after it (markdown links stripped, first word token decides).
+/// Frontmatter outranks the inline form, which outranks the heading form.
 fn adr_status(contents: &str) -> String {
     const UNKNOWN: &str = "unknown";
+    frontmatter_status(contents)
+        .or_else(|| inline_status(contents))
+        .or_else(|| heading_status(contents))
+        .unwrap_or_else(|| UNKNOWN.to_string())
+}
+
+/// The MADR YAML-frontmatter status: the `status:` key inside a leading `---` fence.
+/// `None` when the file opens with no frontmatter or the block carries no `status:` key.
+fn frontmatter_status(contents: &str) -> Option<String> {
+    const FENCE: &str = "---";
+    let mut lines = contents.lines();
+    if lines.next()?.trim_end() != FENCE {
+        return None;
+    }
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed == FENCE {
+            return None;
+        }
+        if let Some(value) = trimmed.strip_prefix("status:") {
+            return value.split_whitespace().next().map(str::to_ascii_lowercase);
+        }
+    }
+    None
+}
+
+/// The inline `Status: X` form (adr-tools/Nygard, the original): the lowercased first
+/// whitespace token after the first `Status:` on any line. `None` when no line carries
+/// a `Status:` with a following token.
+fn inline_status(contents: &str) -> Option<String> {
     contents
         .lines()
         .find_map(|line| line.split("Status:").nth(1))
         .and_then(|rest| rest.split_whitespace().next())
-        .unwrap_or(UNKNOWN)
-        .to_ascii_lowercase()
+        .map(str::to_ascii_lowercase)
+}
+
+/// The `## Status` heading form (adr-tools/Nygard): the first non-empty line after a
+/// `## Status` ATX heading, reduced to its status word. `None` when the file has no such
+/// heading or nothing follows it.
+fn heading_status(contents: &str) -> Option<String> {
+    let mut lines = contents.lines();
+    while let Some(line) = lines.next() {
+        if is_status_heading(line) {
+            return lines
+                .by_ref()
+                .find(|body| !body.trim().is_empty())
+                .and_then(status_word);
+        }
+    }
+    None
+}
+
+/// Whether `line` is a `## Status` ATX heading (any heading depth; case-insensitive) —
+/// one or more leading `#`, then only the word `Status`.
+fn is_status_heading(line: &str) -> bool {
+    let trimmed = line.trim();
+    let body = trimmed.trim_start_matches('#');
+    body.len() < trimmed.len() && body.trim().eq_ignore_ascii_case("status")
+}
+
+/// The status word of a heading-form value line: markdown-link syntax reduced to its
+/// text by taking the first maximal run of ASCII letters, lowercased (so
+/// `[Accepted](0009.md)` → `accepted`, `Superseded by [ADR-9](…)` → `superseded`).
+/// `None` for a line with no letters.
+fn status_word(line: &str) -> Option<String> {
+    let word: String = line
+        .chars()
+        .skip_while(|c| !c.is_ascii_alphabetic())
+        .take_while(char::is_ascii_alphabetic)
+        .collect();
+    (!word.is_empty()).then(|| word.to_ascii_lowercase())
 }
 
 // ─── the committed lock (§5.3) ────────────────────────────────────────────────
@@ -1633,16 +1807,28 @@ fn read_committed_lock(root: &Path) -> Result<String> {
 
 /// Write the lock via temp-file + rename so an interrupted write never leaves a
 /// partial lock (§5.3). The caller has already produced the full byte string, so
-/// any input error has aborted before this point.
+/// any input error has aborted before this point. The temp name is unique per
+/// writer (pid + process-local counter) in the SAME directory as the target, so two
+/// concurrent builds never share a temp file — otherwise the loser's rename races on
+/// a temp the winner already renamed away (ENOENT, exit 3). The temp is cleaned up
+/// best-effort if the rename fails.
 fn write_lock_atomic(root: &Path, bytes: &str) -> Result<()> {
+    static TEMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
     let dir = root.join(LOCK_DIR);
     std::fs::create_dir_all(&dir)
         .map_err(|e| SteleError::internal(format!("create {LOCK_DIR}: {e}")))?;
-    let temp = dir.join(LOCK_TEMP);
+    let seq = TEMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temp_name = format!("{LOCK_TEMP}.{}.{seq}", std::process::id());
+    let temp = dir.join(&temp_name);
     std::fs::write(&temp, bytes)
-        .map_err(|e| SteleError::internal(format!("write {LOCK_DIR}/{LOCK_TEMP}: {e}")))?;
-    std::fs::rename(&temp, dir.join(LOCK_FILE))
-        .map_err(|e| SteleError::internal(format!("rename into {LOCK_DIR}/{LOCK_FILE}: {e}")))?;
+        .map_err(|e| SteleError::internal(format!("write {LOCK_DIR}/{temp_name}: {e}")))?;
+    if let Err(e) = std::fs::rename(&temp, dir.join(LOCK_FILE)) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(SteleError::internal(format!(
+            "rename into {LOCK_DIR}/{LOCK_FILE}: {e}"
+        )));
+    }
     Ok(())
 }
 
@@ -1659,6 +1845,29 @@ mod tests {
             .output()
             .expect("run git");
         assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
+
+    #[test]
+    fn adr_status_reads_all_three_conventions() {
+        // MADR YAML frontmatter (F5).
+        assert_eq!(
+            adr_status("---\nstatus: superseded\ndate: 2026-01-01\n---\n# t\n"),
+            "superseded"
+        );
+        // Inline `Status: X` — the original form still works, unchanged.
+        assert_eq!(
+            adr_status("# 7\n\nDate: 2026-03-02 · Status: Accepted\n"),
+            "accepted"
+        );
+        // Nygard/adr-tools `## Status` heading: value on the first non-empty line after,
+        // markdown links stripped, first word token decides.
+        assert_eq!(adr_status("# 1\n\n## Status\n\nAccepted\n"), "accepted");
+        assert_eq!(
+            adr_status("# 1\n\n## Status\n\n[Superseded](0009-x.md) by ADR 9\n"),
+            "superseded"
+        );
+        // No status anywhere → unknown.
+        assert_eq!(adr_status("# t\n\n## Context\n\nnothing here\n"), "unknown");
     }
 
     /// A file with a stele block but NO generated region gets an empty region appended at

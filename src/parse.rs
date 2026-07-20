@@ -184,17 +184,19 @@ fn assemble(rel_path: &Path, block: &SteleBlock, raw: RawBlock) -> Result<Node> 
         invariants,
         hazards,
         edges: Edges {
-            depends: raw.edges.depends,
-            decided_by: raw.edges.decided_by,
+            depends: normalize_targets(rel_path, block, "depends", raw.edges.depends)?,
+            decided_by: normalize_targets(rel_path, block, "decided_by", raw.edges.decided_by)?,
             allow: raw
                 .edges
                 .allow
                 .into_iter()
-                .map(|a| crate::model::Allow {
-                    edge: a.edge,
-                    reason: a.reason,
+                .map(|a| {
+                    Ok(crate::model::Allow {
+                        edge: normalize_target(rel_path, block, "allow.edge", &a.edge)?,
+                        reason: a.reason,
+                    })
                 })
-                .collect(),
+                .collect::<Result<Vec<_>>>()?,
         },
         budget: raw.budget,
         source: rel_path.to_path_buf(),
@@ -250,6 +252,35 @@ fn reject_duplicate_slugs(
     Ok(())
 }
 
+/// Normalize a list of edge targets (§2.1), preserving order. Every edge target is
+/// compared against normalized node ids downstream (§4.2 depends/allow, §2.6 decided_by)
+/// and serialized into the lock, so it MUST be normalized at parse time — an unnormalized
+/// `./apps/web` or `apps/web/` would never match the node id `apps/web` (§2.1: normalize
+/// before ANY comparison).
+fn normalize_targets(
+    rel_path: &Path,
+    block: &SteleBlock,
+    field: &str,
+    targets: Vec<String>,
+) -> Result<Vec<String>> {
+    targets
+        .iter()
+        .map(|t| normalize_target(rel_path, block, field, t))
+        .collect()
+}
+
+/// Normalize one edge target (§2.1), mapping a `..`-segment or OS-absolute rejection to
+/// a §5.3 input error (exit 2) naming the offending `edges.<field>`.
+fn normalize_target(rel_path: &Path, block: &SteleBlock, field: &str, raw: &str) -> Result<String> {
+    normalize_id(raw).map_err(|message| {
+        SteleError::input(
+            rel_path,
+            block.fence_line,
+            format!("edges.{field}: {message}"),
+        )
+    })
+}
+
 /// The node id (§2.1): an explicit `id:` override normalized, else the declaring
 /// directory (the AGENTS.md's parent), with the repo root mapping to `/`.
 fn resolve_id(rel_path: &Path, block: &SteleBlock, override_id: Option<&str>) -> Result<String> {
@@ -291,13 +322,34 @@ pub fn find_region(rel_path: &Path, contents: &str) -> Result<Option<Region>> {
     // (name, content_start, begin_line) of an open, not-yet-closed begin marker.
     let mut open: Option<(String, usize, usize)> = None;
     let mut region: Option<Region> = None;
+    // Fenced-code state, tracked exactly like the anchor scanner (§2.5): a
+    // marker-lookalike inside a ``` fence is literal content, never a real region
+    // boundary — otherwise `emit` would overwrite authored bytes between them (§3.1).
+    let mut fence: Option<(char, usize)> = None;
     let mut offset = 0;
     for (index, raw_line) in contents.split_inclusive('\n').enumerate() {
         let line_no = index + 1;
         let line_start = offset;
         offset += raw_line.len();
-        let line = raw_line.trim();
-        if let Some(name) = parse_begin_marker(line) {
+        let mut stripped = raw_line;
+        if let Some(s) = stripped.strip_suffix('\n') {
+            stripped = s;
+        }
+        if let Some(s) = stripped.strip_suffix('\r') {
+            stripped = s;
+        }
+        if let Some((fence_char, open_len)) = fence {
+            if is_close_fence(stripped, fence_char, open_len) {
+                fence = None;
+            }
+            continue;
+        }
+        if let Some((fence_char, open_len, _)) = open_fence(stripped) {
+            fence = Some((fence_char, open_len));
+            continue;
+        }
+        let line = stripped.trim();
+        if let Some((name, consumed)) = parse_begin_marker(line) {
             if open.is_some() || region.is_some() {
                 return Err(SteleError::input(
                     rel_path,
@@ -305,7 +357,20 @@ pub fn find_region(rel_path: &Path, contents: &str) -> Result<Option<Region>> {
                     "a second stele:begin marker; exactly one generated region per file (§3.1)",
                 ));
             }
-            open = Some((name, offset, line_no));
+            if line[consumed..].trim() == REGION_END_MARKER {
+                // The one-line empty form (§3.1/§7): begin immediately followed by end on
+                // one line. The region owns no bytes — content_start == content_end sits
+                // just past the begin marker, so `emit` reproduces the whole line verbatim.
+                let lead = stripped.len() - stripped.trim_start().len();
+                let after_begin = line_start + lead + consumed;
+                region = Some(Region {
+                    content_end: after_begin,
+                    content_start: after_begin,
+                    name,
+                });
+            } else {
+                open = Some((name, offset, line_no));
+            }
         } else if line == REGION_END_MARKER {
             match open.take() {
                 Some((name, content_start, _)) => {
@@ -335,13 +400,17 @@ pub fn find_region(rel_path: &Path, contents: &str) -> Result<Option<Region>> {
     Ok(region)
 }
 
-/// If `line` is a begin marker, return its region name — the first whitespace token
-/// after `<!-- stele:begin` (any further text before `-->` is free annotation the
-/// parser ignores, §3.1). `None` for any other line, the end marker included.
-fn parse_begin_marker(line: &str) -> Option<String> {
+/// If `line` is a begin marker, return `(region name, byte offset within `line` just
+/// past the marker's FIRST closing `-->`)`. The region name is the first whitespace
+/// token of the annotation, which ends at that first `-->`; any bytes after it are
+/// further content (§3.1 — the one-line empty form `…begin <name> --><!-- stele:end
+/// -->` carries its end marker there, so the closer must not be swallowed as
+/// annotation). `None` for any other line, the end marker included.
+fn parse_begin_marker(line: &str) -> Option<(String, usize)> {
     let inner = line.strip_prefix(REGION_BEGIN_PREFIX)?;
-    let inner = inner.strip_suffix(MARKER_CLOSE)?;
-    Some(inner.split_whitespace().next()?.to_string())
+    let close = inner.find(MARKER_CLOSE)?;
+    let name = inner[..close].split_whitespace().next()?.to_string();
+    Some((name, REGION_BEGIN_PREFIX.len() + close + MARKER_CLOSE.len()))
 }
 
 // ─── markdown fence scanner (§3.1 item 1) ────────────────────────────────────
@@ -512,6 +581,39 @@ mod tests {
             "{}",
             err.message
         );
+    }
+
+    #[test]
+    fn edge_targets_are_normalized_before_storage() {
+        // `./x` and `x/` denote the same node id `x` (§2.1); an unnormalized target would
+        // never match the normalized node id it names — the F4 defect.
+        let node = parse(
+            "kind: component\nedges:\n  depends: [./apps/web, packages/shared/]\n  \
+             decided_by: [./adr/0007]\n  allow:\n    - edge: apps//worker\n      \
+             reason: runtime DI\n",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(node.edges.depends, vec!["apps/web", "packages/shared"]);
+        assert_eq!(node.edges.decided_by, vec!["adr/0007"]);
+        assert_eq!(node.edges.allow[0].edge, "apps/worker");
+    }
+
+    #[test]
+    fn edge_target_with_parent_segment_is_exit_2_naming_the_field() {
+        let err = parse("kind: component\nedges:\n  depends: [../escape]\n").unwrap_err();
+        assert_eq!(err.exit, ExitCode::Input);
+        assert!(err.message.contains("edges.depends"), "{}", err.message);
+        assert!(err.message.contains(".."), "{}", err.message);
+    }
+
+    #[test]
+    fn absolute_allow_edge_is_exit_2_naming_the_field() {
+        let err =
+            parse("kind: component\nedges:\n  allow:\n    - edge: /abs/path\n      reason: x\n")
+                .unwrap_err();
+        assert_eq!(err.exit, ExitCode::Input);
+        assert!(err.message.contains("edges.allow.edge"), "{}", err.message);
     }
 
     #[test]

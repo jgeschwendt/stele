@@ -64,6 +64,35 @@ impl Fixture {
         Self::new()
     }
 
+    /// A depth-1 shallow clone of this repo into a fresh temp tree (§4.5 F11/F12 probe):
+    /// only HEAD is present, so a watermark commit from before the clone boundary is
+    /// unreachable — the exact condition an `actions/checkout` `fetch-depth: 1` produces.
+    /// The clone runs the binary with the same child-PATH discipline as [`Self::run`].
+    pub fn shallow_clone(&self) -> Self {
+        let dir = tempfile::tempdir().expect("create clone dir");
+        let root = dir.path().to_path_buf();
+        let url = format!("file://{}", self.root.display());
+        let out = Command::new("git")
+            .args(["clone", "--depth", "1", &url, "."])
+            .current_dir(&root)
+            .output()
+            .expect("spawn git clone");
+        assert!(
+            out.status.success(),
+            "git clone --depth 1 failed:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stub_dir = tempfile::tempdir().expect("create stub-bin dir");
+        let stub_bin = stub_dir.path().to_path_buf();
+        write_stub_bins(&stub_bin);
+        Self {
+            _dir: dir,
+            _stub_dir: stub_dir,
+            stub_bin,
+            root,
+        }
+    }
+
     fn new() -> Self {
         let dir = tempfile::tempdir().expect("create temp dir");
         let root = dir.path().to_path_buf();
@@ -90,6 +119,13 @@ impl Fixture {
             .expect("join child PATH")
             .to_string_lossy()
             .into_owned()
+    }
+
+    /// Stage everything WITHOUT committing — leaves HEAD unborn on a fresh repo (the §7
+    /// greenfield / F9 build probe: `git ls-files` sees the node, but there is no commit
+    /// to anchor a watermark to).
+    pub fn stage_all(&self) {
+        self.git(&["add", "-A"]);
     }
 
     /// Stage everything and commit with inline identity (no global git config needed).

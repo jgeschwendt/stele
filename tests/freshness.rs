@@ -204,3 +204,56 @@ fn blame_on_unknown_claim_is_exit_2() {
     let blame = fixture.run(&["blame", "billing/nonexistent"]);
     assert_eq!(blame.code, 2, "{}", blame.combined());
 }
+
+// P5 (F11/F12): in a depth-1 shallow clone the watermark commit is unreachable, so churn
+// is uncountable. `check` must surface an honest freshness finding — "history unavailable
+// (shallow clone?)" — never silently pass a possibly-staled parser-less claim (F11), and
+// `blame` must say the same rather than reporting "0 commit(s)".
+#[test]
+fn shallow_clone_reports_history_unavailable_not_silent_pass() {
+    let src = Fixture::bare();
+    // A parser-less claim: a landmark in a .txt file (no bundled parser → churn fallback),
+    // with churn_threshold 0 so any post-watermark churn would trip it.
+    src.write(".stele/config.toml", "[freshness]\nchurn_threshold = 0\n");
+    src.write("notes.txt", "intro\n# stele:landmark doc-rule\nmore\n");
+    src.write(
+        "AGENTS.md",
+        "# proj\n\n```stele\nkind: system\npurpose: shallow-clone probe\ninvariants:\n\
+         \x20 - claim: the documented rule holds\n    anchor: lm:doc-rule\n```\n\n\
+         <!-- stele:begin router -->\n<!-- stele:end -->\n",
+    );
+    src.commit("c1: author the node + config");
+    assert_eq!(src.run(&["build"]).code, 0); // stamps verified.sha = c1
+
+    // Churn the anchored file and commit (the lock rides along); HEAD is now c2, but the
+    // lock's watermark still points at c1.
+    src.write(
+        "notes.txt",
+        "intro\n# stele:landmark doc-rule\nmore\nEDIT\n",
+    );
+    src.commit("c2: churn the anchored file");
+
+    // depth-1 clone: only c2 is present, so the c1 watermark is unreachable.
+    let clone = src.shallow_clone();
+    let check = clone.run(&["check"]);
+    let out = check.combined();
+    assert_eq!(
+        check.code, 1,
+        "shallow clone must not silently pass:\n{out}"
+    );
+    assert!(
+        out.contains("history unavailable (shallow clone?)"),
+        "check must name the honest failure:\n{out}"
+    );
+
+    let blame = clone.run(&["blame", "/doc-rule"]);
+    let bout = blame.combined();
+    assert!(
+        bout.contains("history unavailable"),
+        "blame must not report a false churn count:\n{bout}"
+    );
+    assert!(
+        !bout.contains("touched by 0 commit"),
+        "blame must not read the unreachable watermark as zero churn:\n{bout}"
+    );
+}

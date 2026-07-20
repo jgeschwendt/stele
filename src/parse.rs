@@ -440,8 +440,9 @@ fn scan_fences(contents: &str) -> Vec<Fence> {
 
 /// If `line` opens a fence, return `(fence_char, run_length, info_language)`. The
 /// info language is the first whitespace-delimited token after the fence run;
-/// per CommonMark a backtick fence's info may not itself contain a backtick.
-fn open_fence(line: &str) -> Option<(char, usize, String)> {
+/// per CommonMark a backtick fence's info may not itself contain a backtick. Shared
+/// with the markdown anchor scanner (§2.5), which masks fenced code before scanning.
+pub(crate) fn open_fence(line: &str) -> Option<(char, usize, String)> {
     let indent = line.len() - line.trim_start_matches(' ').len();
     if indent > MAX_FENCE_INDENT {
         return None;
@@ -461,8 +462,8 @@ fn open_fence(line: &str) -> Option<(char, usize, String)> {
 }
 
 /// A closing fence: only the fence character, run length ≥ the opener's, and no
-/// trailing info (CommonMark).
-fn is_close_fence(line: &str, fence_char: char, open_len: usize) -> bool {
+/// trailing info (CommonMark). Shared with the markdown anchor scanner (§2.5).
+pub(crate) fn is_close_fence(line: &str, fence_char: char, open_len: usize) -> bool {
     let indent = line.len() - line.trim_start_matches(' ').len();
     if indent > MAX_FENCE_INDENT {
         return false;

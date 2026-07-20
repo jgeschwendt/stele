@@ -1,6 +1,6 @@
 # stele — worked example
 
-Companion to SPEC.md draft 0.7. A fictional-but-realistic monorepo (`acme`): Phoenix web app + background worker + shared TS package. Artifacts shown in full or as labeled excerpts so the design can be attacked concretely. Hole-poking prompts marked ⚔ throughout.
+Companion to SPEC.md draft 0.8. A fictional-but-realistic monorepo (`acme`): Phoenix web app + background worker + shared TS package. Artifacts shown in full or as labeled excerpts so the design can be attacked concretely. Hole-poking prompts marked ⚔ throughout.
 
 ## 1. The repo
 
@@ -10,10 +10,9 @@ acme/
 ├── CLAUDE.md                      ← one line: @AGENTS.md
 ├── .stele/
 │   ├── graph.lock                 ← compiled graph, committed
-│   ├── index/
-│   │   ├── invariants.md          ← generated transpose (spec §6.1)
-│   │   └── hazards.md
-│   └── freeze.json                ← baselined legacy violations (empty here)
+│   └── index/
+│       ├── invariants.md          ← generated transpose (spec §6.1)
+│       └── hazards.md
 ├── adr/
 │   └── 0007-integer-cents.md
 ├── apps/
@@ -81,7 +80,7 @@ No engine → everything above is complete; nested AGENTS.md files carry the det
 <!-- stele:end -->
 ````
 
-Rendered size: ~340 tokens (cl100k-class approx, ±10%). That is the _entire_ always-loaded cost of this repo for a Claude session.
+Rendered size: ~500 tokens (cl100k-class approx, ±10%). That is the _entire_ always-loaded cost of this repo for a Claude session.
 
 ⚔ **Poke here:** is the hazard banner at root pulling hazards up from child nodes a duplication-of-fact violation of constraint 6? (Current answer: no — the generated region is a _projection_ of the child's single source, checked by `emit --check`. But it means a stale regeneration shows stale hazards; the check only fails when someone forgets to re-run `emit`.)
 
@@ -187,7 +186,7 @@ packages/shared is the only constructor.
           "anchor": "lm:billing-idempotency",
           "resolved": "apps/web/lib/billing/charge.ex:41",
           "enforced_by": "apps/web/test/billing/idempotency_test.exs",
-          "verified": { "sha": "e3f19ac", "digest": "a17d…" }
+          "verified": { "sha": "e3f19ac…", "digest": "1f3c…" }
         },
         {
           "id": "refund-cap",
@@ -196,7 +195,7 @@ packages/shared is the only constructor.
           "anchor": "lm:refund-cap",
           "resolved": "apps/web/lib/billing/refund.ex:18",
           "enforced_by": null,
-          "verified": { "sha": "e3f19ac", "digest": "9c41…" }
+          "verified": { "sha": "e3f19ac…", "digest": "a187…" }
         }
       ]
     }
@@ -210,14 +209,14 @@ What a Claude Code session actually loads, step by step:
 
 | step | action                                                                                                                                                               | context cost    |
 | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
-| 0    | session start: root AGENTS.md (via `@AGENTS.md` shim)                                                                                                                | ~340 tok        |
-| 1    | task mentions refunds → router points at apps/web → `stele unfold apps/web`                                                                                          | ~180 tok        |
+| 0    | session start: root AGENTS.md (via `@AGENTS.md` shim)                                                                                                                | ~500 tok        |
+| 1    | task mentions refunds → router points at apps/web → `stele unfold apps/web`                                                                                          | ~100 tok        |
 | 2    | `stele unfold apps/web/lib/billing` → full billing node: commands, 2 invariants, 1 hazard, anchor table                                                              | ~250 tok        |
-| 3    | `stele invariants --touching apps/web/lib/billing` — pulls the money invariant from the SYSTEM node too (cross-cutting: it lives at root, billing inherits exposure) | ~90 tok         |
+| 3    | `stele invariants --touching apps/web/lib/billing` — pulls the money invariant from the SYSTEM node too (cross-cutting: it lives at root, billing inherits exposure) | ~110 tok        |
 | 4    | `rg -n "stele:landmark refund-cap"` → jump straight to refund.ex:18, read the region                                                                                 | code, on demand |
 | 5    | implement; run the node's own `test` command from step 2                                                                                                             | —               |
 
-Total doc overhead: **~860 tokens** (same basis), every one of them non-derivable (commands, invariants, hazards, addresses). The flat-file equivalent of this repo's knowledge is a typical 300–600 line CLAUDE.md (~3–6k tokens) loaded on _every_ session including the ones about CSS.
+Total doc overhead: **~950 tokens** (same basis), every one of them non-derivable (commands, invariants, hazards, addresses). The flat-file equivalent of this repo's knowledge is a typical 300–600 line CLAUDE.md (~3–6k tokens) loaded on _every_ session including the ones about CSS.
 
 The agent never read an architecture overview, and never needed one: step 4 is agentic grep, the thing that measurably works [C5]; steps 1–3 are navigation priors — the channel a single 2026 benchmark (ORACLE-SWE) put at ~+12pp; direction reliable, magnitude order-of-magnitude [C6].
 
@@ -229,10 +228,9 @@ The agent never read an architecture overview, and never needed one: step 4 is a
 
 ```
 ✗ structural: apps/web/lib/store imports apps/web/lib/billing — edge not declared
-    store/subscription.ex:9  alias AcmeWeb.Billing.Charge
+    apps/web/lib/store/subscription.ex:9  alias AcmeWeb.Billing.Charge
   declared depends of apps/web/lib/store: [packages/shared]
-  fix: remove the import, or declare it in apps/web/lib/store/AGENTS.md (and mean it),
-       or allow: {edge: apps/web/lib/billing, reason: "..."} for dynamic/DI cases
+  fix: remove the import, or declare it in apps/web/lib/store/AGENTS.md (and mean it), or allow: {edge: apps/web/lib/billing, reason: "..."} for dynamic/DI cases
 exit 1
 ```
 
@@ -241,7 +239,7 @@ exit 1
 ```
 ✗ structural: apps/web/lib/billing declares depends on apps/web/lib/store — no import found
   the signature promises a dependency the code no longer has (doc lied, or dependency died)
-  fix: remove the edge from billing/AGENTS.md, or allow: with reason if the dep is runtime-dynamic
+  fix: remove the edge from apps/web/lib/billing/AGENTS.md, or allow: with reason if the dep is runtime-dynamic
 exit 1
 ```
 
@@ -249,10 +247,10 @@ exit 1
 
 ```
 ✗ referential: anchor lm:refund-cap unresolved (0 occurrences of "stele:landmark refund-cap")
-  claim "refunds never exceed captured amount" is now unanchored — provenance broken
+  claim "refunds never exceed captured amount, enforced at the changeset, not the controller" is now unanchored — provenance broken
 ✗ referential: landmark lm:money-type has slug-match cardinality 2
-    packages/shared/src/money.ts:3
     packages/shared/src/legacy/money.ts:7   ← duplicated in a copy-paste refactor
+    packages/shared/src/money.ts:3
 exit 1
 ```
 
@@ -260,7 +258,7 @@ exit 1
 
 ```
 ✗ freshness: claim billing/refund-cap — AST digest of enclosing region changed
-  verified at e3f19ac (digest 9c41…), region changeset/2 now digests f27a…
+  verified at e3f19ac (digest a187…), region changeset/2 now digests 4f0d…
   staling commit: b8e02d1 "loosen cap for partial captures" — `stele blame billing/refund-cap`
   fix: re-read the region, re-affirm or amend the claim, `stele build` re-stamps {sha, digest}
   note: 9 formatting/comment commits in the same range did NOT fire — AST digest ignores them

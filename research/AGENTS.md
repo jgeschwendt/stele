@@ -2,14 +2,7 @@
 
 ```stele
 kind: container
-# purpose:            # ≤200-char scent — fill it in (never auto-generated, §7)
-# commands: {}
-# invariants: []
-# hazards: []
-# edges:
-#   depends: []
-#   decided_by: [adr/0001]
-# budget:
+purpose: Evidence base for SPEC's [Cn] citations. claims.md is the ledger every citation stays licensed by (status per claim); report.md the synthesis, findings/ the primary-source notes.
 ```
 
 <!-- stele:begin router -->

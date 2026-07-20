@@ -23,6 +23,7 @@ use crate::model::{
     SteleError, Verified, normalize_id,
 };
 use crate::parse;
+use crate::steleignore::Steleignore;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -1144,6 +1145,13 @@ fn init(root: &Path) -> Result<CommandOutput> {
         let path = format!("{dir}/AGENTS.md");
         scaffold_node(root, &path, NodeKind::Container, &adr_dir, &mut written)?;
     }
+    // An already-authored AGENTS.md that carries a stele block but no generated region
+    // gets an empty region appended (§3.1: `emit` exits 2 pointing here — `init` must
+    // actually scaffold it). Authored bytes above are byte-preserved; a file with BOTH
+    // block and region is left byte-identical (the acme idempotency oracle).
+    for rel in &tracked {
+        ensure_region_for_block(root, rel, &mut written)?;
+    }
     if !written.is_empty() {
         git_add(root, &written)?;
     }
@@ -1151,6 +1159,42 @@ fn init(root: &Path) -> Result<CommandOutput> {
         json!({ "wrote": written }),
         Some(format!("stele init: scaffolded {} node(s)", written.len())),
     ))
+}
+
+/// Append an empty generated region to an already-authored AGENTS.md that carries a
+/// stele block but no region (§3.1). A non-AGENTS.md file, a blockless file (nothing to
+/// route), or a file that already has a region is left byte-identical. Records the path
+/// for staging so the next `stele build` sees the change.
+fn ensure_region_for_block(root: &Path, rel: &Path, written: &mut Vec<String>) -> Result<()> {
+    if rel.file_name().is_none_or(|name| name != "AGENTS.md") {
+        return Ok(());
+    }
+    let contents = std::fs::read_to_string(root.join(rel))
+        .map_err(|e| SteleError::internal(format!("read {}: {e}", rel.display())))?;
+    // Ok(None) is "no stele block" — a blockless file declares no node and needs no
+    // region; Ok(Some)/Err both mean a block is present.
+    if matches!(parse::parse_agents_file(rel, &contents), Ok(None)) {
+        return Ok(());
+    }
+    if parse::find_region(rel, &contents)?.is_some() {
+        return Ok(());
+    }
+    std::fs::write(root.join(rel), append_empty_region(&contents))
+        .map_err(|e| SteleError::internal(format!("write {}: {e}", rel.display())))?;
+    written.push(rel.to_string_lossy().replace('\\', "/"));
+    Ok(())
+}
+
+/// `contents` plus a trailing empty region (§3.1): a blank-line separator then the router
+/// markers, authored bytes byte-preserved above.
+fn append_empty_region(contents: &str) -> String {
+    let mut out = contents.to_string();
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push('\n');
+    out.push_str(EMPTY_REGION);
+    out
 }
 
 /// The declaring directories of every tracked AGENTS.md that carries a stele block
@@ -1470,10 +1514,23 @@ fn head_sha(root: &Path) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// VCS-tracked files (§2.4 scan scope: tracked only, so `.gitignore` is honored by
-/// construction), repo-root-relative and sorted for deterministic iteration.
-/// `git ls-files -z` is NUL-delimited to survive unusual filenames.
+/// The source-scan file set (§2.4 scan scope): VCS-tracked files (so `.gitignore` is
+/// honored by construction) MINUS every path a committed root `.steleignore` matches.
+/// The single choke point every scan reads — node discovery, anchors, extraction, and
+/// the §4.3 directory walk all consume this list — so filtering here makes an ignored
+/// subtree invisible to all of them at once (`steleignore` module). Repo-root-relative
+/// and sorted for deterministic iteration.
 fn tracked_files(root: &Path) -> Result<Vec<PathBuf>> {
+    let ignore = Steleignore::load(root)?;
+    Ok(git_tracked_files(root)?
+        .into_iter()
+        .filter(|rel| !ignore.is_ignored(&rel.to_string_lossy().replace('\\', "/")))
+        .collect())
+}
+
+/// The raw VCS-tracked file list (§2.4), repo-root-relative and sorted. `git ls-files
+/// -z` is NUL-delimited to survive unusual filenames.
+fn git_tracked_files(root: &Path) -> Result<Vec<PathBuf>> {
     let output = Command::new("git")
         .args(["ls-files", "-z"])
         .current_dir(root)
@@ -1587,4 +1644,69 @@ fn write_lock_atomic(root: &Path, bytes: &str) -> Result<()> {
     std::fs::rename(&temp, dir.join(LOCK_FILE))
         .map_err(|e| SteleError::internal(format!("rename into {LOCK_DIR}/{LOCK_FILE}: {e}")))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Run `git` in `root`, asserting success — the tracked-file/staging surface `init`
+    /// needs (§2.4). Kept minimal: `init` reads `git ls-files` and calls `git add`.
+    fn git(root: &Path, args: &[&str]) {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .expect("run git");
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
+
+    /// A file with a stele block but NO generated region gets an empty region appended at
+    /// EOF (§3.1), authored bytes byte-preserved; a second `init` is byte-identical.
+    #[test]
+    fn init_appends_region_to_block_file_and_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-b", "main"]);
+        git(root, &["config", "user.email", "t@example.com"]);
+        git(root, &["config", "user.name", "t"]);
+
+        let authored = "# proj\n\n```stele\nkind: system\npurpose: demo\n```\n\nsome prose\n";
+        std::fs::write(root.join("AGENTS.md"), authored).unwrap();
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-m", "seed"]);
+
+        init(root).unwrap();
+        let after = std::fs::read_to_string(root.join("AGENTS.md")).unwrap();
+        // Authored bytes are preserved verbatim as a prefix; a region now exists.
+        assert!(
+            after.starts_with(authored),
+            "authored bytes not preserved:\n{after}"
+        );
+        assert!(
+            parse::find_region(Path::new("AGENTS.md"), &after)
+                .unwrap()
+                .is_some(),
+            "no region appended:\n{after}"
+        );
+        // Second init leaves the file byte-identical (region already present).
+        init(root).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("AGENTS.md")).unwrap(),
+            after
+        );
+    }
+
+    /// `append_empty_region` inserts a blank-line separator then the router markers, and
+    /// its output carries a locatable region.
+    #[test]
+    fn append_empty_region_separates_and_is_findable() {
+        let out = append_empty_region("body\n");
+        assert_eq!(out, format!("body\n\n{EMPTY_REGION}"));
+        assert!(
+            parse::find_region(Path::new("AGENTS.md"), &out)
+                .unwrap()
+                .is_some()
+        );
+    }
 }

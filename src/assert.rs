@@ -699,8 +699,11 @@ fn json_string(value: &str) -> String {
 // ─── exhaustiveness (§4.3) ─────────────────────────────────────────────────────
 
 /// The two dir names always dropped from the walk (§4.3): the VCS metadata dir and
-/// stele's own committed home. Gitignored paths and untracked dot-dirs never appear
-/// (the scan enumerates VCS-tracked files only), so they need no explicit entry.
+/// stele's own committed home. Gitignored paths, untracked dot-dirs, and every path a
+/// committed root `.steleignore` matches never appear — the scan is built from the
+/// filtered tracked-file list (`tracked_files`, cli.rs), so a `.steleignore`d subtree
+/// contributes no files, hence no directory here: an ignored dir is INVISIBLE, never an
+/// unmapped recall failure (§2.4). None of the three needs an explicit entry.
 const IGNORED_DIRS: [&str; 2] = [".git", ".stele"];
 
 /// The exhaustiveness class (§4.3): every non-ignored directory at depth ≤ D must map

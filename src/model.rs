@@ -252,7 +252,7 @@ pub struct ImportRef {
     pub text: String,
 }
 
-/// A `stele:claim <addr>` back-reference occurrence (§2.5). The address is stored
+/// A `stele:claim` <addr> back-reference occurrence (§2.5). The address is stored
 /// verbatim; resolution against declared claims is Phase D referential (§4.1).
 #[derive(Clone, Debug)]
 pub struct ClaimAnchor {
@@ -266,9 +266,9 @@ pub struct ClaimAnchor {
 /// `landmarks{}` map (§3.2), so build stays exit-0 even on duplicates.
 #[derive(Clone, Debug, Default)]
 pub struct AnchorData {
-    /// slug → every `stele:landmark <slug>` occurrence, insertion order preserved.
+    /// slug → every `stele:landmark` <slug> occurrence, insertion order preserved.
     pub landmarks: BTreeMap<String, Vec<Occurrence>>,
-    /// Every `stele:claim <addr>` occurrence (resolution deferred to §4.1).
+    /// Every `stele:claim` <addr> occurrence (resolution deferred to §4.1).
     pub claims: Vec<ClaimAnchor>,
 }
 

@@ -2,14 +2,7 @@
 
 ```stele
 kind: container
-# purpose:            # ≤200-char scent — fill it in (never auto-generated, §7)
-# commands: {}
-# invariants: []
-# hazards: []
-# edges:
-#   depends: []
-#   decided_by: [adr/0001]
-# budget:
+purpose: The stele engine. cli.rs is the command pipeline (build/check/emit); model.rs the typed graph, anchors.rs the §2.5 scanner, assert.rs the six §4 checks, extract.rs the import extractors.
 ```
 
 <!-- stele:begin router -->

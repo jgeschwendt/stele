@@ -74,8 +74,8 @@ fn semantic_edit_inside_bound_region_changes_the_digest() {
 
 // ─── (c)/(d) + binding rules: unit over digest_for_claim ──────────────────────
 
-/// An elixir module whose `# stele:landmark cap` (line 4) immediately precedes
-/// `def changeset/1` past an intervening `@doc` and blank scope. `other/1` and the
+/// An elixir module whose `# stele:landmark` comment for `cap` (line 4) immediately
+/// precedes `def changeset/1` past an intervening `@doc` and blank scope. `other/1` and the
 /// `@castable_fields` attribute sit OUTSIDE the bound region.
 const ELIXIR: &str = "\
 defmodule M do

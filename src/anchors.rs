@@ -1,13 +1,20 @@
 //! Comment-anchor compilation (SPEC §2.4/§2.5).
 //!
-//! Two jobs, both tree-sitter-fronted. The scanner walks VCS-tracked files for
-//! `stele:landmark <slug>` and `stele:claim <addr>` tokens: in a file whose
-//! language has a bundled parser, only tokens inside COMMENT nodes count (a token
-//! inside a string literal is ignored); a parser-less file (markdown, …) falls to
-//! a lexical line scan. Symbol resolution binds a `<path>#<symbol>` anchor to a
-//! named definition via the same parsers. The language registry maps extensions to
-//! grammars; ABI compatibility of core 0.26 against grammars at ABI 14/15 is
-//! verified empirically (the parse tests below exercise every bundled grammar).
+//! Two jobs, both tree-sitter-fronted. The scanner walks VCS-tracked files for the
+//! `stele:landmark` <slug> and `stele:claim` <addr> tokens: in a file whose language
+//! has a bundled parser, only tokens inside COMMENT nodes count (a token inside a
+//! string literal is ignored); in markdown the native comment is the HTML comment, so
+//! only tokens inside `<!-- -->` count and fenced code / prose are quotations (§2.5);
+//! only a parser-less NON-markdown file falls to a lexical line scan. Symbol resolution
+//! binds a `<path>#<symbol>` anchor to a named definition via the same parsers. The
+//! language registry maps extensions to grammars; ABI compatibility of core 0.26
+//! against grammars at ABI 14/15 is verified empirically (the parse tests below
+//! exercise every bundled grammar).
+//!
+//! Backtick discipline in THIS file's own comments: a token is always written with a
+//! closing backtick glued immediately after it (no space between the token and the next
+//! character), so the scanner never reads the engine's own doc comment as a declaration
+//! — these comments are scanned like any other source (a dogfood constraint; §2.5).
 
 use crate::model::{
     AnchorData, ClaimAnchor, LANDMARK_ANCHOR_PREFIX, Occurrence, Result, SteleError, is_valid_slug,
@@ -110,10 +117,12 @@ fn is_definition_kind(lang: Lang, kind: &str) -> bool {
 
 // ─── the scan (§2.4/§2.5) ─────────────────────────────────────────────────────
 
-/// Scan every tracked file for comment anchors (§2.4 scan scope: `.stele/`
-/// excluded, AGENTS.md files included). Parser-backed files count tokens only
-/// inside comments; parser-less files fall to a lexical line scan. A malformed slug
-/// in any anchor is a §5.3 input error (exit 2) naming the offending `file:line`.
+/// Scan every tracked file for comment anchors (§2.4 scan scope: `.stele/` excluded,
+/// AGENTS.md files included; `.steleignore`d paths never reach here — they are already
+/// gone from `tracked`). A parser-backed file counts tokens only inside comments; a
+/// markdown file counts tokens only inside HTML comments (§2.5); only a parser-less
+/// non-markdown file falls to a lexical line scan. A malformed slug in any anchor is a
+/// §5.3 input error (exit 2) naming the offending `file:line`.
 pub fn scan(root: &Path, tracked: &[PathBuf]) -> Result<AnchorData> {
     let mut data = AnchorData::default();
     let mut parser = Parser::new();
@@ -124,9 +133,12 @@ pub fn scan(root: &Path, tracked: &[PathBuf]) -> Result<AnchorData> {
         }
         let contents = std::fs::read_to_string(root.join(rel))
             .map_err(|e| SteleError::internal(format!("read {file}: {e}")))?;
-        match extension(rel).as_deref().and_then(lang_for_extension) {
-            Some(lang) => scan_parsed(&mut parser, lang, &file, &contents, &mut data)?,
-            None => scan_text(&contents, 0, &file, &mut data)?,
+        match extension(rel).as_deref() {
+            Some("markdown" | "md") => scan_markdown(&contents, &file, &mut data)?,
+            other => match other.and_then(lang_for_extension) {
+                Some(lang) => scan_parsed(&mut parser, lang, &file, &contents, &mut data)?,
+                None => scan_text(&contents, 0, &file, &mut data)?,
+            },
         }
     }
     Ok(data)
@@ -162,6 +174,80 @@ fn collect_comments(node: Node, src: &[u8], out: &mut Vec<(usize, String)>) {
             }
         } else {
             collect_comments(child, src, out);
+        }
+    }
+}
+
+/// The HTML comment delimiters — in markdown the ONLY construct whose anchor tokens are
+/// declarations (§2.5 "language-native comments"). Tokens in a fenced code block or in
+/// prose (inline backticks included) are quotations and are skipped.
+const HTML_COMMENT_OPEN: &str = "<!--";
+const HTML_COMMENT_CLOSE: &str = "-->";
+
+/// Scan a markdown file for comment anchors (§2.5): only tokens inside `<!-- -->` HTML
+/// comments count. Fenced code blocks are skipped entirely (a `<!--` inside a fence is
+/// literal code, not a comment), and prose outside a comment is never scanned — so the
+/// EXAMPLE 8.4 table cell that quotes the landmark token is a quotation, not a
+/// declaration. The comment state carries across lines; malformed slugs inside a comment
+/// still fail (§2.5), so `scan_text` does the per-fragment recording and validation.
+fn scan_markdown(contents: &str, file: &str, data: &mut AnchorData) -> Result<()> {
+    let mut fence: Option<(char, usize)> = None;
+    let mut in_comment = false;
+    for (row, line) in contents.lines().enumerate() {
+        if let Some((fence_char, open_len)) = fence {
+            // Inside a fenced block: skip every line; the matching closer ends it. A
+            // fence is never recognized while inside a comment, so this arm only runs
+            // when `in_comment` is false.
+            if crate::parse::is_close_fence(line, fence_char, open_len) {
+                fence = None;
+            }
+            continue;
+        }
+        // A fence opener is only recognized outside a comment (inside a comment the
+        // ``` is comment text, not code); the closer is handled above.
+        if !in_comment && let Some((fence_char, open_len, _)) = crate::parse::open_fence(line) {
+            fence = Some((fence_char, open_len));
+            continue;
+        }
+        in_comment = scan_markdown_line(line, row, in_comment, file, data)?;
+    }
+    Ok(())
+}
+
+/// Scan the portions of one markdown `line` that lie inside an HTML comment, returning
+/// whether the line ends still inside a comment (carried to the next line). `in_comment`
+/// is the state on entry. Each in-comment fragment is handed to `scan_text` at `row`
+/// (0-based) so a token reports its true 1-based file line.
+fn scan_markdown_line(
+    line: &str,
+    row: usize,
+    mut in_comment: bool,
+    file: &str,
+    data: &mut AnchorData,
+) -> Result<bool> {
+    let mut rest = line;
+    loop {
+        if in_comment {
+            match rest.find(HTML_COMMENT_CLOSE) {
+                Some(close) => {
+                    scan_text(&rest[..close], row, file, data)?;
+                    rest = &rest[close + HTML_COMMENT_CLOSE.len()..];
+                    in_comment = false;
+                }
+                None => {
+                    // Rest of the line is inside the comment; scan it and carry state on.
+                    scan_text(rest, row, file, data)?;
+                    return Ok(true);
+                }
+            }
+        } else {
+            match rest.find(HTML_COMMENT_OPEN) {
+                Some(open) => {
+                    rest = &rest[open + HTML_COMMENT_OPEN.len()..];
+                    in_comment = true;
+                }
+                None => return Ok(false), // rest is prose — skip it.
+            }
         }
     }
 }
@@ -249,7 +335,16 @@ pub enum SymbolResolution {
 /// anchor cannot bind); a genuine read failure is a §5.3 internal error.
 pub fn resolve_symbol(root: &Path, rel_path: &str, symbol: &str) -> Result<SymbolResolution> {
     let path = Path::new(rel_path);
-    let Some(lang) = extension(path).as_deref().and_then(lang_for_extension) else {
+    let ext = extension(path);
+    // Markdown has no tree-sitter named-definition grammar (§2.4), so a `<path>#<symbol>`
+    // anchor into a `.md`/`.markdown` file resolves against GitHub-style heading slugs —
+    // headings are the definition analogue. This repo's own AGENTS.md depends on it
+    // (`research/claims.md#c1`, `SPEC.md#decision-log`). digest stays null (parser-less →
+    // §4.5 churn fallback), same as any other parser-less anchored file.
+    if matches!(ext.as_deref(), Some("markdown" | "md")) {
+        return resolve_markdown_heading(root, path, rel_path, symbol);
+    }
+    let Some(lang) = ext.as_deref().and_then(lang_for_extension) else {
         return Ok(SymbolResolution::Unresolved);
     };
     let contents = match std::fs::read_to_string(root.join(path)) {
@@ -292,6 +387,88 @@ fn collect_definitions(node: Node, src: &[u8], lang: Lang, symbol: &str, out: &m
         }
         collect_definitions(child, src, lang, symbol, out);
     }
+}
+
+// ─── markdown heading-slug resolution (§2.4) ──────────────────────────────────
+
+/// The ATX heading marker: 1–6 `#` opening a heading line (§2.4 markdown analogue).
+const HEADING_MARK: char = '#';
+const MAX_HEADING_LEVEL: usize = 6;
+
+/// Resolve a `<path>#<symbol>` anchor into a markdown file against GitHub-style heading
+/// slugs (§2.4): the symbol matches a heading whose slug EQUALS it, or begins with it
+/// immediately followed by a `-` (so `c1` binds `## C1: …` but not `## C10: …`).
+/// Cardinality discipline is identical to tree-sitter resolution — exactly 1 → resolved,
+/// 0 → unresolved, ≥2 → ambiguous. A missing file is unresolved (the anchor cannot bind).
+fn resolve_markdown_heading(
+    root: &Path,
+    path: &Path,
+    rel_path: &str,
+    symbol: &str,
+) -> Result<SymbolResolution> {
+    let contents = match std::fs::read_to_string(root.join(path)) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(SymbolResolution::Unresolved);
+        }
+        Err(e) => return Err(SteleError::internal(format!("read {rel_path}: {e}"))),
+    };
+    let mut lines = Vec::new();
+    for (index, line) in contents.lines().enumerate() {
+        if let Some(text) = atx_heading_text(line) {
+            let slug = heading_slug(text);
+            if slug == symbol
+                || slug
+                    .strip_prefix(symbol)
+                    .is_some_and(|rest| rest.starts_with('-'))
+            {
+                lines.push(index + 1);
+            }
+        }
+    }
+    Ok(match lines.as_slice() {
+        [] => SymbolResolution::Unresolved,
+        [line] => SymbolResolution::Resolved(*line),
+        _ => SymbolResolution::Ambiguous,
+    })
+}
+
+/// The heading text of an ATX heading line (`## Title`), or `None` when `line` is not a
+/// heading. The opening `#` run (1–6) must be followed by whitespace or end-of-line; a
+/// trailing space-preceded `#` run (the optional closing sequence) is stripped.
+fn atx_heading_text(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    let hashes = trimmed.chars().take_while(|&c| c == HEADING_MARK).count();
+    if hashes == 0 || hashes > MAX_HEADING_LEVEL {
+        return None;
+    }
+    let rest = &trimmed[hashes..];
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let text = rest.trim();
+    Some(text.trim_end_matches(HEADING_MARK).trim_end())
+}
+
+/// The GitHub-style slug of heading `text` (§2.4): lowercased, punctuation stripped, and
+/// each run of whitespace or `-` collapsed to a single `-`, with leading/trailing `-`
+/// trimmed. Alphanumerics (Unicode included) survive; every other character is dropped.
+fn heading_slug(text: &str) -> String {
+    let mut slug = String::new();
+    let mut pending_hyphen = false;
+    for c in text.chars() {
+        if c.is_alphanumeric() {
+            if pending_hyphen && !slug.is_empty() {
+                slug.push('-');
+            }
+            pending_hyphen = false;
+            slug.extend(c.to_lowercase());
+        } else if c.is_whitespace() || c == '-' {
+            pending_hyphen = true;
+        }
+        // Every other character is punctuation and is stripped.
+    }
+    slug
 }
 
 // ─── AST-region structural digest (§4.5) ──────────────────────────────────────
@@ -403,7 +580,7 @@ fn region_digest_bound(
     })
 }
 
-/// The 1-based line of the first `stele:landmark <slug>` token in `src`, or `None`
+/// The 1-based line of the first `stele:landmark` <slug> token in `src`, or `None`
 /// (§4.5 historical binding). A whole-file scan — the historical blob is not
 /// comment-parsed — which is why the working-tree path prefers the resolved line.
 fn landmark_line(src: &[u8], slug: &str) -> Option<usize> {
@@ -709,6 +886,54 @@ mod tests {
         assert_eq!(occ[0].line, 2);
     }
 
+    // ─── markdown comment discipline (§2.5 0.8) ───────────────────────────────
+
+    #[test]
+    fn markdown_html_comment_token_is_scanned() {
+        let data = scan_one("doc.md", "prose\n<!-- stele:landmark doc-mark -->\ntail\n").unwrap();
+        let occ = &data.landmarks["doc-mark"];
+        assert_eq!(occ.len(), 1);
+        assert_eq!(occ[0].line, 2);
+    }
+
+    #[test]
+    fn markdown_fenced_code_token_is_skipped() {
+        // A `stele:landmark` inside a fenced block is a quotation, not a declaration.
+        let src = "text\n```\n<!-- stele:landmark fenced-fake -->\nstele:landmark bare-fake\n```\n";
+        let data = scan_one("doc.md", src).unwrap();
+        assert!(data.landmarks.is_empty(), "fenced token wrongly counted");
+    }
+
+    #[test]
+    fn markdown_prose_token_is_skipped() {
+        // Prose outside any HTML comment — including inline backticks — is a quotation.
+        let src = "See `stele:landmark prose-fake` and stele:landmark bare-fake here.\n";
+        let data = scan_one("doc.md", src).unwrap();
+        assert!(data.landmarks.is_empty(), "prose token wrongly counted");
+    }
+
+    #[test]
+    fn markdown_example_217_table_cell_is_not_a_false_positive() {
+        // The EXAMPLE.md:217-style quoted string in a prose table cell must NOT declare a
+        // landmark (the pre-0.8 lexical-scan false positive this rule closes).
+        let src = "| 4 | `rg -n \"stele:landmark refund-cap\"` → jump to refund.ex:18 | code |\n";
+        let data = scan_one("EXAMPLE.md", src).unwrap();
+        assert!(
+            !data.landmarks.contains_key("refund-cap"),
+            "quoted table-cell token wrongly counted as a declaration"
+        );
+    }
+
+    #[test]
+    fn markdown_multiline_html_comment_scans_interior() {
+        // A token on a continuation line of a multi-line HTML comment still counts.
+        let src = "text\n<!--\nstele:landmark multi-mark\n-->\n";
+        let data = scan_one("doc.md", src).unwrap();
+        let occ = &data.landmarks["multi-mark"];
+        assert_eq!(occ.len(), 1);
+        assert_eq!(occ[0].line, 3);
+    }
+
     // ─── slug lexeme rejection (§2.5) ─────────────────────────────────────────
 
     #[test]
@@ -784,6 +1009,72 @@ mod tests {
         assert_eq!(
             resolve_symbol(dir.path(), "gone.rs", "whatever").unwrap(),
             SymbolResolution::Unresolved,
+        );
+    }
+
+    // ─── markdown heading-slug resolution 0/1/many (§2.4) ─────────────────────
+
+    /// A ledger like this repo's `research/claims.md`: `c1` must bind the `## C1: …`
+    /// heading and NOT any of the `## C10`/`## C11` headings whose slugs merely share
+    /// the `c1` prefix without the hyphen boundary.
+    fn md_ledger(dir: &Path) {
+        std::fs::write(
+            dir.join("claims.md"),
+            "# Claims ledger\n\
+             ## C1: AGENTS.md is the cross-vendor standard\n\
+             body\n\
+             ## C10: some other claim entirely\n\
+             ## C11: yet another\n\
+             ## Decision log\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn markdown_symbol_resolves_on_prefix_boundary_not_c10() {
+        let dir = tempfile::tempdir().unwrap();
+        md_ledger(dir.path());
+        // `c1` matches `## C1: …` (line 2) on the hyphen boundary, not `## C10`/`## C11`.
+        assert_eq!(
+            resolve_symbol(dir.path(), "claims.md", "c1").unwrap(),
+            SymbolResolution::Resolved(2),
+        );
+        // `c10` matches only its own heading (line 4) — exact prefix, still cardinality 1.
+        assert_eq!(
+            resolve_symbol(dir.path(), "claims.md", "c10").unwrap(),
+            SymbolResolution::Resolved(4),
+        );
+    }
+
+    #[test]
+    fn markdown_symbol_resolves_exact_slug() {
+        let dir = tempfile::tempdir().unwrap();
+        md_ledger(dir.path());
+        // `decision-log` equals the slug of `## Decision log` (line 6).
+        assert_eq!(
+            resolve_symbol(dir.path(), "claims.md", "decision-log").unwrap(),
+            SymbolResolution::Resolved(6),
+        );
+    }
+
+    #[test]
+    fn markdown_symbol_absent_is_unresolved() {
+        let dir = tempfile::tempdir().unwrap();
+        md_ledger(dir.path());
+        assert_eq!(
+            resolve_symbol(dir.path(), "claims.md", "c99").unwrap(),
+            SymbolResolution::Unresolved,
+        );
+    }
+
+    #[test]
+    fn markdown_symbol_with_two_matching_headings_is_ambiguous() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("dup.md"), "## Setup\n## Setup steps\n").unwrap();
+        // Both slugs (`setup`, `setup-steps`) match `setup` — exact and prefix-boundary.
+        assert_eq!(
+            resolve_symbol(dir.path(), "dup.md", "setup").unwrap(),
+            SymbolResolution::Ambiguous,
         );
     }
 }

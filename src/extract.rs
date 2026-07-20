@@ -17,7 +17,7 @@
 //! member (a tracked `Cargo.toml` `[package].name`) that owns it; Python maps a
 //! dotted module to the tracked file that would define it.
 
-use crate::model::{ImportRef, Result, SteleError, Territory};
+use crate::model::{ImportRef, Result, SteleError, Territory, is_absent};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -75,12 +75,17 @@ impl<'a> Ctx<'a> {
         self.files.iter().filter(move |f| basename(f) == name)
     }
 
-    /// Read a tracked source as UTF-8, or `None` when it is not valid UTF-8 — a
-    /// binary blob the extractor skips rather than aborting on (§2.4, parity with the
-    /// anchor scan). A genuine IO failure is still a §5.3 internal error naming the file.
+    /// Read a tracked source as UTF-8, or `None` when the extractor should see nothing:
+    /// the bytes are not valid UTF-8 (a binary blob), OR the path has vanished from the
+    /// working tree — a tracked file deleted-without-staging (`rm x.rs`) or a committed
+    /// dangling symlink with a source extension. Absence is `NotFound` (target gone) or
+    /// `NotADirectory` (a path component of a symlink target is a non-dir); both skip
+    /// rather than abort (§2.4, parity with the anchor scan). A genuine IO failure is
+    /// still a §5.3 internal error naming the file.
     fn read(&self, rel: &str) -> Result<Option<String>> {
         match std::fs::read(self.root.join(rel)) {
             Ok(bytes) => Ok(String::from_utf8(bytes).ok()),
+            Err(e) if is_absent(&e) => Ok(None),
             Err(e) => Err(SteleError::internal(format!("read {rel}: {e}"))),
         }
     }

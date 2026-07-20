@@ -1639,9 +1639,18 @@ fn git_tracked_files(root: &Path) -> Result<Vec<PathBuf>> {
         .output()
         .map_err(|e| SteleError::internal(format!("run `git ls-files`: {e}")))?;
     if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Outside a work tree git prints "fatal: not a git repository …" — a user
+        // mistake (§5.3 input, exit 2), not an internal fault. Surface a one-liner
+        // instead of the raw git text so `stele <verb>` outside a repo fails cleanly.
+        if stderr.contains("not a git repository") {
+            return Err(SteleError::input_msg(
+                "not a git repository (stele scans VCS-tracked files; run inside a git repo)",
+            ));
+        }
         return Err(SteleError::internal(format!(
             "`git ls-files` failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            stderr.trim()
         )));
     }
     let listing = String::from_utf8_lossy(&output.stdout);

@@ -155,3 +155,89 @@ fn one_line_empty_region_form_is_accepted() {
         "emit rewrote the one-line region"
     );
 }
+
+// ─── an absent tracked file skips instead of aborting (§2.4, §5.3) ────────────
+
+// A tracked source file deleted from the working tree WITHOUT staging the removal
+// (`rm app.rs`, no `git rm`) still appears in `git ls-files`, so the scan/extractor
+// tries to read a path that is gone. Before the fix `Ctx::read` (and the anchor scan)
+// mapped that ENOENT to a §5.3 internal error (exit 3), aborting `build`/`check`. The
+// file must be skipped — the extractor sees nothing, a claim anchored there falls to
+// Unresolved (§4.1) — never a fatal exit 3.
+#[test]
+fn tracked_source_deleted_without_staging_does_not_abort() {
+    let fixture = Fixture::bare();
+    fixture.write("AGENTS.md", "# root\n\n```stele\nkind: system\n```\n");
+    fixture.write("app.rs", "pub fn f() {}\n");
+    fixture.commit("root node plus a tracked rust source");
+
+    // Delete the working-tree file but leave the removal unstaged — git still tracks it.
+    fixture.delete_file("app.rs");
+
+    let build = fixture.run(&["build"]);
+    assert_eq!(build.code, 0, "{}", build.combined());
+    let check = fixture.run(&["check"]);
+    assert_ne!(
+        check.code,
+        3,
+        "an absent tracked file must never abort:\n{}",
+        check.combined()
+    );
+    assert!(
+        matches!(check.code, 0 | 1),
+        "check exited {} (want 0 or an honest finding):\n{}",
+        check.code,
+        check.combined()
+    );
+}
+
+// A committed dangling symlink whose name carries a source extension (`dead.rs` →
+// nonexistent target) is tracked, so the scan follows it and reads ENOENT. It must
+// skip, never abort `build` (companion to the deleted-file case above).
+#[cfg(unix)]
+#[test]
+fn committed_dangling_symlink_with_source_ext_does_not_abort() {
+    let fixture = Fixture::bare();
+    fixture.write("AGENTS.md", "# root\n\n```stele\nkind: system\n```\n");
+    std::os::unix::fs::symlink("nonexistent-target", fixture.path("dead.rs"))
+        .expect("create dangling symlink");
+    fixture.commit("root node plus a committed dangling .rs symlink");
+
+    let build = fixture.run(&["build"]);
+    assert_eq!(
+        build.code,
+        0,
+        "a committed dangling symlink must not abort build:\n{}",
+        build.combined()
+    );
+}
+
+// ─── a stele verb outside a git repo is a clean input error (§5.3) ────────────
+
+// Outside a work tree `git ls-files` prints "fatal: not a git repository" and exits
+// non-zero. Before the fix that raw text surfaced as a §5.3 internal error (exit 3); a
+// user running stele in the wrong directory is an input mistake (exit 2) with a
+// one-line explanation, not a leaked `fatal:` line.
+#[test]
+fn stele_verb_outside_a_git_repo_is_a_clean_input_error() {
+    let dir = tempfile::tempdir().expect("create non-git temp dir");
+    let out = std::process::Command::new(common::BIN)
+        .arg("build")
+        .current_dir(dir.path())
+        .output()
+        .expect("spawn stele binary");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "must exit 2 (input error), not 3"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("not a git repository"),
+        "message must explain the condition:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("fatal:"),
+        "raw git text must not leak:\n{stderr}"
+    );
+}

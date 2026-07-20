@@ -17,7 +17,8 @@
 //! — these comments are scanned like any other source (a dogfood constraint; §2.5).
 
 use crate::model::{
-    AnchorData, ClaimAnchor, LANDMARK_ANCHOR_PREFIX, Occurrence, Result, SteleError, is_valid_slug,
+    AnchorData, ClaimAnchor, LANDMARK_ANCHOR_PREFIX, Occurrence, Result, SteleError, is_absent,
+    is_valid_slug,
 };
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -808,15 +809,16 @@ fn parse(parser: &mut Parser, lang: Lang, contents: &str, file: &str) -> Result<
 }
 
 /// Read a scanned file as UTF-8, distinguishing the three outcomes a scan cares
-/// about: `Ok(Some)` valid text, `Ok(None)` the file is absent OR not valid UTF-8 —
-/// a binary blob (PNG, font, icon) the scan skips rather than aborting on (§2.4),
-/// `Err` a genuine IO failure (§5.3 internal, exit 3). Node sources (AGENTS.md) are
-/// read elsewhere and never routed through here: an invalid-UTF-8 node source is a
-/// hard input error naming the file, never a silent skip.
+/// about: `Ok(Some)` valid text, `Ok(None)` the file is absent (deleted-without-staging
+/// or a dangling symlink — [`is_absent`]) OR not valid UTF-8, a binary blob (PNG, font,
+/// icon) the scan skips rather than aborting on (§2.4), `Err` a genuine IO failure (§5.3
+/// internal, exit 3). Node sources (AGENTS.md) are read elsewhere and never routed
+/// through here: an invalid-UTF-8 node source is a hard input error naming the file,
+/// never a silent skip.
 fn read_optional_text(path: &Path, file: &str) -> Result<Option<String>> {
     match std::fs::read(path) {
         Ok(bytes) => Ok(String::from_utf8(bytes).ok()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) if is_absent(&e) => Ok(None),
         Err(e) => Err(SteleError::internal(format!("read {file}: {e}"))),
     }
 }

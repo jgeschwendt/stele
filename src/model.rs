@@ -81,6 +81,19 @@ impl fmt::Display for SteleError {
 
 impl std::error::Error for SteleError {}
 
+/// Whether an IO error means the path is simply not there to read — a tracked file
+/// deleted from the working tree without staging, or a committed dangling symlink
+/// (`NotFound` = target gone; `NotADirectory` = a path component of a symlink target
+/// is a non-dir). Both make a scan/extractor skip the file rather than abort with a
+/// §5.3 internal error; a claim anchored in such a file falls to Unresolved (§4.1),
+/// never a fatal exit 3.
+pub fn is_absent(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::NotADirectory | std::io::ErrorKind::NotFound
+    )
+}
+
 /// Result specialized to [`SteleError`]; the shared return type across phases.
 pub type Result<T> = std::result::Result<T, SteleError>;
 

@@ -768,10 +768,11 @@ fn walk_dir(
 /// The §8.6a finding for an uncovered directory: `<dir> (<n> files) is covered by no
 /// node — unreachable via any router`, with a declare-a-node-or-exclude fix.
 fn uncovered_finding(dir: &str, files: usize) -> Finding {
+    let unit = if files == 1 { "file" } else { "files" };
     Finding::error(
         AssertionClass::Exhaustiveness,
         None,
-        format!("{dir} ({files} files) is covered by no node — unreachable via any router"),
+        format!("{dir} ({files} {unit}) is covered by no node — unreachable via any router"),
     )
     .fix(format!(
         "declare a node for {dir} (add an AGENTS.md with a stele block), \

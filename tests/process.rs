@@ -66,7 +66,6 @@ fn exit_2_without_a_lock_says_run_stele_build() {
 
 // Clean acme: build → check → exit 0 (§5.3 "0 success (check clean)").
 #[test]
-#[ignore = "phase D"]
 fn exit_0_on_clean_acme_build_then_check() {
     let fixture = Fixture::acme();
     assert_eq!(fixture.run(&["build"]).code, 0);
@@ -77,7 +76,6 @@ fn exit_0_on_clean_acme_build_then_check() {
 // A single assertion failure is exit 1, never exit 2 — the "repo out of spec" vs "input
 // error" boundary (§5.3). Uses the 8.2 vestigial violation as a representative failure.
 #[test]
-#[ignore = "phase D"]
 fn assertion_failure_is_exit_1_not_2() {
     let fixture = Fixture::acme();
     fixture.delete_line_containing(

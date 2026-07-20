@@ -296,11 +296,27 @@ fn collect_definitions(node: Node, src: &[u8], lang: Lang, symbol: &str, out: &m
 
 // ─── AST-region structural digest (§4.5) ──────────────────────────────────────
 
-/// The §4.5 structural digest of a resolved claim's BOUND DEFINITION, or `None`
-/// when the anchored file's language has no bundled parser (§2.4 — those claims
-/// fall to the Phase D5 churn-count path). `resolved` is the claim's `file:line`
-/// (the comment/symbol line, §4.5); the digested region is the bound definition,
-/// which may sit on a different line.
+/// A bound region's §4.5 structural digest plus its human name (the region
+/// descriptor the freshness finding prints, EXAMPLE 8.4 `changeset/2`).
+#[derive(Clone, Debug)]
+pub struct RegionDigest {
+    pub digest: String,
+    pub name: String,
+}
+
+/// The §4.5 structural digest (only) of a resolved claim's bound definition, or
+/// `None` for a parser-less anchored file (§2.4). The stable `build`-time entry
+/// point (`stamp_verified`); a thin wrapper over [`region_digest_for_claim`] so
+/// the stamped bytes are byte-identical to what freshness later recomputes.
+pub fn digest_for_claim(root: &Path, anchor: &str, resolved: &str) -> Result<Option<String>> {
+    Ok(region_digest_for_claim(root, anchor, resolved)?.map(|region| region.digest))
+}
+
+/// The §4.5 digest AND region name of a resolved claim's BOUND DEFINITION from the
+/// CURRENT working tree, or `None` when the anchored file's language has no bundled
+/// parser (§2.4 — those claims fall to the freshness churn-count path). `resolved`
+/// is the claim's `file:line` (the comment/symbol line, §4.5); the digested region
+/// is the bound definition, which may sit on a different line.
 ///
 /// Binding (§4.5, EXAMPLE 8.4):
 /// - `<path>#<symbol>` → the resolved symbol's definition node.
@@ -309,7 +325,11 @@ fn collect_definitions(node: Node, src: &[u8], lang: Lang, symbol: &str, out: &m
 ///   skipping intervening comment/attribute/doc siblings. If it precedes none, the
 ///   bound region falls back to the strictly-enclosing named definition, then the
 ///   whole file.
-pub fn digest_for_claim(root: &Path, anchor: &str, resolved: &str) -> Result<Option<String>> {
+pub fn region_digest_for_claim(
+    root: &Path,
+    anchor: &str,
+    resolved: &str,
+) -> Result<Option<RegionDigest>> {
     let (file, line) = split_resolved(resolved);
     let path = Path::new(file);
     let Some(lang) = extension(path).as_deref().and_then(lang_for_extension) else {
@@ -317,21 +337,129 @@ pub fn digest_for_claim(root: &Path, anchor: &str, resolved: &str) -> Result<Opt
     };
     let contents = std::fs::read_to_string(root.join(path))
         .map_err(|e| SteleError::internal(format!("read {file}: {e}")))?;
-    let src = contents.as_bytes();
     let mut parser = Parser::new();
     let tree = parse(&mut parser, lang, &contents, file)?;
-    let root_node = tree.root_node();
+    // A landmark line came from `resolved`, so binding never fails here.
+    Ok(region_digest_bound(
+        tree.root_node(),
+        contents.as_bytes(),
+        lang,
+        anchor,
+        Some(line),
+        file,
+    ))
+}
 
-    let bound = if anchor.strip_prefix(LANDMARK_ANCHOR_PREFIX).is_some() {
+/// The §4.5 digest AND region name of a claim's bound definition computed against a
+/// caller-supplied file `contents` (a historical `git show <sha>:<file>` blob, for
+/// the `stele blame`/staling-commit walk, §5.1). `None` for a parser-less file, an
+/// unparseable blob, or an `lm:` anchor whose landmark token is absent from this
+/// version (the region did not yet exist → the digest is treated as divergent).
+pub fn region_digest_of_source(anchor: &str, file: &str, contents: &str) -> Option<RegionDigest> {
+    let lang = extension(Path::new(file))
+        .as_deref()
+        .and_then(lang_for_extension)?;
+    let mut parser = Parser::new();
+    parser.set_language(&language(lang)).ok()?;
+    let tree = parser.parse(contents, None)?;
+    region_digest_bound(
+        tree.root_node(),
+        contents.as_bytes(),
+        lang,
+        anchor,
+        None,
+        file,
+    )
+}
+
+/// Bind `anchor` to its digested region and return its digest + name (§4.5). For an
+/// `lm:` anchor, `lm_line` (1-based) locates the landmark comment when known (the
+/// working-tree path); when `None` the token is scanned for in `src` (the historical
+/// path), yielding `None` if it is absent. A `<path>#<symbol>` anchor binds to the
+/// symbol's definition, falling back to the whole file.
+fn region_digest_bound(
+    root_node: Node,
+    src: &[u8],
+    lang: Lang,
+    anchor: &str,
+    lm_line: Option<usize>,
+    file: &str,
+) -> Option<RegionDigest> {
+    let bound = if let Some(slug) = anchor.strip_prefix(LANDMARK_ANCHOR_PREFIX) {
+        let line = match lm_line {
+            Some(line) => line,
+            None => landmark_line(src, slug)?,
+        };
         bind_landmark(root_node, src, lang, line)
     } else {
         let symbol = anchor.rsplit('#').next().unwrap_or(anchor);
         find_definition_node(root_node, src, lang, symbol).unwrap_or(root_node)
     };
-
     let mut serialized = String::new();
     serialize_structure(bound, src, &mut serialized);
-    Ok(Some(sha256_hex(&serialized)))
+    Some(RegionDigest {
+        digest: sha256_hex(&serialized),
+        name: region_name(bound, src, lang, file),
+    })
+}
+
+/// The 1-based line of the first `stele:landmark <slug>` token in `src`, or `None`
+/// (§4.5 historical binding). A whole-file scan — the historical blob is not
+/// comment-parsed — which is why the working-tree path prefers the resolved line.
+fn landmark_line(src: &[u8], slug: &str) -> Option<usize> {
+    let text = std::str::from_utf8(src).ok()?;
+    text.lines()
+        .position(|line| token_values(line, LANDMARK_TOKEN).iter().any(|v| v == slug))
+        .map(|index| index + 1)
+}
+
+/// The human name of a bound region (§4.5, EXAMPLE 8.4 `changeset/2`): an Elixir
+/// `def`/`defmodule` renders `name/arity` or the module alias; every other language's
+/// definition renders its `name` field; a whole-file fallback renders the base name.
+fn region_name(node: Node, src: &[u8], lang: Lang, file: &str) -> String {
+    match lang {
+        Lang::Elixir if is_definition_node(lang, node, src) => {
+            if let Some(name) = elixir_def_name(node, src) {
+                return name;
+            }
+        }
+        _ if is_definition_kind(lang, node.kind()) => {
+            if let Some(name) = node
+                .child_by_field_name(NAME_FIELD)
+                .and_then(|n| n.utf8_text(src).ok())
+            {
+                return name.to_string();
+            }
+        }
+        _ => {}
+    }
+    file.rsplit('/').next().unwrap_or(file).to_string()
+}
+
+/// The `name/arity` of an Elixir function def, or the alias of a `defmodule` (§4.5).
+/// A parenthesized head (`changeset(refund, attrs)`) parses to a nested `call` whose
+/// `arguments` child gives the arity; a bare head (`init`) is arity 0.
+fn elixir_def_name(call: Node, src: &[u8]) -> Option<String> {
+    let keyword = call.child(0)?.utf8_text(src).ok()?;
+    let mut cursor = call.walk();
+    let args = call
+        .children(&mut cursor)
+        .find(|c| c.kind() == "arguments")?;
+    let head = args.named_child(0)?;
+    if keyword == "defmodule" {
+        return head.utf8_text(src).ok().map(str::to_string);
+    }
+    if head.kind() == "call" {
+        let name = head.child(0)?.utf8_text(src).ok()?;
+        let mut head_cursor = head.walk();
+        let arity = head
+            .children(&mut head_cursor)
+            .find(|c| c.kind() == "arguments")
+            .map_or(0, |a| a.named_child_count());
+        Some(format!("{name}/{arity}"))
+    } else {
+        Some(format!("{}/0", head.utf8_text(src).ok()?))
+    }
 }
 
 /// Split a claim's `resolved` `file:line` into its parts. The `file:line` was

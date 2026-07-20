@@ -17,17 +17,21 @@
 //! member (a tracked `Cargo.toml` `[package].name`) that owns it; Python maps a
 //! dotted module to the tracked file that would define it.
 
-use crate::model::{Result, SteleError, Territory};
+use crate::model::{ImportRef, Result, SteleError, Territory};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use tree_sitter::{Language, Node, Parser, Tree};
 
 /// A raw reference: the importing file drew a dependency on the defining file,
-/// both repo-root-relative POSIX paths. Node attribution happens in the driver.
+/// both repo-root-relative POSIX paths, plus the 1-based line the reference sits on
+/// and that line's trimmed source text (§4.2 structural locations). Node attribution
+/// happens in the driver.
 struct FileRef {
     from: String,
     to: String,
+    line: usize,
+    text: String,
 }
 
 /// One language's extraction: tracked sources of its kind → raw file→file
@@ -81,19 +85,33 @@ impl<'a> Ctx<'a> {
     }
 }
 
-/// Extracted `imports` per node (§2.2): each node id → the sorted, de-duplicated
-/// ids of the OTHER nodes it imports across a territory boundary (§4.2). Runs on
-/// both `build` and `check` so the lock byte-matches on both paths. A reference
-/// whose endpoints share an owner, or whose target resolves outside every node's
-/// territory, is dropped.
+/// The result of import extraction (§2.3/§4.2): the per-node de-duplicated target
+/// ids that feed `extracted.imports` in the lock, plus the per-edge reference
+/// occurrences the structural class (§4.2) prints as violation locations. The
+/// occurrences are in-memory only — the lock never carries them.
+pub struct Extraction {
+    /// Each node id → the sorted, de-duplicated ids of the OTHER nodes it imports.
+    pub per_node: BTreeMap<String, Vec<String>>,
+    /// Each `(from node id, to node id)` cross-node edge → its contributing
+    /// reference occurrences, sorted and de-duplicated.
+    pub edges: BTreeMap<(String, String), Vec<ImportRef>>,
+}
+
+/// Extract `imports` per node (§2.2): each node id → the sorted, de-duplicated ids
+/// of the OTHER nodes it imports across a territory boundary (§4.2), plus the
+/// per-edge reference occurrences (§4.2 structural locations). Runs on both `build`
+/// and `check`, and only `per_node` reaches the lock, so the lock byte-matches on
+/// both paths. A reference whose endpoints share an owner, or whose target resolves
+/// outside every node's territory, is dropped.
 pub fn extract_imports(
     root: &Path,
     tracked: &[PathBuf],
     territory: &Territory,
-) -> Result<BTreeMap<String, Vec<String>>> {
+) -> Result<Extraction> {
     let ctx = Ctx::new(root, tracked);
     let extractors: [&dyn Extractor; 4] = [&Elixir, &TsJs, &RustLang, &Python];
     let mut per_node: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut edges: BTreeMap<(String, String), BTreeSet<ImportRef>> = BTreeMap::new();
     for extractor in extractors {
         for reference in extractor.extract(&ctx)? {
             let (Some(from), Some(to)) = (
@@ -103,17 +121,26 @@ pub fn extract_imports(
                 continue;
             };
             if from != to {
-                per_node
-                    .entry(from.to_string())
-                    .or_default()
-                    .insert(to.to_string());
+                let (from, to) = (from.to_string(), to.to_string());
+                per_node.entry(from.clone()).or_default().insert(to.clone());
+                edges.entry((from, to)).or_default().insert(ImportRef {
+                    file: reference.from,
+                    line: reference.line,
+                    text: reference.text,
+                });
             }
         }
     }
-    Ok(per_node
-        .into_iter()
-        .map(|(id, imports)| (id, imports.into_iter().collect()))
-        .collect())
+    Ok(Extraction {
+        per_node: per_node
+            .into_iter()
+            .map(|(id, imports)| (id, imports.into_iter().collect()))
+            .collect(),
+        edges: edges
+            .into_iter()
+            .map(|(edge, occurrences)| (edge, occurrences.into_iter().collect()))
+            .collect(),
+    })
 }
 
 // ─── Elixir ───────────────────────────────────────────────────────────────────
@@ -147,13 +174,15 @@ impl Extractor for Elixir {
         // Second pass: resolve every module reference against the map.
         let mut refs = Vec::new();
         for (file, src, tree) in &parsed {
-            let mut aliases = BTreeSet::new();
-            collect_kind_texts(tree.root_node(), src.as_bytes(), "alias", &mut aliases);
-            for alias in aliases {
+            let mut aliases = Vec::new();
+            collect_kind_occurrences(tree.root_node(), src.as_bytes(), "alias", &mut aliases);
+            for (alias, row) in aliases {
                 if let Some(defining) = modules.get(&alias) {
                     refs.push(FileRef {
                         from: (*file).clone(),
                         to: defining.clone(),
+                        line: row + 1,
+                        text: source_line(src, row),
                     });
                 }
             }
@@ -234,11 +263,13 @@ impl Extractor for TsJs {
             let tree = parse(&mut parser, &language, &src, file)?;
             let mut sources = Vec::new();
             collect_ts_sources(tree.root_node(), src.as_bytes(), &mut sources);
-            for source in sources {
+            for (source, row) in sources {
                 if let Some(to) = resolve_ts(ctx, file, &source, &packages) {
                     refs.push(FileRef {
                         from: file.clone(),
                         to,
+                        line: row + 1,
+                        text: source_line(&src, row),
                     });
                 }
             }
@@ -267,18 +298,19 @@ fn workspace_packages(ctx: &Ctx) -> Result<Vec<Package>> {
     Ok(packages)
 }
 
-/// Collect every module specifier: the `string` source of an `import`/`export …
-/// from` statement and the first string argument of a `require(…)` call.
-fn collect_ts_sources(node: Node, src: &[u8], out: &mut Vec<String>) {
+/// Collect every module specifier paired with its 0-based line: the `string` source
+/// of an `import`/`export … from` statement and the first string argument of a
+/// `require(…)` call.
+fn collect_ts_sources(node: Node, src: &[u8], out: &mut Vec<(String, usize)>) {
     match node.kind() {
         "export_statement" | "import_statement" => {
             if let Some(source) = string_child(node, src) {
-                out.push(source);
+                out.push((source, node.start_position().row));
             }
         }
         "call_expression" => {
             if let Some(source) = require_source(node, src) {
-                out.push(source);
+                out.push((source, node.start_position().row));
             }
         }
         _ => {}
@@ -414,13 +446,15 @@ impl Extractor for RustLang {
         for file in ctx.with_ext(&["rs"]) {
             let src = ctx.read(file)?;
             let tree = parse(&mut parser, &language, &src, file)?;
-            let mut heads = BTreeSet::new();
+            let mut heads = Vec::new();
             collect_rust_crate_heads(tree.root_node(), src.as_bytes(), &mut heads);
-            for head in heads {
+            for (head, row) in heads {
                 if let Some(dir) = crates.get(&head) {
                     refs.push(FileRef {
                         from: file.clone(),
                         to: dir.clone(),
+                        line: row + 1,
+                        text: source_line(&src, row),
                     });
                 }
             }
@@ -429,18 +463,19 @@ impl Extractor for RustLang {
     }
 }
 
-/// Collect the head crate segment of every `use` declaration and `extern crate`,
-/// dropping the intra-crate roots `crate`/`self`/`super`.
-fn collect_rust_crate_heads(node: Node, src: &[u8], out: &mut BTreeSet<String>) {
+/// Collect the head crate segment of every `use` declaration and `extern crate`
+/// paired with its 0-based line, dropping the intra-crate roots
+/// `crate`/`self`/`super`.
+fn collect_rust_crate_heads(node: Node, src: &[u8], out: &mut Vec<(String, usize)>) {
     match node.kind() {
         "use_declaration" => {
             if let Some(head) = use_head_segment(node, src) {
-                out.insert(head);
+                out.push((head, node.start_position().row));
             }
         }
         "extern_crate_declaration" => {
             if let Some(head) = extern_crate_name(node, src) {
-                out.insert(head);
+                out.push((head, node.start_position().row));
             }
         }
         _ => {}
@@ -515,11 +550,13 @@ impl Extractor for Python {
             let tree = parse(&mut parser, &language, &src, file)?;
             let mut dotted = Vec::new();
             collect_python_modules(tree.root_node(), src.as_bytes(), &mut dotted);
-            for module in dotted {
+            for (module, row) in dotted {
                 if let Some(defining) = modules.get(&module) {
                     refs.push(FileRef {
                         from: (*file).clone(),
                         to: defining.clone(),
+                        line: row + 1,
+                        text: source_line(&src, row),
                     });
                 }
             }
@@ -536,10 +573,11 @@ fn python_module_name(path: &str) -> String {
     stem.replace('/', ".")
 }
 
-/// Collect the dotted module of every `import` and `from`-`import`: each
-/// `dotted_name` (or `aliased_import`) under an `import_statement`, and the
-/// `module_name` of a `from`-import when it is dotted (relative imports skipped).
-fn collect_python_modules(node: Node, src: &[u8], out: &mut Vec<String>) {
+/// Collect the dotted module of every `import` and `from`-`import` paired with its
+/// 0-based line: each `dotted_name` (or `aliased_import`) under an
+/// `import_statement`, and the `module_name` of a `from`-import when it is dotted
+/// (relative imports skipped).
+fn collect_python_modules(node: Node, src: &[u8], out: &mut Vec<(String, usize)>) {
     match node.kind() {
         "import_statement" => {
             let mut cursor = node.walk();
@@ -547,14 +585,14 @@ fn collect_python_modules(node: Node, src: &[u8], out: &mut Vec<String>) {
                 match child.kind() {
                     "dotted_name" => {
                         if let Ok(text) = child.utf8_text(src) {
-                            out.push(text.to_string());
+                            out.push((text.to_string(), child.start_position().row));
                         }
                     }
                     "aliased_import" => {
                         if let Some(name) = child.child_by_field_name("name")
                             && let Ok(text) = name.utf8_text(src)
                         {
-                            out.push(text.to_string());
+                            out.push((text.to_string(), child.start_position().row));
                         }
                     }
                     _ => {}
@@ -566,7 +604,7 @@ fn collect_python_modules(node: Node, src: &[u8], out: &mut Vec<String>) {
                 && module.kind() == "dotted_name"
                 && let Ok(text) = module.utf8_text(src)
             {
-                out.push(text.to_string());
+                out.push((text.to_string(), module.start_position().row));
             }
         }
         _ => {}
@@ -590,17 +628,24 @@ fn parse(parser: &mut Parser, language: &Language, src: &str, file: &str) -> Res
         .ok_or_else(|| SteleError::internal(format!("tree-sitter failed to parse {file}")))
 }
 
-/// Collect, de-duplicated, the text of every node of kind `kind` in the tree.
-fn collect_kind_texts(node: Node, src: &[u8], kind: &str, out: &mut BTreeSet<String>) {
+/// Collect the text of every node of kind `kind` in the tree paired with its 0-based
+/// line — one entry per occurrence, so the structural class can locate each reference.
+fn collect_kind_occurrences(node: Node, src: &[u8], kind: &str, out: &mut Vec<(String, usize)>) {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.kind() == kind
             && let Ok(text) = child.utf8_text(src)
         {
-            out.insert(text.to_string());
+            out.push((text.to_string(), child.start_position().row));
         }
-        collect_kind_texts(child, src, kind, out);
+        collect_kind_occurrences(child, src, kind, out);
     }
+}
+
+/// The trimmed source text of the line at 0-based `row` — a reference's own line
+/// (e.g. `alias AcmeWeb.Billing.Charge`), used verbatim in structural locations (§4.2).
+fn source_line(src: &str, row: usize) -> String {
+    src.lines().nth(row).unwrap_or("").trim().to_string()
 }
 
 /// A repo-root-relative path as a POSIX string (forward slashes on every platform).

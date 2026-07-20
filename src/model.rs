@@ -240,6 +240,18 @@ pub struct Occurrence {
     pub line: usize,
 }
 
+/// One cross-node import reference occurrence (§4.2): the importing file, the line
+/// the reference sits on, and that line's source text (e.g. the `alias …` line).
+/// Retained in memory for the structural class's violation locations (EXAMPLE 8.1);
+/// NEVER serialized — the lock carries only the de-duplicated target ids in
+/// `extracted.imports`.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct ImportRef {
+    pub file: String,
+    pub line: usize,
+    pub text: String,
+}
+
 /// A `stele:claim <addr>` back-reference occurrence (§2.5). The address is stored
 /// verbatim; resolution against declared claims is Phase D referential (§4.1).
 #[derive(Clone, Debug)]
@@ -291,6 +303,10 @@ pub struct Graph {
     pub anchors: AnchorData,
     /// The compiled ADR index (§2.6), sorted into the lock's `adrs{}` map.
     pub adrs: Vec<AdrEntry>,
+    /// Per cross-node import edge `(from node id, to node id)` → each contributing
+    /// reference occurrence (§4.2), retained in memory for the structural class's
+    /// violation locations. NOT serialized into the lock.
+    pub import_edges: BTreeMap<(String, String), Vec<ImportRef>>,
     pub nodes: Vec<Node>,
 }
 

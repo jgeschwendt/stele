@@ -22,6 +22,10 @@ use std::collections::BTreeMap;
 
 /// The only lock format this engine reads or writes (§3.2). A committed lock with
 /// any other `version` is rejected (exit 2), never best-effort parsed.
+///
+/// §4.4 folds the budget tokenizer's identity into this version: lock version 1 ⇔
+/// tiktoken-rs@0.12.0 cl100k approximation. A tokenizer swap changes token counts,
+/// so it MUST bump this version — the change stays visible and reviewable in the lock.
 pub const LOCK_VERSION: u32 = 1;
 
 /// Pretty-print indent width in spaces (§3.2 "2-space pretty-print").

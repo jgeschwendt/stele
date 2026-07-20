@@ -12,7 +12,8 @@
 //! the last compiled slot still `null`.
 
 use crate::anchors::{self, SymbolResolution};
-use crate::config;
+use crate::assert::{self, Context, Finding};
+use crate::config::{self, AssertionClass};
 use crate::extract;
 use crate::lock::{self, Lock};
 use crate::model::{AdrEntry, Graph, Node, Resolution, Result, SteleError, Verified};
@@ -37,6 +38,13 @@ const RUN_BUILD_HINT: &str = "run stele build";
 /// The machine-output flag (§5.3): exactly one JSON envelope on stdout.
 const JSON_FLAG: &str = "--json";
 
+/// The `check --freeze` flag (§4.2): baseline current structural violations.
+const FREEZE_FLAG: &str = "--freeze";
+
+/// The `check --run-commands` flag (§4.6): execute each declared command, not only
+/// resolve it (off by default — the bonfires tier).
+const RUN_COMMANDS_FLAG: &str = "--run-commands";
+
 /// The stable machine contract (§5.3 `--json` envelope). `findings` is reserved for
 /// assertion results (Phase D populates it); input/internal errors surface via
 /// `ok:false` + `exit` + `data.error`, never as findings.
@@ -50,20 +58,29 @@ struct Envelope<'a> {
     findings: Vec<Value>,
 }
 
-/// A command's result: the `--json` `data` payload plus an optional human-readable
-/// line (printed only when `--json` is absent).
+/// A command's result: the `--json` `data` payload, an optional human-readable line
+/// (printed only when `--json` is absent), and any assertion findings (§4). Findings
+/// are `check`-only today; a non-empty list makes the process exit 1 (§5.3).
 struct CommandOutput {
     data: Value,
     summary: Option<String>,
+    findings: Vec<Finding>,
 }
 
 impl CommandOutput {
-    /// A stub command's empty success (no data, no human line).
-    fn empty() -> Self {
+    /// A data+summary success with no findings (the shape build/emit/node/clean-check
+    /// return).
+    fn new(data: Value, summary: Option<String>) -> Self {
         Self {
-            data: json!({}),
-            summary: None,
+            data,
+            summary,
+            findings: Vec::new(),
         }
+    }
+
+    /// A stub command's empty success (no data, no human line, no findings).
+    fn empty() -> Self {
+        Self::new(json!({}), None)
     }
 }
 
@@ -83,17 +100,25 @@ pub fn run(args: &[String]) -> i32 {
 
     match dispatch(root, &rest) {
         Ok(output) => {
+            // Assertion findings (§4) make `check` exit 1 ("repo out of spec", §5.3);
+            // an empty list keeps the 0-success path.
+            let exit = if output.findings.is_empty() { 0 } else { 1 };
             if json {
-                print_envelope(command, true, 0, output.data);
-            } else if let Some(summary) = output.summary {
-                println!("{summary}");
+                let findings = output.findings.iter().map(Finding::to_json).collect();
+                print_envelope(command, exit == 0, exit, output.data, findings);
+            } else if output.findings.is_empty() {
+                if let Some(summary) = output.summary {
+                    println!("{summary}");
+                }
+            } else {
+                print!("{}", assert::render_human(&output.findings));
             }
-            0
+            exit
         }
         Err(error) => {
             let exit = error.exit as i32;
             if json {
-                print_envelope(command, false, exit, error_data(&error));
+                print_envelope(command, false, exit, error_data(&error), Vec::new());
             } else {
                 eprintln!("{error}");
             }
@@ -104,8 +129,9 @@ pub fn run(args: &[String]) -> i32 {
 
 fn dispatch(root: &Path, args: &[&str]) -> Result<CommandOutput> {
     match args.first().copied() {
+        Some("blame") => blame(root, args),
         Some("build") => build(root),
-        Some("check") => check(root),
+        Some("check") => check(root, args),
         Some("emit") => emit(root),
         Some("node") => node(root),
         Some(other) => Err(SteleError::input_msg(format!(
@@ -117,15 +143,16 @@ fn dispatch(root: &Path, args: &[&str]) -> Result<CommandOutput> {
     }
 }
 
-/// Print the one §5.3 JSON envelope. `findings` is always empty until Phase D.
-fn print_envelope(command: &str, ok: bool, exit: i32, data: Value) {
+/// Print the one §5.3 JSON envelope. `findings` carries the assertion results (§4);
+/// input/internal errors pass an empty list and surface via `data.error` instead.
+fn print_envelope(command: &str, ok: bool, exit: i32, data: Value, findings: Vec<Value>) {
     let envelope = Envelope {
         stele: env!("CARGO_PKG_VERSION"),
         command,
         ok,
         exit,
         data,
-        findings: Vec::new(),
+        findings,
     };
     // Serialization of this fixed-shape struct cannot fail.
     println!("{}", serde_json::to_string(&envelope).unwrap());
@@ -154,21 +181,25 @@ fn build(root: &Path) -> Result<CommandOutput> {
     let bytes = lock::to_canonical_string(&lock);
     write_lock_atomic(root, &bytes)?;
     let nodes = graph.nodes.len();
-    Ok(CommandOutput {
-        data: json!({ "lock": format!("{LOCK_DIR}/{LOCK_FILE}"), "nodes": nodes }),
-        summary: Some(format!(
+    Ok(CommandOutput::new(
+        json!({ "lock": format!("{LOCK_DIR}/{LOCK_FILE}"), "nodes": nodes }),
+        Some(format!(
             "stele build: wrote {LOCK_DIR}/{LOCK_FILE} ({nodes} node(s))"
         )),
-    })
+    ))
 }
 
 /// `stele check` (§5.1, §5.3): load config (§3.4), require a committed lock, rebuild
 /// the graph in-memory, and byte-compare the canonical serialization against the
 /// on-disk file. `verified` watermarks are carried over from the committed lock,
-/// never re-stamped (§4.5). The six assertion classes run here in Phase D, after the
-/// compare succeeds; for now a matching lock exits 0.
-fn check(root: &Path) -> Result<CommandOutput> {
-    let _config = config::load(root)?;
+/// never re-stamped (§4.5). The six assertion classes run over the rebuilt graph after
+/// the compare succeeds; `--run-commands` additionally executes each declared command
+/// (§4.6). A clean repo exits 0.
+fn check(root: &Path, args: &[&str]) -> Result<CommandOutput> {
+    let only = parse_only(args)?;
+    let freeze = args.contains(&FREEZE_FLAG);
+    let run_commands = args.contains(&RUN_COMMANDS_FLAG);
+    let config = config::load(root)?;
 
     let on_disk = read_committed_lock(root)?;
 
@@ -181,6 +212,7 @@ fn check(root: &Path) -> Result<CommandOutput> {
     }
     let committed = lock::parse_lock(&on_disk)?;
 
+    let tracked = tracked_files(root)?;
     let graph = build_graph(root)?;
     let mut rebuilt = Lock::from_graph(&graph);
     rebuilt.carry_over_verified(&committed);
@@ -191,11 +223,91 @@ fn check(root: &Path) -> Result<CommandOutput> {
         )));
     }
 
-    // Phase D: the six assertion classes (§4) run over `graph`/`_config` here.
+    // The six assertion classes (§4) run over the rebuilt graph AFTER the byte-compare
+    // (§5.3); any finding maps to exit 1, none to exit 0.
+    let ctx = Context {
+        committed: &committed,
+        config: &config,
+        graph: &graph,
+        root,
+        run_commands,
+        tracked: &tracked,
+    };
+
+    // `--freeze` baselines the current structural violations and exits 0 (§4.2),
+    // instead of running the assertion suite.
+    if freeze {
+        let count = assert::write_freeze(&ctx)?;
+        return Ok(CommandOutput::new(
+            json!({ "frozen": count }),
+            Some(format!(
+                "stele check --freeze: baselined {count} structural violation(s)"
+            )),
+        ));
+    }
+
+    let findings = assert::run(&ctx, only)?;
     Ok(CommandOutput {
         data: json!({ "nodes": graph.nodes.len() }),
         summary: None,
+        findings,
     })
+}
+
+/// `stele blame <node-id>/<slug>` (§5.1, §4.5): require a committed lock, rebuild the
+/// graph in-memory to resolve the claim's current anchor, and walk history to the
+/// staling commit — reporting STALE (with the staling commit), up-to-date, or a
+/// parser-less churn count. Like `emit`/`node` it trusts the committed lock and does
+/// NOT byte-compare (staleness detection is `check`'s job, §5.3); it reads `verified`
+/// from that lock, the sole watermark carrier. Accepts an abbreviated node-id when
+/// unambiguous (§2.4).
+fn blame(root: &Path, args: &[&str]) -> Result<CommandOutput> {
+    let Some(address) = args.get(1) else {
+        return Err(SteleError::input_msg("usage: stele blame <node-id>/<slug>"));
+    };
+    let config = config::load(root)?;
+    let on_disk = read_committed_lock(root)?;
+    let version = lock::read_version(&on_disk)?;
+    if version != lock::LOCK_VERSION {
+        return Err(SteleError::input_msg(format!(
+            "committed lock is version {version}; this engine writes version {}. {RUN_BUILD_HINT}",
+            lock::LOCK_VERSION
+        )));
+    }
+    let committed = lock::parse_lock(&on_disk)?;
+    let tracked = tracked_files(root)?;
+    let graph = build_graph(root)?;
+    let ctx = Context {
+        committed: &committed,
+        config: &config,
+        graph: &graph,
+        root,
+        run_commands: false,
+        tracked: &tracked,
+    };
+    let (summary, data) = assert::blame(&ctx, address)?;
+    Ok(CommandOutput::new(data, Some(summary)))
+}
+
+/// Parse `check --only <class>` (§5.1): the value must name one of the six classes
+/// (§4), else it is an exit-2 bad-flag error (§5.3). Absent `--only` runs every
+/// enabled class.
+fn parse_only(args: &[&str]) -> Result<Option<AssertionClass>> {
+    let Some(index) = args.iter().position(|a| *a == "--only") else {
+        return Ok(None);
+    };
+    match args.get(index + 1) {
+        Some(name) => AssertionClass::parse(name).map(Some).ok_or_else(|| {
+            SteleError::input_msg(format!(
+                "unknown --only class {name:?}; expected one of \
+                 referential|structural|exhaustiveness|budget|freshness|liveness"
+            ))
+        }),
+        None => Err(SteleError::input_msg(
+            "--only requires a class argument \
+             (referential|structural|exhaustiveness|budget|freshness|liveness)",
+        )),
+    }
 }
 
 /// `stele emit` (§5.1): a Phase B stub. It loads config (§3.4) and enforces the §5.3
@@ -240,12 +352,18 @@ fn build_graph(root: &Path) -> Result<Graph> {
     graph.adrs = build_adr_index(root, &tracked)?;
 
     // Import extraction (§2.3/§4.2): attribute each cross-boundary reference to its
-    // owning node via the territory index, then fill each node's `extracted.imports`.
+    // owning node via the territory index, then fill each node's `extracted.imports`
+    // and retain the per-edge reference occurrences for the structural class (§4.2).
     let territory = graph.territory();
-    let imports = extract::extract_imports(root, &tracked, &territory)?;
+    let extraction = extract::extract_imports(root, &tracked, &territory)?;
     for node in &mut graph.nodes {
-        node.extracted_imports = imports.get(&node.id).cloned().unwrap_or_default();
+        node.extracted_imports = extraction
+            .per_node
+            .get(&node.id)
+            .cloned()
+            .unwrap_or_default();
     }
+    graph.import_edges = extraction.edges;
     Ok(graph)
 }
 

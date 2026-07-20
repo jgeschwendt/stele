@@ -28,7 +28,6 @@ export function legacyMoney(cents: number): LegacyMoney {
 
 // 8.1 Structural / violation (forward): apps/web/lib/store imports billing, undeclared.
 #[test]
-#[ignore = "phase D2"]
 fn gallery_8_1_structural_forward_violation() {
     let fixture = Fixture::acme();
     fixture.insert_line_at(
@@ -57,7 +56,6 @@ fn gallery_8_1_structural_forward_violation() {
 // 8.2 Structural / vestigial (reverse): billing declares depends on store, but no longer
 // imports it.
 #[test]
-#[ignore = "phase D2"]
 fn gallery_8_2_structural_reverse_vestigial() {
     let fixture = Fixture::acme();
     fixture.delete_line_containing(
@@ -81,7 +79,6 @@ fn gallery_8_2_structural_reverse_vestigial() {
 // 8.3 Referential: (a) a renamed landmark comment leaves lm:refund-cap unresolved;
 // (b) a copy-paste refactor duplicates the money-type landmark (cardinality 2).
 #[test]
-#[ignore = "phase D1"]
 fn gallery_8_3_referential() {
     let fixture = Fixture::acme();
     fixture.replace(
@@ -108,7 +105,6 @@ fn gallery_8_3_referential() {
 // untouched. The baseline build stamps verified {sha, digest}; the edit then lands
 // WITHOUT a rebuild, so `check` recomputes the region digest and sees it drift (§4.5).
 #[test]
-#[ignore = "phase D5"]
 fn gallery_8_4_freshness_digest_drift() {
     let fixture = Fixture::acme();
     // Baseline: stamp the clean digest of changeset/2 for the refund-cap claim.
@@ -138,7 +134,6 @@ fn gallery_8_4_freshness_digest_drift() {
 // only ~3.2 KiB, so a token-sized block would trip the node budget alone and never the
 // codex byte cap — the codex class needs a chain that actually overflows on bytes.
 #[test]
-#[ignore = "phase D4"]
 fn gallery_8_5_budget() {
     // `codex` byte cap (`project_doc_max_bytes`, SPEC §4.4). The block clears it so the
     // root→leaf chain overflows on bytes, not only the node budget on tokens.
@@ -174,7 +169,6 @@ fn gallery_8_5_budget() {
 // 8.6a Exhaustiveness: a new apps/api/ directory with 14 files and no AGENTS.md is
 // covered by no node.
 #[test]
-#[ignore = "phase D3"]
 fn gallery_8_6a_exhaustiveness_uncovered_dir() {
     let fixture = Fixture::acme();
     for i in 1..=API_FILE_COUNT {
@@ -200,7 +194,6 @@ fn gallery_8_6a_exhaustiveness_uncovered_dir() {
 // 8.6b Liveness: the db-reset command points at `mix ecto.reset`, whose alias is deleted
 // from mix.exs — the task no longer resolves.
 #[test]
-#[ignore = "phase D6"]
 fn gallery_8_6b_liveness_missing_task() {
     let fixture = Fixture::acme();
     fixture.delete_line_containing("mix.exs", "\"ecto.reset\":");

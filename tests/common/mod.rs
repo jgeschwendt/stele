@@ -28,10 +28,25 @@ impl RunResult {
     }
 }
 
+/// The runner/tool executables the liveness class (§4.6) probes on PATH. Stubbed as
+/// exit-0 no-ops so PATH resolution is host-independent — the acme fixture's `setup`
+/// command names `mise`, and the runner names resolve to real binaries on a dev box but
+/// to nothing on a bare CI host. Alpha-sorted.
+const STUB_BINS: [&str; 7] = ["cargo", "just", "mise", "mix", "npm", "pnpm", "yarn"];
+
+/// The system directories appended after `stub-bin` on the child `PATH` (§4.6 harness):
+/// enough for the engine's own `git`/`sh` subprocesses, but NOT enough to leak the
+/// host's real runners ahead of the stubs. `stub-bin` is always first, so a stub wins
+/// over any same-named host binary.
+const SYSTEM_PATH_DIRS: [&str; 4] = ["/usr/bin", "/bin", "/usr/local/bin", "/opt/homebrew/bin"];
+
 /// A per-test working tree: a temp directory that is also a git repo. Dropping it
-/// deletes the directory.
+/// deletes the directory. A second temp directory (`_stub_dir`) holds the exit-0 tool
+/// stubs kept OUTSIDE the git tree so they never count toward tracked files (§4.3).
 pub struct Fixture {
     _dir: tempfile::TempDir,
+    _stub_dir: tempfile::TempDir,
+    stub_bin: PathBuf,
     pub root: PathBuf,
 }
 
@@ -52,9 +67,29 @@ impl Fixture {
     fn new() -> Self {
         let dir = tempfile::tempdir().expect("create temp dir");
         let root = dir.path().to_path_buf();
-        let fixture = Self { _dir: dir, root };
+        let stub_dir = tempfile::tempdir().expect("create stub-bin dir");
+        let stub_bin = stub_dir.path().to_path_buf();
+        write_stub_bins(&stub_bin);
+        let fixture = Self {
+            _dir: dir,
+            _stub_dir: stub_dir,
+            stub_bin,
+            root,
+        };
         fixture.git(&["init", "-b", "main"]);
         fixture
+    }
+
+    /// The child `PATH` for [`Self::run`]: `stub-bin` first (so §4.6 runner/tool names
+    /// resolve host-independently), then the minimal system dirs the engine's own
+    /// `git`/`sh` subprocesses need.
+    fn child_path(&self) -> String {
+        let mut dirs = vec![self.stub_bin.clone()];
+        dirs.extend(SYSTEM_PATH_DIRS.iter().map(PathBuf::from));
+        std::env::join_paths(dirs)
+            .expect("join child PATH")
+            .to_string_lossy()
+            .into_owned()
     }
 
     /// Stage everything and commit with inline identity (no global git config needed).
@@ -72,11 +107,14 @@ impl Fixture {
         ]);
     }
 
-    /// Run the built binary in the working tree, capturing status + both streams.
+    /// Run the built binary in the working tree, capturing status + both streams. The
+    /// child `PATH` is forced through `stub-bin` (§4.6) so liveness PATH resolution is
+    /// host-independent — identical on a dev box and a bare CI host.
     pub fn run(&self, args: &[&str]) -> RunResult {
         let output = Command::new(BIN)
             .args(args)
             .current_dir(&self.root)
+            .env("PATH", self.child_path())
             .output()
             .expect("spawn stele binary");
         RunResult {
@@ -161,6 +199,21 @@ impl Fixture {
             "git {args:?} failed:\n{}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+}
+
+/// Materialize the [`STUB_BINS`] as exit-0 executables in `dir` (§4.6 harness). Each is
+/// a `#!/bin/sh` no-op with the Unix executable bit set, so the engine's liveness PATH
+/// probe and `--run-commands` execution both see a present, succeeding tool.
+fn write_stub_bins(dir: &Path) {
+    for name in STUB_BINS {
+        let path = dir.join(name);
+        fs::write(&path, "#!/bin/sh\nexit 0\n").expect("write stub bin");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod stub bin");
+        }
     }
 }
 

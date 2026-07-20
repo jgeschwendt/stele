@@ -1,0 +1,6 @@
+# Vendored acme worked-example repo — a full stele graph whose nodes, anchors, and quoted
+# anchor syntax would pollute this repo's own graph if scanned (SPEC §2.4 dogfood).
+tests/fixtures/
+# CI plumbing, not architecture — kept out of the graph so its tracked dot-dir needs no
+# node and never trips exhaustiveness (§4.3).
+.github/

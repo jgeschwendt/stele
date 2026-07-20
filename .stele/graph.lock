@@ -1,0 +1,104 @@
+{
+  "adrs": {},
+  "landmarks": {},
+  "nodes": {
+    "/": {
+      "budget": null,
+      "claims": [
+        {
+          "anchor": "research/claims.md#c1",
+          "enforced_by": null,
+          "id": "c1",
+          "kind": "invariant",
+          "resolved": "research/claims.md:3",
+          "text": "every [Cn] citation must stay licensed by research/claims.md's status for that claim — never state a `reported` claim as settled fact",
+          "verified": {
+            "digest": null,
+            "sha": "35f09c1df0c3db8412ccb5a4d0a3a73f4aa13824"
+          }
+        },
+        {
+          "anchor": "SPEC.md#decision-log",
+          "enforced_by": null,
+          "id": "decision-log",
+          "kind": "invariant",
+          "resolved": "SPEC.md:300",
+          "text": "SPEC.md outranks everything here — code and examples conform to it; changing behavior means revising the spec (and its decision log) first",
+          "verified": {
+            "digest": null,
+            "sha": "35f09c1df0c3db8412ccb5a4d0a3a73f4aa13824"
+          }
+        }
+      ],
+      "commands": {},
+      "contains": [
+        "research",
+        "src",
+        "tests"
+      ],
+      "declared": {
+        "allow": [],
+        "decided_by": [],
+        "depends": []
+      },
+      "extracted": {
+        "imports": []
+      },
+      "id": "/",
+      "kind": "system",
+      "purpose": "stele — typed agent-doc graph reconciled against extracted code truth. SPEC.md is the contract; the Rust engine implements it and self-hosts on this repo."
+    },
+    "research": {
+      "budget": null,
+      "claims": [],
+      "commands": {},
+      "contains": [],
+      "declared": {
+        "allow": [],
+        "decided_by": [],
+        "depends": []
+      },
+      "extracted": {
+        "imports": []
+      },
+      "id": "research",
+      "kind": "container",
+      "purpose": "Evidence base for SPEC's [Cn] citations. claims.md is the ledger every citation stays licensed by (status per claim); report.md the synthesis, findings/ the primary-source notes."
+    },
+    "src": {
+      "budget": null,
+      "claims": [],
+      "commands": {},
+      "contains": [],
+      "declared": {
+        "allow": [],
+        "decided_by": [],
+        "depends": []
+      },
+      "extracted": {
+        "imports": []
+      },
+      "id": "src",
+      "kind": "container",
+      "purpose": "The stele engine. cli.rs is the command pipeline (build/check/emit); model.rs the typed graph, anchors.rs the §2.5 scanner, assert.rs the six §4 checks, extract.rs the import extractors."
+    },
+    "tests": {
+      "budget": null,
+      "claims": [],
+      "commands": {},
+      "contains": [],
+      "declared": {
+        "allow": [],
+        "decided_by": [],
+        "depends": []
+      },
+      "extracted": {
+        "imports": []
+      },
+      "id": "tests",
+      "kind": "container",
+      "purpose": "Integration + unit suite and the CI oracle. common/mod.rs is the git-repo harness; gallery.rs mirrors EXAMPLE §8's failure gallery. fixtures/ (steleignored) is the acme worked example."
+    }
+  },
+  "version": 1
+}

@@ -1,0 +1,28 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        # Full history: stele's freshness class (§4.5) walks verified.sha..HEAD; a shallow
+        # (fetch-depth 1) clone prunes the watermark commit and makes churn uncountable.
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - run: cargo build
+      # stele's own graph gate (§5.1 recommended CI order: check → emit --check).
+      # NEVER run `stele build` in CI: build is the sole writer of .stele/graph.lock,
+      # so running it here would overwrite the committed lock with a fresh one, making
+      # check's byte-compare trivially pass and defeating the stale-lock gate.
+      - run: ./target/debug/stele check
+      - run: ./target/debug/stele emit --check

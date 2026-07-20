@@ -6,7 +6,7 @@
 
 A Rust single-binary that compiles a typed knowledge graph from three authored sources — the file tree, comment anchors, and typed blocks in AGENTS.md files — reconciles it against a derived graph extracted from the code, asserts the two against each other in CI (both directions: an undeclared dependency means the code broke the signature; an unbacked declaration means the doc lied), serves the graph to agents as queries, and materializes standard-compliant AGENTS.md files so every harness works with zero engine.
 
-**Status: specification.** Draft 0.7, adversarially refined to convergence. Implementation has not started.
+**Status: v1 implemented, self-hosting.** SPEC Draft 0.8 is the contract; the Rust engine (`stele-cli`, binary `stele`) implements it, runs on this repository (`.stele/graph.lock` is committed, CI runs `stele check` + `stele emit --check`), and the EXAMPLE.md failure gallery is its integration-test oracle. MCP `stele serve` (SPEC §5.2) is not yet shipped — it is the declared follow-on; the root AGENTS.md engine lines describe the full degradation ladder including it. (2026-07-20)
 
 | artifact | what it is |
 | --- | --- |

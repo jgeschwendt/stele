@@ -127,6 +127,40 @@ fn acme_lock_derives_the_containment_tree() {
     assert!(lock.nodes["apps/web/lib/billing"].contains.is_empty());
 }
 
+// build stamps a non-null structural digest (§4.5) on a resolved claim in a
+// parseable language: acme's billing/refund-cap binds `changeset/2` in refund.ex
+// (elixir), so its `verified.digest` is a 64-hex sha256, never null.
+#[test]
+fn acme_lock_stamps_a_structural_digest_on_a_resolved_claim() {
+    let fixture = Fixture::acme();
+    assert_eq!(fixture.run(&["build"]).code, 0);
+    let lock = lock::parse_lock(&fixture.read(LOCK_PATH)).expect("acme lock parses");
+
+    let claim = lock.nodes["apps/web/lib/billing"]
+        .claims
+        .iter()
+        .find(|c| c.id == "refund-cap")
+        .expect("billing declares refund-cap");
+    let digest = claim
+        .verified
+        .as_ref()
+        .expect("resolved claim carries a verified watermark")
+        .digest
+        .as_ref()
+        .expect("elixir is parseable, so digest is non-null");
+    assert_eq!(
+        digest.len(),
+        64,
+        "digest is not a sha256 hex string: {digest}"
+    );
+    assert!(
+        digest
+            .chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+        "digest is not lowercase hex: {digest}"
+    );
+}
+
 // ─── fixtures & helpers ───────────────────────────────────────────────────────
 
 /// Assert each needle appears, and in the given order, by first occurrence.

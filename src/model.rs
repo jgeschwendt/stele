@@ -127,6 +127,24 @@ impl ClaimKind {
     }
 }
 
+/// The resolution status of a claim's anchor (§2.4), a compiled-only marker set by
+/// build's anchor resolution and kept in memory for Phase D referential (§4.1). It
+/// carries the distinction the serialized `resolved` (a `file:line` or `null`)
+/// cannot: an unresolved anchor (0 occurrences/definitions) versus an ambiguous
+/// `<path>#<symbol>` anchor (>1 definitions), which §4.1 reports differently.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Resolution {
+    /// A `<path>#<symbol>` anchor matching more than one named definition.
+    Ambiguous,
+    /// Not yet resolved — the parse-time default, before build runs resolution.
+    #[default]
+    Pending,
+    /// The anchor resolved to exactly one location (`resolved` is `Some`).
+    Resolved,
+    /// The anchor matched zero occurrences/definitions (`resolved` is `None`).
+    Unresolved,
+}
+
 /// A claim (§2.4): an authored invariant/hazard plus the slots later phases fill.
 #[derive(Clone, Debug)]
 pub struct Claim {
@@ -141,6 +159,8 @@ pub struct Claim {
     // ── compiled-only (§2.4/§4.5); filled by Phase C/D ──
     /// `file:line` recomputed every build (§2.4).
     pub resolved: Option<String>,
+    /// The unresolved-vs-ambiguous distinction for §4.1, not serialized (§2.4).
+    pub resolution: Resolution,
     /// `{sha, digest}` stamped by build (§4.5).
     pub verified: Option<Verified>,
 }
@@ -162,6 +182,7 @@ impl Claim {
             enforced_by,
             slug,
             resolved: None,
+            resolution: Resolution::Pending,
             verified: None,
         }
     }
@@ -211,10 +232,65 @@ pub struct Node {
     pub contains: Vec<String>,
 }
 
-/// The aggregated graph. B1 collects nodes; later phases add adrs/landmarks and
-/// key nodes by id with duplicate detection.
+/// A single comment-anchor occurrence (§2.4): where a `stele:landmark`/`stele:claim`
+/// token was found, repo-root-relative.
+#[derive(Clone, Debug)]
+pub struct Occurrence {
+    pub file: String,
+    pub line: usize,
+}
+
+/// A `stele:claim <addr>` back-reference occurrence (§2.5). The address is stored
+/// verbatim; resolution against declared claims is Phase D referential (§4.1).
+#[derive(Clone, Debug)]
+pub struct ClaimAnchor {
+    pub addr: String,
+    pub file: String,
+    pub line: usize,
+}
+
+/// The compiled comment-anchor index (§2.4). Every occurrence per slug is retained
+/// (cardinality feeds §4.1); only the single winner per slug reaches the lock's
+/// `landmarks{}` map (§3.2), so build stays exit-0 even on duplicates.
+#[derive(Clone, Debug, Default)]
+pub struct AnchorData {
+    /// slug → every `stele:landmark <slug>` occurrence, insertion order preserved.
+    pub landmarks: BTreeMap<String, Vec<Occurrence>>,
+    /// Every `stele:claim <addr>` occurrence (resolution deferred to §4.1).
+    pub claims: Vec<ClaimAnchor>,
+}
+
+impl AnchorData {
+    /// The winning occurrence for a landmark slug (§3.2): the lexicographically
+    /// smallest `(file, line)`, or `None` when the slug has zero occurrences.
+    pub fn winner(&self, slug: &str) -> Option<&Occurrence> {
+        self.landmarks
+            .get(slug)?
+            .iter()
+            .min_by(|a, b| (a.file.as_str(), a.line).cmp(&(b.file.as_str(), b.line)))
+    }
+}
+
+/// A compiled ADR index entry (§2.6): the number and status parsed from an
+/// `<adrdir>/NNNN-*.md` file, keyed in the lock by [`AdrEntry::id`] (`adr/0007`).
+#[derive(Clone, Debug)]
+pub struct AdrEntry {
+    /// `<adrdir>/<NNNN>` with the zero-padded number verbatim (matches `decided_by`).
+    pub id: String,
+    pub number: i64,
+    /// The lowercased first token of the file's `Status:` line (§4.1 checks it).
+    pub status: String,
+    pub path: String,
+}
+
+/// The aggregated graph. B1 collects nodes; Phase C adds the anchor index and the
+/// ADR index and keys nodes by id with duplicate detection.
 #[derive(Debug, Default)]
 pub struct Graph {
+    /// The compiled comment-anchor index (§2.4), retained in memory for §4.1.
+    pub anchors: AnchorData,
+    /// The compiled ADR index (§2.6), sorted into the lock's `adrs{}` map.
+    pub adrs: Vec<AdrEntry>,
     pub nodes: Vec<Node>,
 }
 
@@ -447,7 +523,7 @@ fn collapse_symbol(symbol: &str) -> String {
 
 /// The §2.5 slug lexeme check: one or more `[a-z0-9]` groups joined by single `-`,
 /// with no leading, trailing, or doubled hyphen.
-fn is_valid_slug(slug: &str) -> bool {
+pub fn is_valid_slug(slug: &str) -> bool {
     if slug.is_empty() || slug.starts_with('-') || slug.ends_with('-') {
         return false;
     }

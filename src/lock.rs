@@ -14,7 +14,9 @@
 //! Strings use minimal escaping — `\" \\ \b \f \n \r \t` plus mandatory C0
 //! controls as `\u00xx`; every other character, non-ASCII included, is raw.
 
-use crate::model::{Claim, Graph, Node, Result, SteleError, Verified};
+use crate::model::{
+    AdrEntry, AnchorData, Claim, Graph, Node, Result, SteleError, Territory, Verified,
+};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
@@ -94,7 +96,7 @@ pub struct LockAllow {
     pub reason: String,
 }
 
-/// Extracted truth (§2.2). `imports` is sorted; Phase C fills it (empty until then).
+/// Extracted truth (§2.2). `imports` is sorted; Phase C2 derives it from code.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LockExtracted {
@@ -136,11 +138,11 @@ impl From<&Verified> for LockVerified {
 // ─── building the lock from the in-memory graph (§5.1 pipeline) ───────────────
 
 impl Lock {
-    /// Compile the in-memory graph into a lock. `adrs`/`landmarks` and each
-    /// node's `extracted.imports` stay empty until Phase C; every claim's
-    /// `resolved`/`verified` is stamped `null` here, since anchor resolution and
-    /// digesting do not exist yet. `contains` IS derived now — it is tree data
-    /// already available from the node set.
+    /// Compile the in-memory graph into a lock. `landmarks{}` collapses each slug's
+    /// occurrences to its single winner (§3.2); `adrs{}` is the graph's ADR index;
+    /// each node's `contains`/`extracted.imports` and each claim's `resolved` come
+    /// straight from the graph. `verified` is whatever the graph carries — `null`
+    /// here, since only `build` stamps it (§4.5) after calling this.
     pub fn from_graph(graph: &Graph) -> Self {
         let contains = compute_contains(&graph.nodes);
         let mut nodes = BTreeMap::new();
@@ -149,8 +151,8 @@ impl Lock {
             nodes.insert(node.id.clone(), LockNode::from_node(node, node_contains));
         }
         Self {
-            adrs: BTreeMap::new(),
-            landmarks: BTreeMap::new(),
+            adrs: build_adrs(&graph.adrs),
+            landmarks: build_landmarks(&graph.anchors, &graph.territory()),
             nodes,
             version: LOCK_VERSION,
         }
@@ -273,6 +275,46 @@ fn is_id_ancestor(ancestor: &str, descendant: &str) -> bool {
     descendant
         .strip_prefix(ancestor)
         .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// The lock's `landmarks{}` (§3.2): each slug's single winner — the
+/// lexicographically smallest `(file, line)` — keyed by slug, with `node` the
+/// territory owner of the winning file (§4.2). Duplicate occurrences never fail
+/// build; they collapse to the winner here (so gallery 8.3 keeps build exit-0).
+fn build_landmarks(anchors: &AnchorData, territory: &Territory) -> BTreeMap<String, Landmark> {
+    let mut landmarks = BTreeMap::new();
+    for slug in anchors.landmarks.keys() {
+        if let Some(winner) = anchors.winner(slug) {
+            let node = territory
+                .owner(&winner.file)
+                .unwrap_or(crate::model::SYSTEM_ID);
+            landmarks.insert(
+                slug.clone(),
+                Landmark {
+                    file: winner.file.clone(),
+                    line: winner.line as i64,
+                    node: node.to_string(),
+                },
+            );
+        }
+    }
+    landmarks
+}
+
+/// The lock's `adrs{}` (§3.2), keyed by ADR id; `BTreeMap` sorts by id (§3.2).
+fn build_adrs(adrs: &[AdrEntry]) -> BTreeMap<String, Adr> {
+    adrs.iter()
+        .map(|a| {
+            (
+                a.id.clone(),
+                Adr {
+                    number: a.number,
+                    path: a.path.clone(),
+                    status: a.status.clone(),
+                },
+            )
+        })
+        .collect()
 }
 
 // ─── reading (strict `serde_json`) ────────────────────────────────────────────

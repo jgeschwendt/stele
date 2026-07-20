@@ -6,12 +6,16 @@
 //! in-memory, and byte-compares the canonical serialization against the on-disk
 //! file (§5.3); the six assertion classes land in Phase D, after that compare.
 //! `emit`/`node` are Phase B stubs that only enforce the lock-presence gate.
-//! Anchor resolution and import extraction arrive in Phase C, so `build` stamps
-//! `resolved`/`verified` null and leaves `extracted.imports`/`landmarks` empty.
+//! `build_graph` resolves comment anchors and the ADR index (Phase C1) and derives
+//! import edges (Phase C2), so `build` stamps `resolved` and `verified {sha}` and
+//! fills `landmarks{}`/`adrs{}`/`extracted.imports`; the freshness `digest` (C3) is
+//! the last compiled slot still `null`.
 
+use crate::anchors::{self, SymbolResolution};
 use crate::config;
+use crate::extract;
 use crate::lock::{self, Lock};
-use crate::model::{Graph, Result, SteleError};
+use crate::model::{AdrEntry, Graph, Node, Resolution, Result, SteleError, Verified};
 use crate::parse;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -144,7 +148,8 @@ fn error_data(error: &SteleError) -> Value {
 /// `build` never reads `.stele/config.toml` — config tunes `check`/`emit`, not the
 /// graph (§3.4).
 fn build(root: &Path) -> Result<CommandOutput> {
-    let graph = build_graph(root)?;
+    let mut graph = build_graph(root)?;
+    stamp_verified(root, &mut graph)?;
     let lock = Lock::from_graph(&graph);
     let bytes = lock::to_canonical_string(&lock);
     write_lock_atomic(root, &bytes)?;
@@ -210,26 +215,124 @@ fn node(root: &Path) -> Result<CommandOutput> {
 
 // ─── the source pipeline (§5.1) ──────────────────────────────────────────────
 
-/// Sources → in-memory graph (§5.1): parse every VCS-tracked AGENTS.md and
-/// aggregate declared nodes, rejecting duplicate ids. Shared by `build` and
-/// `check`. Anchor resolution and import extraction arrive in Phase C.
+/// Sources → in-memory graph (§5.1): parse every VCS-tracked AGENTS.md into nodes,
+/// scan the tracked tree for comment anchors (§2.4), resolve each claim's anchor to
+/// a `file:line` (§2.4), index the repo's ADRs (§2.6), and derive import edges
+/// (§2.3/§4.2). Shared by `build` and `check`, so every derived slot is recomputed
+/// identically on both paths. `verified` is stamped only by `build` afterward (§4.5).
 fn build_graph(root: &Path) -> Result<Graph> {
+    let tracked = tracked_files(root)?;
+
     let mut graph = Graph::default();
-    for rel in tracked_agents_files(root)? {
-        let absolute = root.join(&rel);
-        let contents = std::fs::read_to_string(&absolute)
+    for rel in &tracked {
+        if rel.file_name().is_none_or(|name| name != "AGENTS.md") {
+            continue;
+        }
+        let contents = std::fs::read_to_string(root.join(rel))
             .map_err(|e| SteleError::internal(format!("read {}: {e}", rel.display())))?;
-        if let Some(node) = parse::parse_agents_file(&rel, &contents)? {
+        if let Some(node) = parse::parse_agents_file(rel, &contents)? {
             graph.insert(node)?;
         }
+    }
+
+    graph.anchors = anchors::scan(root, &tracked)?;
+    resolve_claim_anchors(root, &mut graph.nodes, &graph.anchors)?;
+    graph.adrs = build_adr_index(root, &tracked)?;
+
+    // Import extraction (§2.3/§4.2): attribute each cross-boundary reference to its
+    // owning node via the territory index, then fill each node's `extracted.imports`.
+    let territory = graph.territory();
+    let imports = extract::extract_imports(root, &tracked, &territory)?;
+    for node in &mut graph.nodes {
+        node.extracted_imports = imports.get(&node.id).cloned().unwrap_or_default();
     }
     Ok(graph)
 }
 
-/// VCS-tracked AGENTS.md files (§2.4 scan scope: tracked only, so `.gitignore` is
-/// honored by construction), repo-root-relative and sorted for deterministic
-/// iteration. `git ls-files -z` is NUL-delimited to survive unusual filenames.
-fn tracked_agents_files(root: &Path) -> Result<Vec<PathBuf>> {
+/// Resolve every claim's anchor to a `file:line` (§2.4), recomputed every build. An
+/// `lm:<slug>` anchor resolves to the winning landmark occurrence (or stays `null`
+/// when the slug has zero occurrences — build stays 0, §4.1 fails it later). A
+/// `<path>#<symbol>` anchor resolves via tree-sitter: exactly one definition →
+/// its line; zero or many → `null` plus the §4.1 unresolved-vs-ambiguous marker.
+fn resolve_claim_anchors(
+    root: &Path,
+    nodes: &mut [Node],
+    anchors: &crate::model::AnchorData,
+) -> Result<()> {
+    for node in nodes.iter_mut() {
+        for claim in node.invariants.iter_mut().chain(node.hazards.iter_mut()) {
+            if let Some(slug) = claim
+                .anchor
+                .strip_prefix(crate::model::LANDMARK_ANCHOR_PREFIX)
+            {
+                match anchors.winner(slug) {
+                    Some(occ) => {
+                        claim.resolved = Some(format!("{}:{}", occ.file, occ.line));
+                        claim.resolution = Resolution::Resolved;
+                    }
+                    None => claim.resolution = Resolution::Unresolved,
+                }
+            } else if let Some((path, symbol)) = claim.anchor.rsplit_once('#') {
+                match anchors::resolve_symbol(root, path, symbol)? {
+                    SymbolResolution::Resolved(line) => {
+                        claim.resolved = Some(format!("{path}:{line}"));
+                        claim.resolution = Resolution::Resolved;
+                    }
+                    SymbolResolution::Ambiguous => claim.resolution = Resolution::Ambiguous,
+                    SymbolResolution::Unresolved => claim.resolution = Resolution::Unresolved,
+                }
+            } else {
+                // derive_slug already accepted the anchor, so it is one of the two
+                // namespaces; this arm is unreachable in practice.
+                claim.resolution = Resolution::Unresolved;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Stamp `verified = {sha, digest}` on every claim whose anchor RESOLVES (§4.5),
+/// using the full 40-hex `HEAD` sha (deterministic within a commit, so two builds
+/// byte-match) and the tree-sitter structural digest of the claim's bound definition
+/// (§4.5; `null` only where the anchored file's language has no bundled parser).
+/// Unresolved claims stay `verified:null`. `build` is the sole stamper — `check`
+/// carries `verified` over instead (§4.5).
+fn stamp_verified(root: &Path, graph: &mut Graph) -> Result<()> {
+    let sha = head_sha(root)?;
+    for node in &mut graph.nodes {
+        for claim in node.invariants.iter_mut().chain(node.hazards.iter_mut()) {
+            if let Some(resolved) = claim.resolved.clone() {
+                claim.verified = Some(Verified {
+                    sha: sha.clone(),
+                    digest: anchors::digest_for_claim(root, &claim.anchor, &resolved)?,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The full `HEAD` commit sha (§4.5 watermark). A repo with no commit yet is a §5.3
+/// internal error — `build` needs a watermark to stamp.
+fn head_sha(root: &Path) -> Result<String> {
+    let output = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(root)
+        .output()
+        .map_err(|e| SteleError::internal(format!("run `git rev-parse HEAD`: {e}")))?;
+    if !output.status.success() {
+        return Err(SteleError::internal(format!(
+            "`git rev-parse HEAD` failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// VCS-tracked files (§2.4 scan scope: tracked only, so `.gitignore` is honored by
+/// construction), repo-root-relative and sorted for deterministic iteration.
+/// `git ls-files -z` is NUL-delimited to survive unusual filenames.
+fn tracked_files(root: &Path) -> Result<Vec<PathBuf>> {
     let output = Command::new("git")
         .args(["ls-files", "-z"])
         .current_dir(root)
@@ -246,10 +349,73 @@ fn tracked_agents_files(root: &Path) -> Result<Vec<PathBuf>> {
         .split('\0')
         .filter(|entry| !entry.is_empty())
         .map(PathBuf::from)
-        .filter(|path| path.file_name().is_some_and(|name| name == "AGENTS.md"))
         .collect();
     files.sort();
     Ok(files)
+}
+
+// ─── the ADR index (§2.6) ─────────────────────────────────────────────────────
+
+/// The ADR directories stele probes, in precedence order (§10 item 5); the first
+/// that holds a tracked `NNNN-*.md` file is the repo's ADR dir.
+const ADR_DIRS: [&str; 3] = ["adr", "doc/adr", "docs/adr"];
+
+/// Index the repo's ADRs (§2.6): detect the ADR dir (the first of [`ADR_DIRS`] with
+/// a tracked `NNNN-*.md` file), then parse each such file into an [`AdrEntry`] —
+/// number and zero-padded id from the filename, status from its `Status:` line.
+fn build_adr_index(root: &Path, tracked: &[PathBuf]) -> Result<Vec<AdrEntry>> {
+    let paths: Vec<String> = tracked
+        .iter()
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .collect();
+    let Some(dir) = ADR_DIRS
+        .iter()
+        .find(|dir| paths.iter().any(|p| adr_number(dir, p).is_some()))
+    else {
+        return Ok(Vec::new());
+    };
+
+    let mut entries = Vec::new();
+    for path in &paths {
+        let Some(nnnn) = adr_number(dir, path) else {
+            continue;
+        };
+        let number: i64 = nnnn.parse().map_err(|_| {
+            SteleError::input(path, 1, format!("ADR number {nnnn:?} is not an integer"))
+        })?;
+        let contents = std::fs::read_to_string(root.join(path))
+            .map_err(|e| SteleError::internal(format!("read {path}: {e}")))?;
+        entries.push(AdrEntry {
+            id: format!("{dir}/{nnnn}"),
+            number,
+            status: adr_status(&contents),
+            path: path.clone(),
+        });
+    }
+    Ok(entries)
+}
+
+/// The zero-padded number of a tracked ADR file `<dir>/NNNN-*.md` (e.g. `"0007"`),
+/// or `None` when the path is not an ADR file directly under `dir`.
+fn adr_number<'a>(dir: &str, path: &'a str) -> Option<&'a str> {
+    let name = path.strip_prefix(dir)?.strip_prefix('/')?;
+    if name.contains('/') || !name.ends_with(".md") {
+        return None;
+    }
+    let digits = name.split('-').next().filter(|d| !d.is_empty())?;
+    digits.bytes().all(|b| b.is_ascii_digit()).then_some(digits)
+}
+
+/// The ADR status (§2.6): the lowercased first token after `Status:` in the file,
+/// or `"unknown"` when there is no `Status:` line. §4.1 checks `≠ superseded`.
+fn adr_status(contents: &str) -> String {
+    const UNKNOWN: &str = "unknown";
+    contents
+        .lines()
+        .find_map(|line| line.split("Status:").nth(1))
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap_or(UNKNOWN)
+        .to_ascii_lowercase()
 }
 
 // ─── the committed lock (§5.3) ────────────────────────────────────────────────

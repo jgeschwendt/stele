@@ -264,6 +264,9 @@ const UNBORN_HEAD_NOTICE: &str = "stele build: no commit yet (unborn HEAD) — e
 /// graph (§3.4).
 fn build(root: &Path) -> Result<CommandOutput> {
     let mut graph = build_graph(root)?;
+    // Diagnostic only (§2.4): flag untracked AGENTS.md nodes the tracked-file scan cannot
+    // see. stderr-only — the lock, stdout, and exit code below stay byte-identical.
+    warn_untracked_node_files(root)?;
     if !stamp_verified(root, &mut graph)? {
         // Unborn HEAD: notice goes to stderr so the `--json` stdout envelope stays a
         // single object (§5.3), and build proceeds to write a fully-null-watermark lock.
@@ -306,6 +309,10 @@ fn check(root: &Path, args: &[&str]) -> Result<CommandOutput> {
 
     let tracked = tracked_files(root)?;
     let graph = build_graph(root)?;
+    // Diagnostic only (§2.4): flag untracked AGENTS.md nodes the tracked-file scan cannot
+    // see — an untracked node leaves the committed lock in-spec, so the byte-compare below
+    // would pass while silently omitting it. stderr-only; findings/exit are untouched.
+    warn_untracked_node_files(root)?;
     let mut rebuilt = Lock::from_graph(&graph);
     rebuilt.carry_over_verified(&committed);
 
@@ -1684,6 +1691,69 @@ fn tracked_files(root: &Path) -> Result<Vec<PathBuf>> {
         .into_iter()
         .filter(|rel| !ignore.is_ignored(&rel.to_string_lossy().replace('\\', "/")))
         .collect())
+}
+
+/// The untracked-but-not-gitignored file list (`git ls-files --others
+/// --exclude-standard`): files present in the work tree that are neither VCS-tracked nor
+/// matched by a `.gitignore`. Repo-root-relative and sorted, NUL-delimited to survive
+/// unusual filenames. Feeds only [`warn_untracked_node_files`] — a spawn or non-zero-exit
+/// failure is a §5.3 internal error.
+fn git_untracked_files(root: &Path) -> Result<Vec<PathBuf>> {
+    let output = Command::new("git")
+        .args(["ls-files", "--others", "--exclude-standard", "-z"])
+        .current_dir(root)
+        .output()
+        .map_err(|e| SteleError::internal(format!("run `git ls-files --others`: {e}")))?;
+    if !output.status.success() {
+        return Err(SteleError::internal(format!(
+            "`git ls-files --others` failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    let listing = String::from_utf8_lossy(&output.stdout);
+    let mut files: Vec<PathBuf> = listing
+        .split('\0')
+        .filter(|entry| !entry.is_empty())
+        .map(PathBuf::from)
+        .collect();
+    files.sort();
+    Ok(files)
+}
+
+/// Warn (stderr only) about untracked AGENTS.md files that declare a stele node — a real
+/// adoption trap (§2.4): `build`/`check` scan VCS-tracked files ONLY, so an agent that
+/// hand-creates an AGENTS.md with a stele block but never `git add`s it leaves the graph
+/// silently short a node with no other signal. For each untracked, non-gitignored,
+/// non-steleignored AGENTS.md whose content carries a stele block, print ONE warning line.
+/// This is purely diagnostic: stdout, the process exit code, and the `--json` envelope are
+/// all untouched (machine consumers read stdout/exit, unaffected). Excluded from the warning
+/// (each for a reason): a gitignored path (`--exclude-standard` drops it; it could never be
+/// tracked), a steleignored path (already invisible to every scan, §2.4), and a blockless
+/// AGENTS.md (`Ok(None)` = plain-markdown degradation, not a node).
+fn warn_untracked_node_files(root: &Path) -> Result<()> {
+    let ignore = Steleignore::load(root)?;
+    for rel in git_untracked_files(root)? {
+        if rel.file_name().is_none_or(|name| name != "AGENTS.md") {
+            continue;
+        }
+        let posix = rel.to_string_lossy().replace('\\', "/");
+        if ignore.is_ignored(&posix) {
+            continue;
+        }
+        // Non-UTF-8 bytes cannot carry a parseable stele block, so a read failure is a
+        // silent skip (never a node). `Ok(None)` = blockless; `Ok(Some)`/`Err` both mean
+        // a block is present (a malformed block still declares a node the scan omits).
+        let Ok(contents) = std::fs::read_to_string(root.join(&rel)) else {
+            continue;
+        };
+        if !matches!(parse::parse_agents_file(&rel, &contents), Ok(None)) {
+            eprintln!(
+                "warning: {posix} declares a stele node but is not tracked — run git add \
+                 (build scans tracked files only, §2.4)"
+            );
+        }
+    }
+    Ok(())
 }
 
 /// The raw VCS-tracked file list (§2.4), repo-root-relative and sorted. `git ls-files

@@ -14,7 +14,7 @@
 //! verb's own read path); serve never rebuilds and never writes (§5.2/§5.3). A missing or
 //! unknown-version lock is a per-call tool error result, not a startup failure.
 
-use crate::cli::{self, VerbRender};
+use crate::cli::{self, VerbRender, Workspace};
 use crate::model::ExitCode;
 use serde_json::{Value, json};
 use std::io::{BufRead, Write};
@@ -58,20 +58,25 @@ pub fn run(root: &Path, args: &[String]) -> i32 {
         );
         return ExitCode::Input as i32;
     }
+    // Resolve the home/work split once (§3.5); in normal mode `home == work == root`
+    // verbatim, so every downstream lock read stays byte-identical. serve works from any
+    // work tree — the graph home the queries read from is derived from the cwd's common dir.
+    let workspace = cli::resolve_workspace(root);
     // Refuse cleanly (exit 2) outside a git work tree: serve's tools scan VCS-tracked
-    // files (§2.4), so a non-repo cwd can never answer a query.
-    if let Err(error) = cli::ensure_git_repo(root) {
+    // files (§2.4), so a non-repo cwd can never answer a query. The probe runs on the WORK
+    // tree.
+    if let Err(error) = cli::ensure_git_repo(&workspace.work) {
         eprintln!("{error}");
         return error.exit as i32;
     }
-    serve_loop(root)
+    serve_loop(&workspace)
 }
 
 /// The blocking read/dispatch/write loop (MCP stdio transport): one JSON-RPC message per
 /// line in, one response line per request out, notifications answered with nothing. A
 /// malformed line becomes a parse-error response and the loop continues (never a crash);
 /// stdin EOF is graceful shutdown (§lifecycle, exit 0).
-fn serve_loop(root: &Path) -> i32 {
+fn serve_loop(ws: &Workspace) -> i32 {
     eprintln!("stele serve: MCP stdio server ready (protocol {LATEST_PROTOCOL_VERSION})");
     let stdin = std::io::stdin();
     let mut reader = stdin.lock();
@@ -91,7 +96,7 @@ fn serve_loop(root: &Path) -> i32 {
         if trimmed.is_empty() {
             continue;
         }
-        if let Some(response) = handle_message(root, trimmed) {
+        if let Some(response) = handle_message(ws, trimmed) {
             // Compact serialization has no embedded newlines (transport requirement); the
             // trailing `\n` is the message delimiter.
             let serialized = serde_json::to_string(&response)
@@ -107,7 +112,7 @@ fn serve_loop(root: &Path) -> i32 {
 /// or `None` for a notification (no `id`) and for messages that warrant no reply. A
 /// non-JSON line → parse error; a non-object or method-less request → invalid request; an
 /// unknown method on a request → method-not-found (an unknown notification is ignored).
-fn handle_message(root: &Path, text: &str) -> Option<Value> {
+fn handle_message(ws: &Workspace, text: &str) -> Option<Value> {
     let value: Value = match serde_json::from_str(text) {
         Ok(v) => v,
         Err(_) => return Some(error_response(Value::Null, PARSE_ERROR, "Parse error")),
@@ -129,7 +134,7 @@ fn handle_message(root: &Path, text: &str) -> Option<Value> {
         "notifications/initialized" => None,
         "ping" => id.map(|id| success(id, json!({}))),
         "tools/list" => id.map(|id| success(id, tools_list())),
-        "tools/call" => id.map(|id| tools_call(root, id, obj.get("params"))),
+        "tools/call" => id.map(|id| tools_call(ws, id, obj.get("params"))),
         other => {
             id.map(|id| error_response(id, METHOD_NOT_FOUND, &format!("Method not found: {other}")))
         }
@@ -267,7 +272,7 @@ fn tool(name: &str, description: &str, input_schema: Value) -> Value {
 /// protocol errors); a verb-level input/internal error (exit ≥ 2, e.g. a missing lock)
 /// is an `isError:true` tool result; clean output and assertion findings (exit 0/1) are
 /// normal tool results.
-fn tools_call(root: &Path, id: Value, params: Option<&Value>) -> Value {
+fn tools_call(ws: &Workspace, id: Value, params: Option<&Value>) -> Value {
     let Some(params) = params else {
         return error_response(
             id,
@@ -287,7 +292,7 @@ fn tools_call(root: &Path, id: Value, params: Option<&Value>) -> Value {
     };
 
     let argv_refs: Vec<&str> = argv.iter().map(String::as_str).collect();
-    let VerbRender { exit, text } = cli::serve_render(root, &argv_refs);
+    let VerbRender { exit, text } = cli::serve_render(ws, &argv_refs);
     if exit >= ERROR_EXIT_FLOOR {
         // Missing/unknown-version lock and other input/internal errors surface as a
         // tool-level error result carrying the CLI's message (§5.2).

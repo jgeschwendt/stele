@@ -14,7 +14,7 @@
 //! verb's own read path); serve never rebuilds and never writes (§5.2/§5.3). A missing or
 //! unknown-version lock is a per-call tool error result, not a startup failure.
 
-use crate::cli::{self, VerbRender, Workspace};
+use crate::cli::{self, Mode, VerbRender, Workspace};
 use crate::model::ExitCode;
 use serde_json::{Value, json};
 use std::io::{BufRead, Write};
@@ -68,6 +68,14 @@ pub fn run(root: &Path, args: &[String]) -> i32 {
     if let Err(error) = cli::ensure_git_repo(&workspace.work) {
         eprintln!("{error}");
         return error.exit as i32;
+    }
+    // One stderr note in undercover mode (§3.5): the queries read the private graph at the home,
+    // not the invoking work tree. stdout stays pure protocol — this is stderr only.
+    if workspace.mode == Mode::Undercover {
+        eprintln!(
+            "stele serve: undercover mode — reading the private graph at {}",
+            workspace.home.display()
+        );
     }
     serve_loop(&workspace)
 }

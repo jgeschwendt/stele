@@ -217,3 +217,44 @@ fn probe7_run_commands_json_keeps_stdout_a_single_object() {
         human.combined()
     );
 }
+
+// Probe 8 — shell builtins resolve as rung (a), ahead of PATH (§4.6). `cd` is builtin-only
+// on Linux but ships as `/usr/bin/cd` on macOS, which made resolution platform-dependent —
+// a false liveness finding on CI hosts only. `cd`, `:`, and `.` all resolve on any host
+// (`:`/`.` have no executable file on macOS either, proving the rung is the builtin table,
+// not PATH); a genuinely-missing first token still fires on its own merits.
+#[test]
+fn probe8_shell_builtins_resolve_before_path() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::acme();
+    // A repo-relative executable for the second `cd … && ./run.sh` segment to resolve.
+    fixture.write("run.sh", "#!/bin/sh\nexit 0\n");
+    std::fs::set_permissions(
+        fixture.path("run.sh"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .expect("chmod run.sh");
+    add_root_commands(
+        &fixture,
+        "  chdir: cd packages/ui && ./run.sh\n  \
+         source-env: . ./run.sh\n  \
+         noop: \":\"\n  \
+         missing: no-such-tool-xyz run\n",
+    );
+    let build = fixture.run(&["build"]);
+    assert_eq!(build.code, 0, "{}", build.combined());
+    let check = fixture.run(&["check", "--only", "liveness"]);
+    let out = check.combined();
+    assert_eq!(check.code, 1, "{out}");
+    // Only the genuinely-missing first token fires.
+    assert!(
+        out.contains("`no-such-tool-xyz run` — not found on PATH or as a repo-relative executable"),
+        "{out}"
+    );
+    // The builtin segments never fire — the `cd` segment above all, the reported bug.
+    assert!(
+        !out.contains("`cd packages/ui`"),
+        "cd fired as a finding:\n{out}"
+    );
+    assert_eq!(liveness_lines(&out), 1, "{out}");
+}

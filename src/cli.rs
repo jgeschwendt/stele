@@ -266,6 +266,14 @@ pub fn run(args: &[String]) -> i32 {
 }
 
 fn dispatch(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
+    // `--undercover` (§3.5) is an `init`-only flag. The read/emit verbs otherwise tolerate
+    // unknown tokens (they scan for their own flags), so reject it explicitly here rather than
+    // let a mistyped `stele check --undercover` run and silently ignore the intent (exit 2).
+    if args.first().copied() != Some("init") && args.contains(&UNDERCOVER_FLAG) {
+        return Err(SteleError::input_msg(format!(
+            "{UNDERCOVER_FLAG} is only valid on `stele init` (§3.5)"
+        )));
+    }
     match args.first().copied() {
         Some("blame") => blame(ws, args),
         Some("build") => build(ws, args),
@@ -471,12 +479,14 @@ fn check(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
     // (§5.3); any finding maps to exit 1, none to exit 0. `root` is the WORK tree — the
     // freshness/blame/liveness checks all spawn git or shells in the invoking checkout
     // (§4.5 HEAD is per-work-tree).
+    let source_root = node_source_root(ws);
     let ctx = Context {
         committed: &committed,
         config: &config,
         graph: &graph,
         root: &ws.work,
         run_commands,
+        source_root: &source_root,
         tracked: &tracked,
     };
 
@@ -564,12 +574,14 @@ fn blame(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
     let committed = lock::parse_lock(&on_disk)?;
     let tracked = tracked_files(&ws.work)?;
     let graph = build_graph(ws)?;
+    let source_root = node_source_root(ws);
     let ctx = Context {
         committed: &committed,
         config: &config,
         graph: &graph,
         root: &ws.work,
         run_commands: false,
+        source_root: &source_root,
         tracked: &tracked,
     };
     let (summary, data) = assert::blame(&ctx, address)?;
@@ -764,6 +776,19 @@ fn node_agents_path(ws: &Workspace, id: &str) -> PathBuf {
     match ws.mode {
         Mode::Normal => rel,
         Mode::Undercover => ws.home.join(TREE_DIR).join(rel),
+    }
+}
+
+/// The directory the budget class (§4.4) resolves each node's `source` path against for
+/// its file reads (§3.5), mode-aware. Normal: the work tree (`ws.work == "."`, so a
+/// node's relative `source` joins byte-identically to today). Undercover: the overlay
+/// `<home>/.stele/tree`, where node sources live off the work tree. Distinct from
+/// `ctx.root` (always the work tree): only node-source reads move to the overlay; every
+/// code scan and freshness/liveness spawn stays in the invoking checkout.
+fn node_source_root(ws: &Workspace) -> PathBuf {
+    match ws.mode {
+        Mode::Normal => ws.work.clone(),
+        Mode::Undercover => ws.home.join(TREE_DIR),
     }
 }
 

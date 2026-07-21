@@ -7,7 +7,7 @@
 
 mod common;
 
-use common::{Fixture, RunResult};
+use common::{Fixture, GroveFixture, RunResult, grove_root};
 use std::path::Path;
 use std::process::Command;
 
@@ -458,5 +458,272 @@ fn shim_relative_import_from_linked_worktree() {
     assert_eq!(
         resolved, overlay,
         "shim import does not resolve to the overlay root"
+    );
+}
+
+// ─── Phase 5: grove-root (bare-root worktree) layout + the remaining matrix (§3.5) ───
+
+/// The overlay root system node for a grove fixture: a claim anchored at the seed's
+/// `lm:app-core` landmark (§4.5, for the per-worktree freshness split) plus an empty router
+/// region for `emit`. Written into the shared overlay at the graph home.
+const GROVE_OVERLAY_ROOT: &str = r#"# root
+
+```stele
+kind: system
+purpose: undercover grove root
+invariants:
+  - claim: hello stays a pure greeting
+    anchor: lm:app-core
+```
+
+<!-- stele:begin router -->
+<!-- stele:end -->
+"#;
+
+/// A grove fixture with the overlay authored and the shared private graph compiled from the
+/// `.trunk` worktree: `init --undercover` → author overlay root → `build`. The watermark is
+/// `.trunk`'s HEAD, which both worktrees share at this point.
+fn grove_built() -> GroveFixture {
+    let g = grove_root();
+    let init = g.run_from(&g.trunk, &["init", "--undercover"]);
+    assert_eq!(init.code, 0, "init --undercover:\n{}", init.combined());
+    g.write_home(".stele/tree/AGENTS.md", GROVE_OVERLAY_ROOT);
+    let build = g.run_from(&g.trunk, &["build"]);
+    assert_eq!(build.code, 0, "build:\n{}", build.combined());
+    g
+}
+
+/// Canonicalize a shim's `@`-import (read from `shim`, joined onto `work`) and the overlay
+/// root at `home`, asserting the import resolves to it (§3.5 — assert by resolution, never by
+/// exact string, so both the same-checkout and worktree relpaths pass the same check).
+fn assert_shim_resolves(shim: &Path, work: &Path, home_overlay: &Path) {
+    let content = std::fs::read_to_string(shim).expect("read shim");
+    let rel = content.trim().trim_start_matches('@');
+    let resolved = work.join(rel).canonicalize().expect("resolve shim import");
+    let overlay = home_overlay
+        .canonicalize()
+        .expect("canonicalize overlay root");
+    assert_eq!(
+        resolved, overlay,
+        "shim import {rel:?} does not resolve to the overlay root"
+    );
+}
+
+// The full undercover lifecycle in a bare-root worktree layout, driven from `.trunk`: the home
+// resolves to `root/` (parent of the bare `root/.git`), every artifact lands at the shared home
+// under `.stele/`, the one `CLAUDE.local.md` shim resolves back to the overlay, and `git status`
+// stays byte-clean in the work tree.
+#[test]
+fn grove_root_round_trip() {
+    let g = grove_root();
+
+    // init --undercover from the .trunk worktree.
+    let init = g.run_from(&g.trunk, &["init", "--undercover"]);
+    assert_eq!(init.code, 0, "init:\n{}", init.combined());
+    // Marker + overlay at the home (root/), NOT inside the work tree.
+    assert!(
+        g.home_path(".stele/undercover").exists(),
+        "marker not at the home"
+    );
+    assert!(
+        g.home_path(".stele/tree/AGENTS.md").exists(),
+        "overlay root not at the home"
+    );
+    assert!(
+        !g.trunk.join(".stele").exists(),
+        ".stele leaked into the .trunk work tree"
+    );
+    // The exclude block lives in the bare common dir (root/.git), shared by every worktree.
+    let exclude = std::fs::read_to_string(g.home_path(".git/info/exclude")).expect("read exclude");
+    assert!(
+        exclude.contains("# stele:begin undercover") && exclude.contains("/CLAUDE.local.md"),
+        "exclude block missing:\n{exclude}"
+    );
+
+    // Author the overlay root, then compile + materialize the shared private graph from .trunk.
+    g.write_home(".stele/tree/AGENTS.md", GROVE_OVERLAY_ROOT);
+    let build = g.run_from(&g.trunk, &["build"]);
+    assert_eq!(build.code, 0, "build:\n{}", build.combined());
+    let emit = g.run_from(&g.trunk, &["emit"]);
+    assert_eq!(emit.code, 0, "emit:\n{}", emit.combined());
+
+    // Lock, indexes, and rendered regions all live at the shared home — never in the work tree.
+    assert!(
+        g.home_path(".stele/graph.lock").exists(),
+        "lock not at the home"
+    );
+    assert!(
+        g.home_path(".stele/index/invariants.md").exists(),
+        "index not at the home"
+    );
+    assert!(
+        !g.trunk.join(".stele").exists(),
+        "build/emit leaked .stele into the work tree"
+    );
+
+    // The single materialized file: CLAUDE.local.md in .trunk, resolving to the overlay root.
+    assert_shim_resolves(
+        &g.trunk.join("CLAUDE.local.md"),
+        &g.trunk,
+        &g.home_path(".stele/tree/AGENTS.md"),
+    );
+
+    // check is clean and the work tree stays byte-clean (the leak invariant).
+    let check = g.run_from(&g.trunk, &["check"]);
+    assert_eq!(check.code, 0, "check:\n{}", check.combined());
+    assert_eq!(g.status(&g.trunk), "", "grove round trip left .trunk dirty");
+}
+
+// One graph serves every worktree: after building from .trunk, the second worktree queries the
+// SAME private graph with no build of its own, and `emit` from it lands the shim in its own root.
+#[test]
+fn grove_root_worktree_shares_graph() {
+    let g = grove_built();
+
+    // Identical rendered root context from both worktrees — the same home lock answers both.
+    let from_trunk = g.run_from(&g.trunk, &["root"]);
+    let from_feature = g.run_from(&g.feature, &["root"]);
+    assert_eq!(
+        from_feature.code,
+        0,
+        "root from feature-x:\n{}",
+        from_feature.combined()
+    );
+    assert!(
+        from_feature.stdout.contains("undercover grove root"),
+        "feature-x did not see the shared graph:\n{}",
+        from_feature.stdout
+    );
+    assert_eq!(
+        from_trunk.stdout, from_feature.stdout,
+        "worktrees rendered different root context from one shared graph"
+    );
+    let nodes = g.run_from(&g.feature, &["nodes"]);
+    assert!(
+        nodes.stdout.contains("apps") && nodes.stdout.contains("packages"),
+        "feature-x nodes did not render the shared graph:\n{}",
+        nodes.stdout
+    );
+
+    // emit from feature-x lands ITS OWN CLAUDE.local.md (resolving to the shared overlay) and
+    // dirties neither work tree.
+    let emit = g.run_from(&g.feature, &["emit"]);
+    assert_eq!(emit.code, 0, "emit from feature-x:\n{}", emit.combined());
+    assert_shim_resolves(
+        &g.feature.join("CLAUDE.local.md"),
+        &g.feature,
+        &g.home_path(".stele/tree/AGENTS.md"),
+    );
+    assert_eq!(g.status(&g.feature), "", "emit dirtied feature-x");
+    assert_eq!(g.status(&g.trunk), "", "emit from feature-x dirtied .trunk");
+}
+
+// The shared home outlives disposable worktrees: removing feature-x leaves the private graph at
+// root/.stele/ intact, still queryable from .trunk.
+#[test]
+fn grove_root_survives_worktree_removal() {
+    let g = grove_built();
+    assert_eq!(
+        g.run_from(&g.feature, &["root"]).code,
+        0,
+        "precondition: feature-x resolves the graph"
+    );
+
+    g.remove_feature();
+    assert!(!g.feature.exists(), "feature-x worktree survived removal");
+
+    // The graph is untouched — it never lived in the removed worktree.
+    let root = g.run_from(&g.trunk, &["root"]);
+    assert_eq!(root.code, 0, "root after removal:\n{}", root.combined());
+    assert!(
+        root.stdout.contains("undercover grove root"),
+        "graph did not survive worktree removal:\n{}",
+        root.stdout
+    );
+    let nodes = g.run_from(&g.trunk, &["nodes"]);
+    assert!(nodes.stdout.contains("apps"), "{}", nodes.stdout);
+}
+
+/// Shared authored blocks for the twin-equivalence test: identical node ids, kinds, and
+/// purposes whether declared as tracked tree files or overlay sources.
+const TWIN_ROOT: &str = "# root\n\n```stele\nkind: system\npurpose: twin root\n```\n";
+const TWIN_APPS: &str = "# apps\n\n```stele\nkind: container\npurpose: twin apps\n```\n";
+const TWIN_PACKAGES: &str =
+    "# packages\n\n```stele\nkind: container\npurpose: twin packages\n```\n";
+
+// A tracked (normal) graph and an undercover overlay carrying the SAME authored blocks compile
+// to the same node listing — the territory-drift guard: mirror-path overlay sources yield ids,
+// kinds, and purposes byte-identical to their tracked twins. Compared via `nodes --json` (which
+// carries no lock-level fields like the verified sha), not the lock bytes.
+#[test]
+fn overlay_and_tracked_twin_produce_identical_nodes_output() {
+    // Twin A: tracked, committed tree files.
+    let tracked = committed_two_dir_repo();
+    tracked.write("AGENTS.md", TWIN_ROOT);
+    tracked.write("apps/AGENTS.md", TWIN_APPS);
+    tracked.write("packages/AGENTS.md", TWIN_PACKAGES);
+    tracked.commit("author the tracked twin");
+    assert_eq!(tracked.run(&["build"]).code, 0);
+
+    // Twin B: undercover, same blocks in the overlay.
+    let overlay = committed_two_dir_repo();
+    assert_eq!(overlay.run(&["init", "--undercover"]).code, 0);
+    overlay.write(".stele/tree/AGENTS.md", TWIN_ROOT);
+    overlay.write(".stele/tree/apps/AGENTS.md", TWIN_APPS);
+    overlay.write(".stele/tree/packages/AGENTS.md", TWIN_PACKAGES);
+    assert_eq!(overlay.run(&["build"]).code, 0);
+
+    let a = tracked.run(&["nodes", "--json"]);
+    let b = overlay.run(&["nodes", "--json"]);
+    assert_eq!(a.code, 0, "tracked nodes:\n{}", a.combined());
+    assert_eq!(b.code, 0, "overlay nodes:\n{}", b.combined());
+    assert_eq!(
+        a.stdout, b.stdout,
+        "twin node listings diverge:\ntracked: {}\noverlay: {}",
+        a.stdout, b.stdout
+    );
+}
+
+// Freshness measures against the INVOKING worktree's HEAD (§4.5): from one shared private lock,
+// two worktrees reach opposite verdicts because their HEADs differ. The watermark is .trunk's
+// HEAD; advancing feature-x past it (mutating the anchored def's body while its resolved line
+// holds, so the rebuilt lock still byte-matches) makes check clean from .trunk and stale from
+// feature-x.
+#[test]
+fn freshness_measures_against_invoking_worktree_head() {
+    let g = grove_built();
+
+    // Baseline: both worktrees sit at the watermark commit → check is clean everywhere.
+    assert_eq!(
+        g.run_from(&g.trunk, &["check"]).code,
+        0,
+        "baseline check must be clean"
+    );
+
+    // Advance ONLY feature-x past the watermark.
+    g.stale_app_ex();
+
+    // .trunk's HEAD is still the watermark → clean.
+    let trunk = g.run_from(&g.trunk, &["check"]);
+    assert_eq!(
+        trunk.code,
+        0,
+        "check from .trunk must stay clean (HEAD unchanged):\n{}",
+        trunk.combined()
+    );
+
+    // feature-x's HEAD moved past the watermark and the anchored def digest diverged → a
+    // freshness finding (exit 1). Same lock, opposite verdict — solely because HEAD differs.
+    let feature = g.run_from(&g.feature, &["check"]);
+    assert_eq!(
+        feature.code,
+        1,
+        "check from feature-x must flag freshness (exit 1):\n{}",
+        feature.combined()
+    );
+    assert!(
+        feature.combined().contains("freshness"),
+        "feature-x finding is not a freshness finding:\n{}",
+        feature.combined()
     );
 }

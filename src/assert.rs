@@ -240,6 +240,11 @@ pub struct Context<'a> {
     /// `check --run-commands` (§4.6): additionally EXECUTE each declared command from
     /// the repo root (the off-by-default bonfires tier). Resolution runs regardless.
     pub run_commands: bool,
+    /// The directory each node's `source` path (§3.1) resolves against for the budget
+    /// class's file reads (§4.4). Equal to [`Self::root`] in normal mode; the overlay
+    /// `<home>/.stele/tree` in undercover mode (§3.5), where node sources live off the
+    /// work tree. Every other class reads code from [`Self::root`] (the work tree).
+    pub source_root: &'a Path,
     pub tracked: &'a [PathBuf],
 }
 
@@ -951,7 +956,7 @@ fn budget_claude(ctx: &Context) -> Result<Vec<Finding>> {
     let Some(root) = ctx.graph.nodes.iter().find(|n| n.id == SYSTEM_ID) else {
         return Ok(Vec::new());
     };
-    let tokens = count_tokens(&emit::materialized_content(ctx.root, root)?);
+    let tokens = count_tokens(&emit::materialized_content(ctx.source_root, root)?);
     let ceiling = ctx.config.budget.claude_root as usize;
     if tokens <= ceiling {
         return Ok(Vec::new());
@@ -980,7 +985,7 @@ fn budget_codex(ctx: &Context) -> Result<Vec<Finding>> {
     let mut worst: Option<(&Node, usize)> = None;
     for node in &ctx.graph.nodes {
         let chain = emit::chain_files(ctx.tracked, node);
-        let bytes = emit::chain_content(ctx.root, &chain)?.len();
+        let bytes = emit::chain_content(ctx.source_root, &chain)?.len();
         if bytes > cap && worst.is_none_or(|(_, w)| bytes > w) {
             worst = Some((node, bytes));
         }
@@ -1014,7 +1019,7 @@ fn budget_node(ctx: &Context) -> Result<Vec<Finding>> {
         let Some(budget) = node.budget else {
             continue;
         };
-        let content = emit::materialized_content(ctx.root, node)?;
+        let content = emit::materialized_content(ctx.source_root, node)?;
         let tokens = count_tokens(&content);
         if tokens as u64 <= budget {
             continue;

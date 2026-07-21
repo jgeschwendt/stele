@@ -237,6 +237,31 @@ fn lock_gate_and_report_and_json_envelope() {
     );
 }
 
+// `--undercover` is an `init`-only flag (§3.5): on any other verb it is an exit-2 bad flag,
+// never silently ignored (the read/emit verbs otherwise tolerate unknown tokens).
+#[test]
+fn undercover_flag_rejected_on_other_verbs() {
+    let fixture = built();
+    for verb in [
+        ["check", "--undercover"],
+        ["emit", "--undercover"],
+        ["nodes", "--undercover"],
+    ] {
+        let out = fixture.run(&verb);
+        assert_eq!(
+            out.code,
+            2,
+            "{verb:?} must reject --undercover with exit 2:\n{}",
+            out.combined()
+        );
+        assert!(
+            out.combined().contains("only valid on `stele init`"),
+            "{verb:?}: {}",
+            out.combined()
+        );
+    }
+}
+
 // Probe 11 — `stele --version` prints `stele <CARGO_PKG_VERSION>` to stdout and exits 0
 // WITHOUT a lock or git repo (scripts/install.sh calls it to confirm the landed binary
 // runs). The bare `Fixture` is a git repo with no lock; the flag must short-circuit

@@ -112,3 +112,27 @@ For MCP-capable harnesses, `stele serve` speaks JSON-RPC over stdio and exposes 
 ## 7 · No engine? Nothing breaks
 
 The emitted `AGENTS.md` files are complete, standard-compliant markdown — every harness that reads AGENTS.md gets the full graph content with zero tooling. The degradation ladder is deliberate: plain files → CLI queries → MCP. The engine adds verification and lazy navigation; it never becomes a reading dependency.
+
+## 8 · Undercover mode
+
+When you're the *only* stele user on a shared repo — a work, upstream, or open-source checkout whose collaborators must never see a stele artifact — run it privately:
+
+```sh
+stele init --undercover
+```
+
+Everything the engine writes stays out of version control, analogous to `CLAUDE.local.md`. Only the marker's presence selects the mode; without it every command is byte-for-byte normal.
+
+| where | what |
+| --- | --- |
+| graph home | parent of `git rev-parse --git-common-dir` — the repo root (normal checkout) or the shared bare root (grove) |
+| `<home>/.stele/tree/<dir>/AGENTS.md` | node sources — the overlay, mirroring tree paths (root node at `.stele/tree/AGENTS.md`) |
+| `<home>/.stele/graph.lock` + `.stele/index/` | the private lock and transpose indexes |
+| `<work>/CLAUDE.local.md` | the one materialized file — a relative `@`-import of the overlay root, auto-loaded by Claude Code (SPEC [§3.5](./SPEC.md#35-undercover-mode)) |
+| `<common-dir>/info/exclude` | a managed block hiding `/.stele/` and `/CLAUDE.local.md`, so `git status` stays clean |
+
+Author node blocks under `.stele/tree/`, then `stele build` + `stele emit` + `stele check` exactly as normal — every artifact lands at the home; queries and MCP resolve it from any worktree.
+
+**Worktrees share one graph.** The home is the parent of the git *common* dir, so every linked worktree — and every sibling in a bare-root (grove) layout — reads the same private graph, which survives worktree churn. `emit` drops a `CLAUDE.local.md` in whichever worktree you run it from, and freshness measures against *that* worktree's HEAD.
+
+**What's different.** There's no CI story — nothing is committed for a pipeline to gate, so `stele check` is yours to run locally. The degradation ladder trades its files rung for invisibility: collaborators see nothing, and your surface is CLI → MCP plus the one shim. `emit --claude-rules` is unavailable (the single shim is the only materialized file). And undercover cannot coexist with a tracked shared graph — a repo already carrying a committed `.stele/` or `stele`-block `AGENTS.md` refuses `init --undercover` (exit 2); mixing the two is a v2 concern.

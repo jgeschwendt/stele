@@ -89,3 +89,50 @@ fn init_skips_a_gitignored_proposal_and_exits_zero() {
     assert!(fixture.path("apps/AGENTS.md").exists());
     assert_eq!(fixture.run(&["build"]).code, 0);
 }
+
+// `.stele/` is the engine's own home (§4.3 IGNORED_DIRS): its `graph.lock` is VCS-tracked,
+// so it surfaces in the tracked-file listing — but `init` must NEVER propose it as a node.
+// After a build commits the lock, a re-`init` must leave `.stele/AGENTS.md` absent.
+#[test]
+fn init_never_proposes_the_dot_stele_dir_as_a_node() {
+    let fixture = Fixture::bare();
+    fixture.write("apps/web/app.ex", "defmodule Acme.App do\nend\n");
+    fixture.commit("bare tree with one app dir");
+
+    // First init + build lands a tracked .stele/graph.lock, so .stele/ now holds a tracked
+    // file and appears in `git ls-files` — the exact condition that used to mis-propose it.
+    assert_eq!(fixture.run(&["init"]).code, 0);
+    assert_eq!(fixture.run(&["build"]).code, 0);
+    fixture.commit("commit the graph lock");
+    assert!(
+        fixture.path(".stele/graph.lock").exists(),
+        "precondition: the lock must be tracked so .stele/ is in the tracked listing"
+    );
+
+    let reinit = fixture.run(&["init"]);
+    assert_eq!(reinit.code, 0, "{}", reinit.combined());
+    assert!(
+        !fixture.path(".stele/AGENTS.md").exists(),
+        "init proposed .stele/ as a node: {}",
+        reinit.combined()
+    );
+}
+
+// `stele init --json` (the sole flag a mutating verb accepts, §5.3) still runs and prints
+// exactly one success envelope to stdout.
+#[test]
+fn init_json_still_scaffolds_and_prints_one_envelope() {
+    let fixture = Fixture::bare();
+    fixture.write("apps/web/app.ex", "defmodule Acme.App do\nend\n");
+    fixture.commit("bare tree for a --json init");
+
+    let init = fixture.run(&["init", "--json"]);
+    assert_eq!(init.code, 0, "{}", init.combined());
+    let value: serde_json::Value =
+        serde_json::from_str(init.stdout.trim()).expect("init --json stdout is one JSON object");
+    assert_eq!(value["ok"], true, "{}", init.stdout);
+    assert!(
+        fixture.path("AGENTS.md").exists() && fixture.path("apps/AGENTS.md").exists(),
+        "init --json did not scaffold the expected nodes"
+    );
+}

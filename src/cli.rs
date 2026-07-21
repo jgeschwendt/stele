@@ -164,11 +164,11 @@ pub fn run(args: &[String]) -> i32 {
 fn dispatch(root: &Path, args: &[&str]) -> Result<CommandOutput> {
     match args.first().copied() {
         Some("blame") => blame(root, args),
-        Some("build") => build(root),
+        Some("build") => build(root, args),
         Some("check") => check(root, args),
         Some("emit") => emit(root, args),
         Some("hazards") => hazards(root, args),
-        Some("init") => init(root),
+        Some("init") => init(root, args),
         Some("invariants") => invariants(root, args),
         Some("node") => node(root, args),
         Some("nodes") => nodes(root, args),
@@ -266,11 +266,26 @@ fn error_data(error: &SteleError) -> Value {
 const UNBORN_HEAD_NOTICE: &str = "stele build: no commit yet (unborn HEAD) — every claim left verified:null; commit, then \
      re-run stele build to stamp watermarks";
 
+/// The mutating verbs (§5.3 `stele build | init`) accept ONLY the global `--json` flag
+/// (already stripped from `args` before dispatch) and no other token. `args[0]` is the
+/// verb; any further argument is a §5.3 input error (exit 2) surfaced BEFORE any
+/// filesystem effect — an unknown flag must never silently run the mutation (e.g. a
+/// mistyped `stele init --help` overwriting a live tree).
+fn reject_extra_args(args: &[&str], usage: &str) -> Result<()> {
+    if let Some(extra) = args.get(1) {
+        return Err(SteleError::input_msg(format!(
+            "unexpected argument {extra:?}; usage: {usage}"
+        )));
+    }
+    Ok(())
+}
+
 /// `stele build` (§5.1): sources → in-memory graph → atomically written lock.
 /// Any input error aborts before a single byte is written (§5.3 atomicity).
 /// `build` never reads `.stele/config.toml` — config tunes `check`/`emit`, not the
 /// graph (§3.4).
-fn build(root: &Path) -> Result<CommandOutput> {
+fn build(root: &Path, args: &[&str]) -> Result<CommandOutput> {
+    reject_extra_args(args, "stele build [--json]")?;
     let mut graph = build_graph(root)?;
     // Diagnostic only (§2.4): flag untracked AGENTS.md nodes the tracked-file scan cannot
     // see. stderr-only — the lock, stdout, and exit code below stay byte-identical.
@@ -1239,7 +1254,8 @@ const EMPTY_REGION: &str = "<!-- stele:begin router -->\n<!-- stele:end -->\n";
 /// sees them — a staging failure is a warning plus a `git add` instruction, never a
 /// post-write abort. `init` never deletes content, never writes inside a generated
 /// region, and never writes the lock.
-fn init(root: &Path) -> Result<CommandOutput> {
+fn init(root: &Path, args: &[&str]) -> Result<CommandOutput> {
+    reject_extra_args(args, "stele init [--json]")?;
     let tracked = tracked_files(root)?;
     let adr_dir = detect_adr_dir(&tracked);
     let existing = existing_node_dirs(root, &tracked)?;
@@ -1360,8 +1376,13 @@ fn existing_node_dirs(root: &Path, tracked: &[PathBuf]) -> Result<BTreeSet<Strin
 }
 
 /// The top-level directories `init` proposes as containers: each first-level directory
-/// holding ≥1 tracked file that is neither the ADR directory (nor its ancestor) nor
-/// already covered by an existing node at or below it.
+/// holding ≥1 tracked file that is neither an engine-reserved dir (§4.3 `.git`/`.stele`),
+/// the ADR directory (nor its ancestor), nor already covered by an existing node at or
+/// below it. `.stele/` is the load-bearing exclusion here: its `graph.lock`/index files
+/// are VCS-tracked, so it surfaces in the tracked-file listing and would otherwise be
+/// proposed as a node — the same §4.3 discipline that keeps it out of the exhaustiveness
+/// walk keeps it out of the init proposal. (VCS-ignored and `.steleignore`d paths are
+/// already absent from `tracked`, filtered at its source in `tracked_files`.)
 fn proposable_top_dirs(
     tracked: &[PathBuf],
     existing: &BTreeSet<String>,
@@ -1376,11 +1397,12 @@ fn proposable_top_dirs(
     }
     tops.into_iter()
         .filter(|top| {
+            let reserved = assert::IGNORED_DIRS.contains(&top.as_str());
             let is_adr = top == adr_dir || adr_dir.starts_with(&format!("{top}/"));
             let covered = existing
                 .iter()
                 .any(|dir| dir == top || dir.starts_with(&format!("{top}/")));
-            !is_adr && !covered
+            !reserved && !is_adr && !covered
         })
         .collect()
 }
@@ -2028,7 +2050,7 @@ mod tests {
         git(root, &["add", "-A"]);
         git(root, &["commit", "-m", "seed"]);
 
-        init(root).unwrap();
+        init(root, &["init"]).unwrap();
         let after = std::fs::read_to_string(root.join("AGENTS.md")).unwrap();
         // Authored bytes are preserved verbatim as a prefix; a region now exists.
         assert!(
@@ -2042,7 +2064,7 @@ mod tests {
             "no region appended:\n{after}"
         );
         // Second init leaves the file byte-identical (region already present).
-        init(root).unwrap();
+        init(root, &["init"]).unwrap();
         assert_eq!(
             std::fs::read_to_string(root.join("AGENTS.md")).unwrap(),
             after

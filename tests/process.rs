@@ -63,6 +63,55 @@ fn exit_0_on_build_with_unborn_head() {
     assert_eq!(check.code, 0, "{}", check.combined());
 }
 
+// A mutating verb (§5.3 `stele init`) rejects any argument beyond the global `--json`:
+// `stele init --help` is an input error (exit 2) with a usage line, and — the real trap —
+// leaves the tree untouched, never silently running init and scaffolding into a live repo.
+#[test]
+fn exit_2_on_init_with_a_stray_arg_and_writes_nothing() {
+    let fixture = Fixture::bare();
+    fixture.write("apps/web/app.ex", "defmodule Acme.App do\nend\n");
+    fixture.commit("bare tree, no stele nodes yet");
+
+    let init = fixture.run(&["init", "--help"]);
+    assert_eq!(init.code, 2, "{}", init.combined());
+    assert!(
+        init.combined().contains("usage: stele init"),
+        "expected a usage line: {}",
+        init.combined()
+    );
+    // No scaffold ran: neither the root system node nor the apps/ container was written.
+    assert!(
+        !fixture.path("AGENTS.md").exists(),
+        "init --help scaffolded the root node"
+    );
+    assert!(
+        !fixture.path("apps/AGENTS.md").exists(),
+        "init --help scaffolded a container node"
+    );
+}
+
+// `stele build` is likewise strict: a stray positional argument is an input error (exit 2)
+// that aborts BEFORE any lock write, so the committed lock is never overwritten by junk.
+#[test]
+fn exit_2_on_build_with_a_stray_arg_and_leaves_the_lock_untouched() {
+    let fixture = Fixture::acme();
+    assert_eq!(fixture.run(&["build"]).code, 0);
+    let before = fixture.read(".stele/graph.lock");
+
+    let build = fixture.run(&["build", "stray"]);
+    assert_eq!(build.code, 2, "{}", build.combined());
+    assert!(
+        build.combined().contains("usage: stele build"),
+        "expected a usage line: {}",
+        build.combined()
+    );
+    assert_eq!(
+        fixture.read(".stele/graph.lock"),
+        before,
+        "build with a stray arg mutated the lock"
+    );
+}
+
 // Two nodes normalizing to the same id → exit 2 (§2.1). A second AGENTS.md explicitly
 // declares the apps/web id already held by apps/web/AGENTS.md.
 #[test]

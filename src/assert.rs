@@ -704,7 +704,7 @@ fn json_string(value: &str) -> String {
 /// filtered tracked-file list (`tracked_files`, cli.rs), so a `.steleignore`d subtree
 /// contributes no files, hence no directory here: an ignored dir is INVISIBLE, never an
 /// unmapped recall failure (§2.4). None of the three needs an explicit entry.
-const IGNORED_DIRS: [&str; 2] = [".git", ".stele"];
+pub(crate) const IGNORED_DIRS: [&str; 2] = [".git", ".stele"];
 
 /// The exhaustiveness class (§4.3): every non-ignored directory at depth ≤ D must map
 /// into some NON-ROOT node's territory. The system node `/` is a catch-all for

@@ -1,6 +1,6 @@
 # stele — worked example
 
-Companion to SPEC.md draft 0.8. A fictional-but-realistic monorepo (`acme`): Phoenix web app + background worker + shared TS package. Artifacts shown in full or as labeled excerpts so the design can be attacked concretely. Hole-poking prompts marked ⚔ throughout.
+Companion to SPEC.md draft 0.9. A fictional-but-realistic monorepo (`acme`): Phoenix web app + background worker + shared TS package. Artifacts shown in full or as labeled excerpts so the design can be attacked concretely. Hole-poking prompts marked ⚔ throughout.
 
 ## 1. The repo
 
@@ -302,6 +302,51 @@ exit 1
 3. **`purpose` is unverifiable prose.** 200 chars of scent that no assertion can check. It's the one field that can lie undetected. Kept because routers need scent [C19]; capped because lying scales with length.
 4. **Generated-region merge conflicts.** Two branches both re-run `emit` → conflicting generated blocks. Mitigation: deterministic rendering order makes conflicts rare and mechanical (re-run `emit`), but they will happen.
 5. **The lockfile in review.** graph.lock diffs are noisy JSON in PRs. Option: make it `.gitattributes`-collapsed and rely on `check` in CI, at the cost of reviewers not seeing graph changes. Resolved by default (spec §3.2): pretty-printed canonical JSON keeps lock diffs mechanical; collapsing in review is a team choice.
+
+## 11. Undercover mode — `stele init --undercover`
+
+The same `acme` repo, run privately by one operator whose teammates must never see a stele artifact (spec §3.5). `stele init --undercover` writes a marker, an overlay node tree, and an `info/exclude` block — never `git add`. Nothing below is tracked; `git status` stays clean through `build`/`emit`/`check`.
+
+```
+acme/                             ← the shared checkout, still tracked and untouched
+├── CLAUDE.local.md               ← the one materialized file (Claude auto-loads it)
+└── .stele/                       ← untracked, hidden via .git/info/exclude
+    ├── undercover                ← the mode marker (deliberately-uncommitted source)
+    ├── graph.lock
+    ├── index/{invariants,hazards}.md
+    └── tree/                     ← overlay node sources, mirroring tree paths
+        ├── AGENTS.md             ← root (system) node
+        ├── apps/web/AGENTS.md
+        ├── apps/web/lib/billing/AGENTS.md
+        └── packages/shared/AGENTS.md
+```
+
+`CLAUDE.local.md` — one relative `@`-import of the overlay root (auto-loaded alongside `CLAUDE.md`, gitignore-recommended, verified 2026-07-21):
+
+```markdown
+@.stele/tree/AGENTS.md
+```
+
+`.git/info/exclude` — the marker-fenced managed block, rewritten in place, never touching a line outside the fence:
+
+```
+# stele:begin undercover
+/CLAUDE.local.md
+/.stele/
+# stele:end undercover
+```
+
+Queries are byte-for-byte what the tracked repo returns — same graph, sources merely relocated:
+
+```
+$ stele invariants --touching apps/web/lib/billing
+invariants (3):
+  / · money-type — all money amounts are integer cents end-to-end; floats never represent currency (→ lm:money-type)
+  apps/web/lib/billing · billing-idempotency — every mutation is idempotent by (account_id, idempotency_key) — retries must be safe (→ lm:billing-idempotency)
+  apps/web/lib/billing · refund-cap — refunds never exceed captured amount, enforced at the changeset, not the controller (→ lm:refund-cap)
+```
+
+The territory of `.stele/tree/apps/web/lib/billing/AGENTS.md` is `apps/web/lib/billing`; the anchor scan, exhaustiveness, and freshness still run over the tracked work-tree code, so the assertion suite (§4) behaves exactly as in §8 — only the node sources moved off the tree.
 
 ```
 

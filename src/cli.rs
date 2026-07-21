@@ -97,6 +97,140 @@ impl CommandOutput {
     }
 }
 
+// ─── workspace resolution (§3.5) ─────────────────────────────────────────────
+//
+// Every verb runs against a resolved [`Workspace`], not a bare root path: `work` is the
+// invoking work tree (all git spawns and source/code scanning run here) and `home` is
+// the graph home where the engine's artifacts live — the lock, `.stele/index/`, node
+// sources (§3.2/§3.5). In normal mode the two are the SAME verbatim path (today's
+// `Path::new(".")`), so every join is byte-identical and no §2–§7 behavior moves.
+// Undercover mode (§3.5) drives them apart: `home` becomes the parent of the git common
+// dir, outside the tracked tree. Phase 2 lands the split with [`Mode::Normal`] the only
+// reachable mode — nothing writes a marker yet, so [`resolve_workspace`] reaches
+// [`Mode::Undercover`] only against a marker that already exists on disk, and no code
+// branches on the mode (Phase 3+ gates behavior on it).
+
+/// The two graph modes (§3.5): a committed graph at the repo root, or a private on-disk
+/// graph rooted at the parent of the git common dir. Carried on every [`Workspace`] but
+/// not yet branched on.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum Mode {
+    Normal,
+    Undercover,
+}
+
+/// The resolved graph roots for one invocation (§3.5): `work` is the invoking work tree
+/// (git spawns, anchor/import scanning, freshness), `home` is where the engine's
+/// artifacts live (the lock, the transpose indexes, node sources). In [`Mode::Normal`]
+/// `home` and `work` are the identical verbatim path, so threading them apart is a strict
+/// no-op; only undercover mode separates them.
+pub struct Workspace {
+    /// The git common directory (`git rev-parse --git-common-dir`, canonicalized) — the
+    /// directory whose `info/exclude` carries the undercover managed block (§3.5). Read only
+    /// in [`Mode::Undercover`] (for the self-healing exclude re-install); in [`Mode::Normal`]
+    /// it holds `work` verbatim (the cheapest value — never read).
+    pub common: PathBuf,
+    pub home: PathBuf,
+    pub mode: Mode,
+    pub work: PathBuf,
+}
+
+/// The private-graph marker (§3.5), relative to the graph home: its presence at
+/// `<home>/.stele/undercover` selects undercover mode. A deliberately-uncommitted source
+/// artifact (contrast `.stele/config.toml`, §3.4) — nothing in Phase 2 writes it, so
+/// [`resolve_workspace`] can reach [`Mode::Undercover`] only against a pre-existing marker.
+const UNDERCOVER_MARKER: &str = ".stele/undercover";
+
+/// The overlay node-source root (§3.5), relative to the graph home: undercover node
+/// sources live under `<home>/.stele/tree/<dirpath>/AGENTS.md`, mirroring tree paths.
+const TREE_DIR: &str = ".stele/tree";
+
+/// The git common directory of the work tree at `work` (`git rev-parse --git-common-dir`),
+/// canonicalized — `<repo>/.git` in a normal checkout, the shared bare `.git` under a
+/// linked-worktree layout. Relative git output is joined onto `work` before canonicalizing.
+/// Returns `None` on ANY failure (a non-repo cwd, a git that will not spawn, an
+/// uncanonicalizable path) so [`resolve_workspace`] degrades to normal mode rather than
+/// erroring.
+fn git_common_dir(work: &Path) -> Option<PathBuf> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--git-common-dir"])
+        .current_dir(work)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let path = Path::new(trimmed);
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        work.join(path)
+    };
+    absolute.canonicalize().ok()
+}
+
+/// The canonicalized top-level of the work tree containing `work` (`git rev-parse
+/// --show-toplevel`), or `None` on any failure (non-repo cwd, git will not spawn,
+/// uncanonicalizable path). Distinct from [`git_common_dir`]'s home: the undercover shim
+/// (§3.5) belongs at the invoking WORK-TREE ROOT, not at `work` (which is the cwd — a subdir
+/// invocation would otherwise land `CLAUDE.local.md` deep in the tree, where the root-anchored
+/// `/CLAUDE.local.md` exclude entry never matches). In a linked worktree this is that
+/// worktree's own root — the correct shim location.
+fn git_toplevel(work: &Path) -> Option<PathBuf> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(work)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Path::new(trimmed).canonicalize().ok()
+}
+
+/// Resolve the [`Workspace`] for `work` once at dispatch entry (§3.5). The graph home is
+/// the canonicalized parent of the git common dir; when `<home>/.stele/undercover` exists
+/// the result is [`Mode::Undercover`] rooted there. On ANY failure to locate the home
+/// (non-repo cwd, no parent) OR an absent marker the result is [`Mode::Normal`] with
+/// `home == work == work` verbatim — the exact value threaded before the split, so every
+/// downstream join stays byte-identical. NEVER errors: a non-repo cwd falls through to the
+/// verbs' own exit-2 paths (`git ls-files` reports "not a git repository").
+pub fn resolve_workspace(work: &Path) -> Workspace {
+    let normal = || Workspace {
+        common: work.to_path_buf(),
+        home: work.to_path_buf(),
+        mode: Mode::Normal,
+        work: work.to_path_buf(),
+    };
+    let Some(common) = git_common_dir(work) else {
+        return normal();
+    };
+    let Some(home) = common.parent() else {
+        return normal();
+    };
+    if home.join(UNDERCOVER_MARKER).exists() {
+        let home = home.to_path_buf();
+        Workspace {
+            common,
+            home,
+            mode: Mode::Undercover,
+            work: work.to_path_buf(),
+        }
+    } else {
+        normal()
+    }
+}
+
 /// Run the CLI, returning the §5.3 process exit code (`0` success, else the error's
 /// exit class). With `--json`, exactly one envelope prints to stdout regardless of
 /// outcome; otherwise a success prints its human line to stdout and an error prints
@@ -122,10 +256,12 @@ pub fn run(args: &[String]) -> i32 {
         .map(String::as_str)
         .filter(|a| *a != JSON_FLAG)
         .collect();
-    let root = Path::new(".");
+    // Resolve the home/work split once (§3.5), after the serve/--version short-circuits;
+    // in normal mode this is `home == work == Path::new(".")` verbatim (byte-identical).
+    let workspace = resolve_workspace(Path::new("."));
     let command = rest.first().copied().unwrap_or("");
 
-    match dispatch(root, &rest) {
+    match dispatch(&workspace, &rest) {
         Ok(output) => {
             // Assertion findings (§4) make `check` exit 1 ("repo out of spec", §5.3);
             // an empty list keeps the 0-success path.
@@ -161,19 +297,27 @@ pub fn run(args: &[String]) -> i32 {
     }
 }
 
-fn dispatch(root: &Path, args: &[&str]) -> Result<CommandOutput> {
+fn dispatch(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
+    // `--undercover` (§3.5) is an `init`-only flag. The read/emit verbs otherwise tolerate
+    // unknown tokens (they scan for their own flags), so reject it explicitly here rather than
+    // let a mistyped `stele check --undercover` run and silently ignore the intent (exit 2).
+    if args.first().copied() != Some("init") && args.contains(&UNDERCOVER_FLAG) {
+        return Err(SteleError::input_msg(format!(
+            "{UNDERCOVER_FLAG} is only valid on `stele init` (§3.5)"
+        )));
+    }
     match args.first().copied() {
-        Some("blame") => blame(root, args),
-        Some("build") => build(root, args),
-        Some("check") => check(root, args),
-        Some("emit") => emit(root, args),
-        Some("hazards") => hazards(root, args),
-        Some("init") => init(root, args),
-        Some("invariants") => invariants(root, args),
-        Some("node") => node(root, args),
-        Some("nodes") => nodes(root, args),
-        Some("root") => cmd_root(root),
-        Some("unfold") => unfold(root, args),
+        Some("blame") => blame(ws, args),
+        Some("build") => build(ws, args),
+        Some("check") => check(ws, args),
+        Some("emit") => emit(ws, args),
+        Some("hazards") => hazards(ws, args),
+        Some("init") => init(ws, args),
+        Some("invariants") => invariants(ws, args),
+        Some("node") => node(ws, args),
+        Some("nodes") => nodes(ws, args),
+        Some("root") => cmd_root(ws),
+        Some("unfold") => unfold(ws, args),
         Some(other) => Err(SteleError::input_msg(format!("unknown command: {other:?}"))),
         None => Err(SteleError::input_msg(
             "usage: stele root | node <id> | unfold <id> | invariants | hazards | nodes | \
@@ -198,8 +342,8 @@ pub struct VerbRender {
 /// instead when present) plus any `--report` block; an input/internal error becomes
 /// `text = <error message>` with the error's exit class. serve maps exit ≥ 2 to an
 /// `isError` tool result (§5.2).
-pub fn serve_render(root: &Path, argv: &[&str]) -> VerbRender {
-    match dispatch(root, argv) {
+pub fn serve_render(ws: &Workspace, argv: &[&str]) -> VerbRender {
+    match dispatch(ws, argv) {
         Ok(output) => {
             let exit = if output.findings.is_empty() { 0 } else { 1 };
             let mut text = String::new();
@@ -284,20 +428,34 @@ fn reject_extra_args(args: &[&str], usage: &str) -> Result<()> {
 /// Any input error aborts before a single byte is written (§5.3 atomicity).
 /// `build` never reads `.stele/config.toml` — config tunes `check`/`emit`, not the
 /// graph (§3.4).
-fn build(root: &Path, args: &[&str]) -> Result<CommandOutput> {
+fn build(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
     reject_extra_args(args, "stele build [--json]")?;
-    let mut graph = build_graph(root)?;
-    // Diagnostic only (§2.4): flag untracked AGENTS.md nodes the tracked-file scan cannot
-    // see. stderr-only — the lock, stdout, and exit code below stay byte-identical.
-    warn_untracked_node_files(root)?;
-    if !stamp_verified(root, &mut graph)? {
+    // Mutual exclusion (§3.5): a tracked shared graph coexisting with the undercover marker is
+    // exit 2. Runs BEFORE `build_graph` and the lock write so no partial lock is ever left on
+    // disk (§5.3 build atomicity) — an undercover repo that later adopts a shared committed
+    // graph fails fast rather than rewriting the private lock. Normal mode never reaches here.
+    if ws.mode == Mode::Undercover {
+        // Self-heal (§3.5): re-install the `info/exclude` block before writing any artifact, so a
+        // historically-partial or hand-deleted block is repaired and the lock never surfaces in
+        // `git status`. No-ops when the block is already present.
+        ensure_info_exclude(&ws.common)?;
+        reject_shared_graph_conflict(&ws.work, &tracked_files(&ws.work)?)?;
+    }
+    let mut graph = build_graph(ws)?;
+    // Diagnostic only (§2.4/§3.5): flag AGENTS.md nodes the build's node roster will never
+    // read. stderr-only — the lock, stdout, and exit code below stay byte-identical. Normal:
+    // an untracked stele-block AGENTS.md the tracked scan misses. Undercover: an untracked
+    // work-tree stele-block AGENTS.md authored outside the overlay (build reads only
+    // `.stele/tree/`, §3.5) — the mode-conflict guard above already covers the tracked case.
+    warn_untracked_node_files(ws)?;
+    if !stamp_verified(&ws.work, &mut graph)? {
         // Unborn HEAD: notice goes to stderr so the `--json` stdout envelope stays a
         // single object (§5.3), and build proceeds to write a fully-null-watermark lock.
         eprintln!("{UNBORN_HEAD_NOTICE}");
     }
     let lock = Lock::from_graph(&graph);
     let bytes = lock::to_canonical_string(&lock);
-    write_lock_atomic(root, &bytes)?;
+    write_lock_atomic(&ws.home, &bytes)?;
     let nodes = graph.nodes.len();
     Ok(CommandOutput::new(
         json!({ "lock": format!("{LOCK_DIR}/{LOCK_FILE}"), "nodes": nodes }),
@@ -313,13 +471,13 @@ fn build(root: &Path, args: &[&str]) -> Result<CommandOutput> {
 /// never re-stamped (§4.5). The six assertion classes run over the rebuilt graph after
 /// the compare succeeds; `--run-commands` additionally executes each declared command
 /// (§4.6). A clean repo exits 0.
-fn check(root: &Path, args: &[&str]) -> Result<CommandOutput> {
+fn check(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
     let only = parse_only(args)?;
     let freeze = args.contains(&FREEZE_FLAG);
     let run_commands = args.contains(&RUN_COMMANDS_FLAG);
-    let config = config::load(root)?;
+    let config = config::load(&ws.home)?;
 
-    let on_disk = read_committed_lock(root)?;
+    let on_disk = read_committed_lock(&ws.home)?;
 
     let version = lock::read_version(&on_disk)?;
     if version != lock::LOCK_VERSION {
@@ -330,12 +488,23 @@ fn check(root: &Path, args: &[&str]) -> Result<CommandOutput> {
     }
     let committed = lock::parse_lock(&on_disk)?;
 
-    let tracked = tracked_files(root)?;
-    let graph = build_graph(root)?;
-    // Diagnostic only (§2.4): flag untracked AGENTS.md nodes the tracked-file scan cannot
-    // see — an untracked node leaves the committed lock in-spec, so the byte-compare below
-    // would pass while silently omitting it. stderr-only; findings/exit are untouched.
-    warn_untracked_node_files(root)?;
+    let tracked = tracked_files(&ws.work)?;
+    // Mutual exclusion (§3.5): a tracked shared graph coexisting with the undercover marker is
+    // exit 2, surfaced BEFORE the assertion suite runs. Normal mode never reaches here.
+    if ws.mode == Mode::Undercover {
+        // Self-heal (§3.5): re-ensure the `info/exclude` block (no-op when unchanged) so a lost
+        // block is repaired on the next `check`, keeping the work tree clean.
+        ensure_info_exclude(&ws.common)?;
+        reject_shared_graph_conflict(&ws.work, &tracked)?;
+    }
+    let graph = build_graph(ws)?;
+    // Diagnostic only (§2.4/§3.5): flag AGENTS.md nodes the build's node roster will never
+    // read — an omitted node leaves the committed lock in-spec, so the byte-compare below would
+    // pass while silently short a node. stderr-only; findings/exit are untouched. Normal: an
+    // untracked stele-block AGENTS.md the tracked scan misses. Undercover: an untracked
+    // work-tree stele-block AGENTS.md authored outside the overlay (§3.5); the guard above
+    // covers the tracked case.
+    warn_untracked_node_files(ws)?;
     let mut rebuilt = Lock::from_graph(&graph);
     rebuilt.carry_over_verified(&committed);
 
@@ -346,13 +515,17 @@ fn check(root: &Path, args: &[&str]) -> Result<CommandOutput> {
     }
 
     // The six assertion classes (§4) run over the rebuilt graph AFTER the byte-compare
-    // (§5.3); any finding maps to exit 1, none to exit 0.
+    // (§5.3); any finding maps to exit 1, none to exit 0. `root` is the WORK tree — the
+    // freshness/blame/liveness checks all spawn git or shells in the invoking checkout
+    // (§4.5 HEAD is per-work-tree).
+    let source_root = node_source_root(ws);
     let ctx = Context {
         committed: &committed,
         config: &config,
         graph: &graph,
-        root,
+        root: &ws.work,
         run_commands,
+        source_root: &source_root,
         tracked: &tracked,
     };
 
@@ -424,12 +597,12 @@ fn render_allow_report(entries: &[(String, String, String)]) -> String {
 /// NOT byte-compare (staleness detection is `check`'s job, §5.3); it reads `verified`
 /// from that lock, the sole watermark carrier. Accepts an abbreviated node-id when
 /// unambiguous (§2.4).
-fn blame(root: &Path, args: &[&str]) -> Result<CommandOutput> {
+fn blame(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
     let Some(address) = args.get(1) else {
         return Err(SteleError::input_msg("usage: stele blame <node-id>/<slug>"));
     };
-    let config = config::load(root)?;
-    let on_disk = read_committed_lock(root)?;
+    let config = config::load(&ws.home)?;
+    let on_disk = read_committed_lock(&ws.home)?;
     let version = lock::read_version(&on_disk)?;
     if version != lock::LOCK_VERSION {
         return Err(SteleError::input_msg(format!(
@@ -438,14 +611,16 @@ fn blame(root: &Path, args: &[&str]) -> Result<CommandOutput> {
         )));
     }
     let committed = lock::parse_lock(&on_disk)?;
-    let tracked = tracked_files(root)?;
-    let graph = build_graph(root)?;
+    let tracked = tracked_files(&ws.work)?;
+    let graph = build_graph(ws)?;
+    let source_root = node_source_root(ws);
     let ctx = Context {
         committed: &committed,
         config: &config,
         graph: &graph,
-        root,
+        root: &ws.work,
         run_commands: false,
+        source_root: &source_root,
         tracked: &tracked,
     };
     let (summary, data) = assert::blame(&ctx, address)?;
@@ -488,6 +663,11 @@ const CLAUDE_RULES_DIR: &str = ".claude/rules";
 /// The CLAUDE.md shim (§3.3): one line pointing Claude Code at AGENTS.md.
 const CLAUDE_SHIM: &str = "CLAUDE.md";
 const CLAUDE_SHIM_CONTENT: &str = "@AGENTS.md\n";
+/// The undercover shim (§3.5): the single materialized file, at the invoking work-tree
+/// root, a relative `@`-import of the overlay root node. `CLAUDE.local.md` is auto-loaded
+/// alongside `CLAUDE.md` and docs-recommended gitignored (verified 2026-07-21) — the private
+/// analogue of the §3.3 `@AGENTS.md` line.
+const CLAUDE_LOCAL_SHIM: &str = "CLAUDE.local.md";
 
 /// `stele emit` (§5.1): read the COMMITTED lock (never rebuild, §3.2/§5.1) and render
 /// every node's generated region in place — only between its markers — plus the
@@ -495,9 +675,9 @@ const CLAUDE_SHIM_CONTENT: &str = "@AGENTS.md\n";
 /// writing (divergence → exit 1, §3.1); `--claude-rules` additionally renders
 /// path-scoped `.claude/rules/*.md` (§3.3, opt-in). Like `node`/`blame` it trusts the
 /// committed lock and does not byte-compare — staleness is `check`'s job (§5.3).
-fn emit(root: &Path, args: &[&str]) -> Result<CommandOutput> {
-    let _config = config::load(root)?;
-    let on_disk = read_committed_lock(root)?;
+fn emit(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
+    let _config = config::load(&ws.home)?;
+    let on_disk = read_committed_lock(&ws.home)?;
     let version = lock::read_version(&on_disk)?;
     if version != lock::LOCK_VERSION {
         return Err(SteleError::input_msg(format!(
@@ -507,19 +687,39 @@ fn emit(root: &Path, args: &[&str]) -> Result<CommandOutput> {
     }
     let lock = lock::parse_lock(&on_disk)?;
 
-    if args.contains(&EMIT_CHECK_FLAG) {
-        return emit_check(root, &lock);
+    if ws.mode == Mode::Undercover {
+        // Self-heal (§3.5): re-ensure the `info/exclude` block before rendering, so the shim and
+        // overlay this emit (re)writes never surface in `git status`. No-op when unchanged.
+        ensure_info_exclude(&ws.common)?;
     }
-    emit_write(root, &lock, args.contains(&EMIT_CLAUDE_RULES_FLAG))
+
+    // `--claude-rules` is a normal-mode-only projection (§3.5): undercover materializes exactly
+    // ONE file, the `CLAUDE.local.md` shim, so the multi-file `.claude/rules/*.md` fan-out has
+    // no home here — reject it as an input error (exit 2) rather than silently scaffolding a
+    // second surface. Checked before the `--check` dispatch so the flag is rejected regardless.
+    if ws.mode == Mode::Undercover && args.contains(&EMIT_CLAUDE_RULES_FLAG) {
+        return Err(SteleError::input_msg(
+            "--claude-rules is unavailable in undercover mode; the single materialized file is \
+             CLAUDE.local.md",
+        ));
+    }
+
+    // All emit targets live at the graph home (§3.5): node regions, the transpose indexes,
+    // the shim, and any `.claude/rules/*.md` all render under `home`.
+    if args.contains(&EMIT_CHECK_FLAG) {
+        return emit_check(ws, &lock);
+    }
+    emit_write(ws, &lock, args.contains(&EMIT_CLAUDE_RULES_FLAG))
 }
 
 /// Render every region in place, write both transpose indexes, ensure the CLAUDE.md
 /// shim, and (when `claude_rules`) render `.claude/rules/*.md`. `emit` rewrites strictly
 /// between markers and under `.stele/`/`.claude/` — never the marker lines or authored
 /// prose (§5.1).
-fn emit_write(root: &Path, lock: &Lock, claude_rules: bool) -> Result<CommandOutput> {
+fn emit_write(ws: &Workspace, lock: &Lock, claude_rules: bool) -> Result<CommandOutput> {
+    let root = &ws.home;
     for (id, node) in &lock.nodes {
-        let path = node_agents_path(id);
+        let path = node_agents_path(ws, id);
         let contents = read_node_agents(root, &path)?;
         let region = require_region(&path, &contents)?;
         let rendered = emit::render_region(lock, node);
@@ -547,7 +747,7 @@ fn emit_write(root: &Path, lock: &Lock, claude_rules: bool) -> Result<CommandOut
         HAZARDS_INDEX,
         &emit::render_hazards_index(lock),
     )?;
-    ensure_claude_shim(root, lock)?;
+    ensure_shim(ws, lock)?;
     if claude_rules {
         write_claude_rules(root, lock)?;
     }
@@ -564,10 +764,11 @@ fn emit_write(root: &Path, lock: &Lock, claude_rules: bool) -> Result<CommandOut
 /// Render to memory and byte-diff against on-disk regions and index files (§3.1); any
 /// divergence is an assertion failure (exit 1) naming each divergent file. Missing
 /// regions and malformed markers remain input errors (exit 2), same as `emit`.
-fn emit_check(root: &Path, lock: &Lock) -> Result<CommandOutput> {
+fn emit_check(ws: &Workspace, lock: &Lock) -> Result<CommandOutput> {
+    let root = &ws.home;
     let mut divergent: Vec<String> = Vec::new();
     for (id, node) in &lock.nodes {
-        let path = node_agents_path(id);
+        let path = node_agents_path(ws, id);
         let contents = read_node_agents(root, &path)?;
         let region = require_region(&path, &contents)?;
         if contents[region.content_start..region.content_end] != *emit::render_region(lock, node) {
@@ -605,13 +806,34 @@ fn emit_check(root: &Path, lock: &Lock) -> Result<CommandOutput> {
     })
 }
 
-/// The AGENTS.md path for a node id (§2.1 default id ⇔ declaring directory): the repo
-/// root's node lives at `AGENTS.md`, every other at `<id>/AGENTS.md`.
-fn node_agents_path(id: &str) -> PathBuf {
-    if id == crate::model::SYSTEM_ID {
+/// The AGENTS.md path for a node id (§2.1 default id ⇔ declaring directory), mode-aware
+/// (§3.5). Normal mode returns the home-relative source path — the repo root's node at
+/// `AGENTS.md`, every other at `<id>/AGENTS.md` (today's value; `emit` joins it onto
+/// `ws.home == "."`). Undercover mode returns the absolute overlay path
+/// `<home>/.stele/tree/{AGENTS.md | <id>/AGENTS.md}`; `emit`'s later `ws.home`-join is a
+/// no-op on an absolute path, so normal-mode output stays byte-identical.
+fn node_agents_path(ws: &Workspace, id: &str) -> PathBuf {
+    let rel: PathBuf = if id == crate::model::SYSTEM_ID {
         PathBuf::from("AGENTS.md")
     } else {
         PathBuf::from(format!("{id}/AGENTS.md"))
+    };
+    match ws.mode {
+        Mode::Normal => rel,
+        Mode::Undercover => ws.home.join(TREE_DIR).join(rel),
+    }
+}
+
+/// The directory the budget class (§4.4) resolves each node's `source` path against for
+/// its file reads (§3.5), mode-aware. Normal: the work tree (`ws.work == "."`, so a
+/// node's relative `source` joins byte-identically to today). Undercover: the overlay
+/// `<home>/.stele/tree`, where node sources live off the work tree. Distinct from
+/// `ctx.root` (always the work tree): only node-source reads move to the overlay; every
+/// code scan and freshness/liveness spawn stays in the invoking checkout.
+fn node_source_root(ws: &Workspace) -> PathBuf {
+    match ws.mode {
+        Mode::Normal => ws.work.clone(),
+        Mode::Undercover => ws.home.join(TREE_DIR),
     }
 }
 
@@ -642,19 +864,72 @@ fn write_under_root(root: &Path, dir: &str, name: &str, content: &str) -> Result
         .map_err(|e| SteleError::internal(format!("write {dir}/{name}: {e}")))
 }
 
-/// Ensure `CLAUDE.md` exists as the `@AGENTS.md` shim when the repo root declares a
-/// node (§3.3). A CLAUDE.md that already exists is the team's and is never overwritten,
-/// even when it differs.
-fn ensure_claude_shim(root: &Path, lock: &Lock) -> Result<()> {
+/// Ensure the harness shim exists when the graph declares a system node (§3.3/§3.5),
+/// mode-aware. Normal: `CLAUDE.md` = `@AGENTS.md` at the graph home (today's behavior,
+/// byte-identical). Undercover: `CLAUDE.local.md` at the invoking WORK-tree root, a single
+/// relative `@`-import of the overlay root node (§3.5). Both are only-if-absent — an
+/// existing shim is the operator's (or team's) and is never overwritten, even when it
+/// differs. Like the §3.3 `CLAUDE.md` shim this is ensure-on-write only; `emit --check`
+/// does NOT diff it (the shim is not a generated region — see [`emit_check`]).
+fn ensure_shim(ws: &Workspace, lock: &Lock) -> Result<()> {
     if !lock.nodes.contains_key(crate::model::SYSTEM_ID) {
         return Ok(());
     }
-    let path = root.join(CLAUDE_SHIM);
-    if path.exists() {
-        return Ok(());
+    match ws.mode {
+        Mode::Normal => {
+            let path = ws.home.join(CLAUDE_SHIM);
+            if path.exists() {
+                return Ok(());
+            }
+            std::fs::write(&path, CLAUDE_SHIM_CONTENT)
+                .map_err(|e| SteleError::internal(format!("write {CLAUDE_SHIM}: {e}")))
+        }
+        Mode::Undercover => {
+            // The shim belongs at the invoking WORK-TREE ROOT (§3.5), not at `ws.work` (the cwd):
+            // from a subdir, `ws.work` is that subdir, and a `CLAUDE.local.md` written there is not
+            // matched by the root-anchored `/CLAUDE.local.md` exclude entry — so it would leak into
+            // `git status`. Resolve the top-level via git; fall back to `ws.work` only if git will
+            // not answer (already inside a resolved undercover invocation, so this is near-total).
+            let root = git_toplevel(&ws.work).unwrap_or_else(|| ws.work.clone());
+            let path = root.join(CLAUDE_LOCAL_SHIM);
+            if path.exists() {
+                return Ok(());
+            }
+            let import = shim_import_path(&root, &ws.home);
+            let content = format!("@{}\n", import.to_string_lossy().replace('\\', "/"));
+            std::fs::write(&path, content)
+                .map_err(|e| SteleError::internal(format!("write {CLAUDE_LOCAL_SHIM}: {e}")))
+        }
     }
-    std::fs::write(&path, CLAUDE_SHIM_CONTENT)
-        .map_err(|e| SteleError::internal(format!("write {CLAUDE_SHIM}: {e}")))
+}
+
+/// The relative path from the canonicalized work-tree root to the overlay root node file
+/// `<home>/.stele/tree/AGENTS.md` (§3.5), for the undercover shim's `@`-import. Both roots
+/// are canonicalized (symlinks resolved on each, per §3.5) before comparison; the path is
+/// then the common canonical prefix stripped, one `..` per remaining work component, the
+/// remaining home components, and the overlay tail. Same checkout → `.stele/tree/AGENTS.md`;
+/// a work tree one level below the home → `../.stele/tree/AGENTS.md`; a sibling worktree →
+/// `../<home-dir>/.stele/tree/AGENTS.md`.
+fn shim_import_path(work: &Path, home: &Path) -> PathBuf {
+    let canon_work = work.canonicalize().unwrap_or_else(|_| work.to_path_buf());
+    let canon_home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
+    let work_comps: Vec<_> = canon_work.components().collect();
+    let home_comps: Vec<_> = canon_home.components().collect();
+    let common = work_comps
+        .iter()
+        .zip(&home_comps)
+        .take_while(|(a, b)| a == b)
+        .count();
+    let mut rel = PathBuf::new();
+    for _ in common..work_comps.len() {
+        rel.push("..");
+    }
+    for comp in &home_comps[common..] {
+        rel.push(comp.as_os_str());
+    }
+    rel.push(TREE_DIR);
+    rel.push("AGENTS.md");
+    rel
 }
 
 /// Render one `.claude/rules/<slug>.md` per node that declares claims (§3.3, opt-in).
@@ -728,8 +1003,8 @@ fn load_committed(root: &Path) -> Result<Lock> {
 /// (identity, commands) render from the system node here; items 3–6 (hazards, router,
 /// indexes, engine) reuse the `emit` region renderer so `root` and the materialized
 /// root AGENTS.md never diverge.
-fn cmd_root(root: &Path) -> Result<CommandOutput> {
-    let lock = load_committed(root)?;
+fn cmd_root(ws: &Workspace) -> Result<CommandOutput> {
+    let lock = load_committed(&ws.home)?;
     let system = lock.nodes.get(SYSTEM_ID).ok_or_else(|| {
         SteleError::input_msg("the repo root declares no `kind: system` node; nothing to render")
     })?;
@@ -742,11 +1017,11 @@ fn cmd_root(root: &Path) -> Result<CommandOutput> {
 /// `stele node <id>` (§5.1): one node, all fields, human-readable. Accepts an
 /// abbreviated id when it names exactly one node (§2.4); an unknown id is exit 2
 /// listing near-miss candidates.
-fn node(root: &Path, args: &[&str]) -> Result<CommandOutput> {
+fn node(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
     let Some(query) = args.get(1) else {
         return Err(SteleError::input_msg("usage: stele node <id>"));
     };
-    let lock = load_committed(root)?;
+    let lock = load_committed(&ws.home)?;
     let id = resolve_node_id(&lock, query)?;
     let node = &lock.nodes[&id];
     Ok(CommandOutput::new(node_json(node), Some(render_node(node))))
@@ -758,14 +1033,14 @@ const DEFAULT_UNFOLD_DEPTH: u32 = 1;
 /// `stele unfold <id> [--depth N]` (§5.1): the full node, then its neighbours out to
 /// `depth` hops as `id · kind · purpose` summaries. A neighbour is a child (`contains`)
 /// or a `depends` target; depth 2 expands each neighbour's neighbours in turn.
-fn unfold(root: &Path, args: &[&str]) -> Result<CommandOutput> {
+fn unfold(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
     let Some(query) = args.get(1) else {
         return Err(SteleError::input_msg(
             "usage: stele unfold <id> [--depth N]",
         ));
     };
     let depth = parse_depth(args)?;
-    let lock = load_committed(root)?;
+    let lock = load_committed(&ws.home)?;
     let id = resolve_node_id(&lock, query)?;
     let node = &lock.nodes[&id];
     let hops = collect_hops(&lock, &id, depth);
@@ -788,8 +1063,8 @@ fn unfold(root: &Path, args: &[&str]) -> Result<CommandOutput> {
 /// — with `--touching` — the claims of the node owning `<path>` PLUS all its ancestors.
 /// Invariant EXPOSURE surfaces upward (a root invariant reaches every descendant), the
 /// §4.2 contrast to structural permission, which never inherits.
-fn invariants(root: &Path, args: &[&str]) -> Result<CommandOutput> {
-    let lock = load_committed(root)?;
+fn invariants(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
+    let lock = load_committed(&ws.home)?;
     let touching = flag_value(args, "--touching")?;
     let scope: Option<Vec<String>> = touching.map(|path| owning_chain(&lock, path));
     let rows = collect_claims(&lock, "invariant", scope.as_deref());
@@ -802,8 +1077,8 @@ fn invariants(root: &Path, args: &[&str]) -> Result<CommandOutput> {
 /// `stele hazards [--node <id>]` (§5.1): every active hazard repo-wide, or just the
 /// hazards declared by `<id>` (abbreviations accepted). No upward exposure — a hazard
 /// is reported by the node that owns it.
-fn hazards(root: &Path, args: &[&str]) -> Result<CommandOutput> {
-    let lock = load_committed(root)?;
+fn hazards(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
+    let lock = load_committed(&ws.home)?;
     let scope: Option<Vec<String>> = match flag_value(args, "--node")? {
         Some(query) => Some(vec![resolve_node_id(&lock, query)?]),
         None => None,
@@ -817,8 +1092,8 @@ fn hazards(root: &Path, args: &[&str]) -> Result<CommandOutput> {
 
 /// `stele nodes [--kind <kind>]` (§5.1): every node as `id · kind · purpose`, optionally
 /// filtered to a single kind.
-fn nodes(root: &Path, args: &[&str]) -> Result<CommandOutput> {
-    let lock = load_committed(root)?;
+fn nodes(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
+    let lock = load_committed(&ws.home)?;
     let kind = flag_value(args, "--kind")?;
     let rows: Vec<&LockNode> = lock
         .nodes
@@ -1241,6 +1516,22 @@ fn join_or_none(values: &[String]) -> String {
 /// between them, for `emit` to fill later.
 const EMPTY_REGION: &str = "<!-- stele:begin router -->\n<!-- stele:end -->\n";
 
+/// The `init --undercover` flag (§3.5): scaffold a private overlay graph instead of the
+/// in-tree one. The one extra token `init` accepts; inert on every other verb.
+const UNDERCOVER_FLAG: &str = "--undercover";
+
+/// The marker-fenced managed block `init --undercover` maintains in `<common-dir>/info/exclude`
+/// (§3.5): its begin/end lines bracket the two unconditional exclude entries so the overlay
+/// and the shim never surface in `git status`. Rewritten in place, never touching a line
+/// outside the fence.
+const EXCLUDE_BEGIN: &str = "# stele:begin undercover";
+const EXCLUDE_END: &str = "# stele:end undercover";
+const EXCLUDE_ENTRIES: [&str; 2] = ["/.stele/", "/CLAUDE.local.md"];
+
+/// The one-line, timestamp-free content of the `.stele/undercover` marker (§3.5) — a
+/// deterministic provenance stamp, so re-running `init --undercover` rewrites it byte-identically.
+const UNDERCOVER_MARKER_CONTENT: &str = "stele undercover\n";
+
 /// `stele init` (§7): scan the tracked tree, propose node boundaries, and scaffold a
 /// skeleton `stele` block + empty generated region for each proposed node that has no
 /// stele block yet. Proposals: the repo root (system) plus each top-level directory
@@ -1254,22 +1545,39 @@ const EMPTY_REGION: &str = "<!-- stele:begin router -->\n<!-- stele:end -->\n";
 /// sees them — a staging failure is a warning plus a `git add` instruction, never a
 /// post-write abort. `init` never deletes content, never writes inside a generated
 /// region, and never writes the lock.
-fn init(root: &Path, args: &[&str]) -> Result<CommandOutput> {
+fn init(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
+    // `--undercover` (§3.5) is the ONE extra token `init` accepts beyond `--json`; any other
+    // is still an exit-2 input error, and the flag is inert on every other verb. With it,
+    // init forks to the overlay scaffold; without it, normal init is byte-identical to today.
+    if args.contains(&UNDERCOVER_FLAG) {
+        let rest: Vec<&str> = args
+            .iter()
+            .copied()
+            .filter(|a| *a != UNDERCOVER_FLAG)
+            .collect();
+        reject_extra_args(&rest, "stele init [--undercover] [--json]")?;
+        return init_undercover(ws);
+    }
     reject_extra_args(args, "stele init [--json]")?;
-    let tracked = tracked_files(root)?;
+    // Normal-mode init scaffolds and stages the WORK tree in place (§7); the git spawns,
+    // the tracked reads, and the source writes all target the invoking checkout. (Phase 3
+    // forks `init --undercover` to scaffold the `<home>/.stele/tree/` overlay instead, with
+    // no `git add`.)
+    let work = &ws.work;
+    let tracked = tracked_files(work)?;
     let adr_dir = detect_adr_dir(&tracked);
-    let existing = existing_node_dirs(root, &tracked)?;
+    let existing = existing_node_dirs(work, &tracked)?;
 
     let mut written: Vec<String> = Vec::new();
-    if !existing.contains("") && !skip_if_ignored(root, "AGENTS.md")? {
-        scaffold_node(root, "AGENTS.md", NodeKind::System, &adr_dir, &mut written)?;
+    if !existing.contains("") && !skip_if_ignored(work, "AGENTS.md")? {
+        scaffold_node(work, "AGENTS.md", NodeKind::System, &adr_dir, &mut written)?;
     }
     for dir in proposable_top_dirs(&tracked, &existing, &adr_dir) {
         let path = format!("{dir}/AGENTS.md");
-        if skip_if_ignored(root, &path)? {
+        if skip_if_ignored(work, &path)? {
             continue;
         }
-        scaffold_node(root, &path, NodeKind::Container, &adr_dir, &mut written)?;
+        scaffold_node(work, &path, NodeKind::Container, &adr_dir, &mut written)?;
     }
     // An already-authored AGENTS.md that carries a stele block but no generated region
     // gets an empty region appended (§3.1: `emit` exits 2 pointing here — `init` must
@@ -1277,11 +1585,11 @@ fn init(root: &Path, args: &[&str]) -> Result<CommandOutput> {
     // block and region is left byte-identical (the acme idempotency oracle). These are
     // already VCS-tracked, so they never hit the gitignore pre-filter.
     for rel in &tracked {
-        ensure_region_for_block(root, rel, &mut written)?;
+        ensure_region_for_block(work, rel, &mut written)?;
     }
     // One batch, after every write — staging is best-effort (a warning, never an abort).
     if !written.is_empty() {
-        git_add(root, &written);
+        git_add(work, &written);
     }
     Ok(CommandOutput::new(
         json!({ "wrote": written }),
@@ -1290,6 +1598,229 @@ fn init(root: &Path, args: &[&str]) -> Result<CommandOutput> {
             written.len()
         )),
     ))
+}
+
+/// `stele init --undercover` (§3.5): scaffold a private overlay graph rooted at the parent
+/// of the git common dir, never touching the tracked tree. The steps run in a fixed order —
+/// (1) resolve the home directly from the common dir (the marker does not exist yet, so
+/// `ws.mode` is Normal at entry); (2) refuse a submodule checkout (home inside `.git`);
+/// (3) reject mutual exclusion with a tracked shared graph BEFORE any write; (4) install the
+/// `info/exclude` managed block FIRST, before any artifact exists, so a failed exclude write
+/// aborts init having created nothing (no leak window); (5) write the deterministic marker;
+/// (6) scaffold the overlay root system node plus one container per proposable top dir, leaving
+/// any existing overlay file untouched. No `git add`, no `git check-ignore` filter — the overlay
+/// is never tracked, so `git status` stays clean. Re-running is idempotent (exit 0).
+fn init_undercover(ws: &Workspace) -> Result<CommandOutput> {
+    let work = &ws.work;
+    // (1) Home = parent of the canonicalized git common dir (as [`resolve_workspace`] resolves
+    // it); a non-repo cwd is the same exit-2 input error the tracked scan would give.
+    let common = git_common_dir(work).ok_or_else(|| {
+        SteleError::input_msg(
+            "not a git repository (stele undercover roots its private graph at the git common dir)",
+        )
+    })?;
+    let home = common.parent().ok_or_else(|| {
+        SteleError::internal("git common dir has no parent to root the graph home".to_string())
+    })?;
+
+    // (2) Submodule refusal (§3.5): in a submodule the git common dir is
+    // `<superproject>/.git/modules/<name>`, so the home would fall INSIDE the superproject's
+    // `.git` — the overlay and marker would land in version-control internals. A `.git` component
+    // anywhere in the resolved home covers every submodule shape → exit 2, no write. (v2 concern.)
+    if home.components().any(|c| c.as_os_str() == ".git") {
+        return Err(SteleError::input_msg(
+            "undercover mode does not support submodule checkouts (the git common dir lives \
+             inside the superproject)",
+        ));
+    }
+
+    let tracked = tracked_files(work)?;
+    // (3) Mutual exclusion (§3.5): a tracked stele-block AGENTS.md or a tracked `.stele/` path
+    // means the repo already carries a shared committed graph — refuse before writing a byte.
+    reject_shared_graph_conflict(work, &tracked)?;
+
+    // (4) Exclude block FIRST — before any artifact under `<home>/.stele/` exists (§3.5). Install
+    // it before the marker so that if `info/exclude` cannot be written (a read-only `.git/info`),
+    // init aborts having created nothing: no marker, no overlay, nothing to leak into `git status`.
+    // Gitignore entries for not-yet-existent paths are harmless. This is the ordering guarantee.
+    ensure_info_exclude(&common)?;
+
+    // (5) Marker — its presence is what selects undercover mode on every later invocation.
+    write_undercover_marker(home)?;
+
+    // (6) Overlay scaffold: reuse the normal-init proposal set verbatim against the tracked
+    // roster. Post-guard `existing` is empty (no tracked node), so every top dir is proposed.
+    let adr_dir = detect_adr_dir(&tracked);
+    let existing = existing_node_dirs(work, &tracked)?;
+    let overlay_root = home.join(TREE_DIR);
+    let mut written: Vec<String> = Vec::new();
+    scaffold_overlay_node(
+        &overlay_root,
+        "AGENTS.md",
+        NodeKind::System,
+        &adr_dir,
+        &mut written,
+    )?;
+    for dir in proposable_top_dirs(&tracked, &existing, &adr_dir) {
+        let path = format!("{dir}/AGENTS.md");
+        scaffold_overlay_node(
+            &overlay_root,
+            &path,
+            NodeKind::Container,
+            &adr_dir,
+            &mut written,
+        )?;
+    }
+
+    Ok(CommandOutput::new(
+        json!({ "wrote": written }),
+        Some(format!(
+            "stele init --undercover: scaffolded {} node(s)",
+            written.len()
+        )),
+    ))
+}
+
+/// The mutual-exclusion guard for `init --undercover` (§3.5): a repo already carrying a
+/// shared, committed graph — any tracked `AGENTS.md` with a stele block, or any tracked path
+/// under `.stele/` — cannot also run undercover (mixing is a v2 concern). Exit 2, no write.
+fn reject_shared_graph_conflict(work: &Path, tracked: &[PathBuf]) -> Result<()> {
+    let has_tracked_node = !existing_node_dirs(work, tracked)?.is_empty();
+    let has_tracked_stele = tracked.iter().any(|rel| {
+        let posix = rel.to_string_lossy().replace('\\', "/");
+        posix == LOCK_DIR || posix.starts_with(&format!("{LOCK_DIR}/"))
+    });
+    if has_tracked_node || has_tracked_stele {
+        return Err(SteleError::input_msg(
+            "repo already carries a shared stele graph; undercover mode cannot coexist \
+             (mixing is v2)",
+        ));
+    }
+    Ok(())
+}
+
+/// Write the `.stele/undercover` marker at the graph home (§3.5), creating `<home>/.stele/`.
+/// Content is the deterministic one-liner, so a re-run rewrites it byte-identically.
+fn write_undercover_marker(home: &Path) -> Result<()> {
+    let path = home.join(UNDERCOVER_MARKER);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| SteleError::internal(format!("create {LOCK_DIR}: {e}")))?;
+    }
+    std::fs::write(&path, UNDERCOVER_MARKER_CONTENT)
+        .map_err(|e| SteleError::internal(format!("write {UNDERCOVER_MARKER}: {e}")))
+}
+
+/// Scaffold one overlay node (§3.5) under `overlay_root`, leaving any existing overlay file
+/// untouched (the §7 idempotency/non-destructive discipline: a re-run finds every file present
+/// and rewrites nothing). An absent target takes [`scaffold_node`]'s new-file path.
+fn scaffold_overlay_node(
+    overlay_root: &Path,
+    rel_path: &str,
+    kind: NodeKind,
+    adr_dir: &str,
+    written: &mut Vec<String>,
+) -> Result<()> {
+    if overlay_root.join(rel_path).exists() {
+        return Ok(());
+    }
+    scaffold_node(overlay_root, rel_path, kind, adr_dir, written)
+}
+
+/// Install the marker-fenced managed block into `<common-dir>/info/exclude` (§3.5), creating
+/// `info/` and the file if absent. Idempotent replace-in-place: an existing fence has ONLY its
+/// bracketed lines rewritten; otherwise the block is appended (with a separating newline when
+/// the file is non-empty and unterminated). Lines outside the fence are never touched.
+fn ensure_info_exclude(common: &Path) -> Result<()> {
+    let dir = common.join("info");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| SteleError::internal(format!("create {}: {e}", dir.display())))?;
+    let path = dir.join("exclude");
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(e) if e.kind() == ErrorKind::NotFound => String::new(),
+        Err(e) => {
+            return Err(SteleError::internal(format!(
+                "read {}: {e}",
+                path.display()
+            )));
+        }
+    };
+    let updated = rewrite_exclude_block(&existing);
+    if updated != existing {
+        // Atomic (§3.5): temp file in the same directory then rename, mirroring
+        // [`write_lock_atomic`] — an interrupted write never leaves a half-rewritten exclude
+        // (which could unhide the overlay). The temp lives inside `.git/info/`, never the work
+        // tree, so it cannot itself surface in `git status`.
+        write_atomic(&dir, "exclude", &updated)?;
+    }
+    Ok(())
+}
+
+/// Write `name` under `dir` via a unique temp file + rename (§3.5/§5.3 atomicity): an
+/// interrupted or partial write never replaces the live file. The temp name carries the
+/// pid + a process-local counter so concurrent writers never collide, and it is cleaned up
+/// best-effort if the rename fails. Shared by the `info/exclude` install; the lock has its
+/// own [`write_lock_atomic`] (same discipline, its own create-dir step).
+fn write_atomic(dir: &Path, name: &str, bytes: &str) -> Result<()> {
+    static TEMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = TEMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temp_name = format!(".{name}.tmp.{}.{seq}", std::process::id());
+    let temp = dir.join(&temp_name);
+    std::fs::write(&temp, bytes)
+        .map_err(|e| SteleError::internal(format!("write {}: {e}", temp.display())))?;
+    if let Err(e) = std::fs::rename(&temp, dir.join(name)) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(SteleError::internal(format!(
+            "rename into {}: {e}",
+            dir.join(name).display()
+        )));
+    }
+    Ok(())
+}
+
+/// The `info/exclude` content with the managed block (§3.5) present exactly once. When the
+/// fence already exists, the inclusive begin..end span is replaced in place and every other
+/// line is byte-preserved; otherwise the block is appended after a newline separator. The
+/// block itself is the two begin/end fence lines bracketing [`EXCLUDE_ENTRIES`].
+fn rewrite_exclude_block(existing: &str) -> String {
+    let block = {
+        let mut b = format!("{EXCLUDE_BEGIN}\n");
+        for entry in EXCLUDE_ENTRIES {
+            b.push_str(entry);
+            b.push('\n');
+        }
+        b.push_str(EXCLUDE_END);
+        b.push('\n');
+        b
+    };
+    let lines: Vec<&str> = existing.lines().collect();
+    let begin = lines.iter().position(|l| *l == EXCLUDE_BEGIN);
+    let end = lines.iter().position(|l| *l == EXCLUDE_END);
+    if let (Some(b), Some(e)) = (begin, end)
+        && b <= e
+    {
+        let mut out = String::new();
+        for line in &lines[..b] {
+            out.push_str(line);
+            out.push('\n');
+        }
+        out.push_str(&block);
+        let tail = &lines[e + 1..];
+        for (i, line) in tail.iter().enumerate() {
+            out.push_str(line);
+            if i + 1 < tail.len() || existing.ends_with('\n') {
+                out.push('\n');
+            }
+        }
+        return out;
+    }
+    let mut out = existing.to_string();
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(&block);
+    out
 }
 
 /// Whether `path` (a repo-root-relative POSIX path `init` is about to scaffold) is
@@ -1567,21 +2098,98 @@ fn git_add(root: &Path, paths: &[String]) {
 
 // ─── the source pipeline (§5.1) ──────────────────────────────────────────────
 
-/// Sources → in-memory graph (§5.1): parse every VCS-tracked AGENTS.md into nodes,
-/// scan the tracked tree for comment anchors (§2.4), resolve each claim's anchor to
+/// One node source (§2.4/§3.5): `rel` is the repo-root-relative path fed to
+/// [`parse::parse_agents_file`] (so node id and territory come out identical in both
+/// modes), `source` is the absolute path the bytes are read from. In normal mode the two
+/// name the same tracked file; in undercover mode `rel` is the mirror path (the
+/// `.stele/tree/` prefix stripped) and `source` is the overlay file at the graph home.
+struct NodeSource {
+    rel: PathBuf,
+    source: PathBuf,
+}
+
+/// The node-source roster for one build (§2.4/§3.5), mode-aware. Normal: every tracked
+/// `AGENTS.md`, `rel` the tracked path and `source` under `ws.work` — today's behavior.
+/// Undercover: a sorted recursive filesystem walk of `<home>/.stele/tree/**/AGENTS.md`
+/// (never `git ls-files`, never `.steleignore`-filtered — these are authored sources, not
+/// scanned code, §3.5), `rel` the mirror path with the `.stele/tree/` prefix stripped and
+/// `source` the overlay absolute path. Every other build input (anchors, extraction, ADRs,
+/// freshness) stays on `ws.work` + tracked, unchanged.
+fn node_sources(ws: &Workspace, tracked: &[PathBuf]) -> Result<Vec<NodeSource>> {
+    match ws.mode {
+        Mode::Normal => Ok(tracked
+            .iter()
+            .filter(|rel| rel.file_name().is_some_and(|name| name == "AGENTS.md"))
+            .map(|rel| NodeSource {
+                rel: rel.clone(),
+                source: ws.work.join(rel),
+            })
+            .collect()),
+        Mode::Undercover => {
+            let tree_root = ws.home.join(TREE_DIR);
+            let mut sources = Vec::new();
+            walk_overlay_sources(&tree_root, &tree_root, &mut sources)?;
+            sources.sort_by(|a, b| a.rel.cmp(&b.rel));
+            Ok(sources)
+        }
+    }
+}
+
+/// Recursively collect every `AGENTS.md` under the overlay `tree_root` (§3.5) as a
+/// [`NodeSource`] whose `rel` is the path with the `tree_root` prefix stripped (mirroring
+/// tree paths: `<tree_root>/apps/api/AGENTS.md` → `apps/api/AGENTS.md`). A missing overlay
+/// root is empty, not an error (an undercover repo with no scaffold yet builds an empty
+/// graph). Order is imposed by the caller's sort.
+fn walk_overlay_sources(dir: &Path, tree_root: &Path, out: &mut Vec<NodeSource>) -> Result<()> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(e) => {
+            return Err(SteleError::internal(format!(
+                "read overlay {}: {e}",
+                dir.display()
+            )));
+        }
+    };
+    for entry in entries {
+        let entry = entry.map_err(|e| SteleError::internal(format!("read overlay entry: {e}")))?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|e| SteleError::internal(format!("stat {}: {e}", path.display())))?;
+        if file_type.is_dir() {
+            walk_overlay_sources(&path, tree_root, out)?;
+        } else if path.file_name().is_some_and(|name| name == "AGENTS.md") {
+            let rel = path
+                .strip_prefix(tree_root)
+                .map_err(|e| {
+                    SteleError::internal(format!(
+                        "overlay path outside tree {}: {e}",
+                        path.display()
+                    ))
+                })?
+                .to_path_buf();
+            out.push(NodeSource { rel, source: path });
+        }
+    }
+    Ok(())
+}
+
+/// Sources → in-memory graph (§5.1): parse every node source (§3.5, [`node_sources`]) into
+/// nodes, scan the tracked tree for comment anchors (§2.4), resolve each claim's anchor to
 /// a `file:line` (§2.4), index the repo's ADRs (§2.6), and derive import edges
 /// (§2.3/§4.2). Shared by `build` and `check`, so every derived slot is recomputed
-/// identically on both paths. `verified` is stamped only by `build` afterward (§4.5).
-fn build_graph(root: &Path) -> Result<Graph> {
+/// identically on both paths. Node discovery is mode-aware (normal: tracked `AGENTS.md`;
+/// undercover: the overlay walk); every other scan runs over `ws.work` + tracked
+/// unchanged. `verified` is stamped only by `build` afterward (§4.5).
+fn build_graph(ws: &Workspace) -> Result<Graph> {
+    let root = &ws.work;
     let tracked = tracked_files(root)?;
 
     let mut graph = Graph::default();
-    for rel in &tracked {
-        if rel.file_name().is_none_or(|name| name != "AGENTS.md") {
-            continue;
-        }
-        let contents = read_node_source(root, rel)?;
-        if let Some(node) = parse::parse_agents_file(rel, &contents)? {
+    for source in node_sources(ws, &tracked)? {
+        let contents = read_node_source(&source.source, &source.rel)?;
+        if let Some(node) = parse::parse_agents_file(&source.rel, &contents)? {
             graph.insert(node)?;
         }
     }
@@ -1606,12 +2214,14 @@ fn build_graph(root: &Path) -> Result<Graph> {
     Ok(graph)
 }
 
-/// Read a node source (AGENTS.md, §3.1). Unlike the scan's binary-skip (§2.4), a
-/// declared node source that is not valid UTF-8 is a hard §5.3 input error naming the
-/// file — a node whose own bytes cannot be read is a repo-out-of-spec condition, never
-/// silently dropped. A genuine IO failure stays a §5.3 internal error.
-fn read_node_source(root: &Path, rel: &Path) -> Result<String> {
-    match std::fs::read(root.join(rel)) {
+/// Read a node source (AGENTS.md, §3.1) from its absolute `source` path, naming the
+/// repo-root-relative `rel` in any error (identical text in both modes, §3.5). Unlike the
+/// scan's binary-skip (§2.4), a declared node source that is not valid UTF-8 is a hard
+/// §5.3 input error naming the file — a node whose own bytes cannot be read is a
+/// repo-out-of-spec condition, never silently dropped. A genuine IO failure stays a §5.3
+/// internal error.
+fn read_node_source(source: &Path, rel: &Path) -> Result<String> {
+    match std::fs::read(source) {
         Ok(bytes) => String::from_utf8(bytes).map_err(|_| {
             SteleError::input_msg(format!(
                 "{}: node source is not valid UTF-8 (§3.1)",
@@ -1750,17 +2360,19 @@ fn git_untracked_files(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-/// Warn (stderr only) about untracked AGENTS.md files that declare a stele node — a real
-/// adoption trap (§2.4): `build`/`check` scan VCS-tracked files ONLY, so an agent that
-/// hand-creates an AGENTS.md with a stele block but never `git add`s it leaves the graph
-/// silently short a node with no other signal. For each untracked, non-gitignored,
-/// non-steleignored AGENTS.md whose content carries a stele block, print ONE warning line.
-/// This is purely diagnostic: stdout, the process exit code, and the `--json` envelope are
-/// all untouched (machine consumers read stdout/exit, unaffected). Excluded from the warning
-/// (each for a reason): a gitignored path (`--exclude-standard` drops it; it could never be
-/// tracked), a steleignored path (already invisible to every scan, §2.4), and a blockless
-/// AGENTS.md (`Ok(None)` = plain-markdown degradation, not a node).
-fn warn_untracked_node_files(root: &Path) -> Result<()> {
+/// Warn (stderr only) about work-tree AGENTS.md files that declare a stele node the build's
+/// roster will never read — a real adoption trap, mode-aware (§2.4/§3.5). For each untracked,
+/// non-gitignored, non-steleignored work-tree AGENTS.md whose content carries a stele block,
+/// print ONE warning line. This is purely diagnostic: stdout, the process exit code, and the
+/// `--json` envelope are all untouched. Excluded (each for a reason): a gitignored/excluded
+/// path (`--exclude-standard` drops it — including the undercover overlay under `.stele/`,
+/// hidden by the `info/exclude` block, §3.5), a steleignored path (already invisible to every
+/// scan, §2.4), and a blockless AGENTS.md (`Ok(None)` = plain-markdown degradation, not a
+/// node). The message differs by mode: Normal names the untracked node the tracked scan misses
+/// (run `git add`); Undercover names a node authored outside the overlay (build reads only
+/// `.stele/tree/`), which is the confusion signal, not an adoption gap.
+fn warn_untracked_node_files(ws: &Workspace) -> Result<()> {
+    let root = &ws.work;
     let ignore = Steleignore::load(root)?;
     for rel in git_untracked_files(root)? {
         if rel.file_name().is_none_or(|name| name != "AGENTS.md") {
@@ -1776,11 +2388,18 @@ fn warn_untracked_node_files(root: &Path) -> Result<()> {
         let Ok(contents) = std::fs::read_to_string(root.join(&rel)) else {
             continue;
         };
-        if !matches!(parse::parse_agents_file(&rel, &contents), Ok(None)) {
-            eprintln!(
+        if matches!(parse::parse_agents_file(&rel, &contents), Ok(None)) {
+            continue;
+        }
+        match ws.mode {
+            Mode::Normal => eprintln!(
                 "warning: {posix} declares a stele node but is not tracked — run git add \
                  (build scans tracked files only, §2.4)"
-            );
+            ),
+            Mode::Undercover => eprintln!(
+                "warning: {posix} declares a stele node but undercover mode reads node sources \
+                 from .stele/tree/ — move it into the overlay"
+            ),
         }
     }
     Ok(())
@@ -2001,6 +2620,18 @@ fn write_lock_atomic(root: &Path, bytes: &str) -> Result<()> {
 mod tests {
     use super::*;
 
+    /// A normal-mode workspace rooted at `root` — `home` and `work` the identical path,
+    /// the only mode a direct verb call exercises (§3.5). Mirrors what [`resolve_workspace`]
+    /// returns for a normal checkout, without the `resolve_workspace` git spawn.
+    fn normal_workspace(root: &Path) -> Workspace {
+        Workspace {
+            common: root.to_path_buf(),
+            home: root.to_path_buf(),
+            mode: Mode::Normal,
+            work: root.to_path_buf(),
+        }
+    }
+
     /// Run `git` in `root`, asserting success — the tracked-file/staging surface `init`
     /// needs (§2.4). Kept minimal: `init` reads `git ls-files` and calls `git add`.
     fn git(root: &Path, args: &[&str]) {
@@ -2050,7 +2681,8 @@ mod tests {
         git(root, &["add", "-A"]);
         git(root, &["commit", "-m", "seed"]);
 
-        init(root, &["init"]).unwrap();
+        let ws = normal_workspace(root);
+        init(&ws, &["init"]).unwrap();
         let after = std::fs::read_to_string(root.join("AGENTS.md")).unwrap();
         // Authored bytes are preserved verbatim as a prefix; a region now exists.
         assert!(
@@ -2064,7 +2696,7 @@ mod tests {
             "no region appended:\n{after}"
         );
         // Second init leaves the file byte-identical (region already present).
-        init(root, &["init"]).unwrap();
+        init(&ws, &["init"]).unwrap();
         assert_eq!(
             std::fs::read_to_string(root.join("AGENTS.md")).unwrap(),
             after

@@ -6,10 +6,11 @@
 
 A Rust single-binary that compiles a typed knowledge graph from three authored sources — the file tree, comment anchors, and typed blocks in AGENTS.md files — reconciles it against a derived graph extracted from the code, asserts the two against each other in CI (both directions: an undeclared dependency means the code broke the signature; an unbacked declaration means the doc lied), serves the graph to agents as queries, and materializes standard-compliant AGENTS.md files so every harness works with zero engine.
 
-**Status: v1 implemented, self-hosting.** SPEC Draft 0.8 is the contract; the Rust engine (`stele-cli`, binary `stele`) implements it, runs on this repository (`.stele/graph.lock` is committed, CI runs `stele check` + `stele emit --check`), and the EXAMPLE.md failure gallery is its integration-test oracle. MCP `stele serve` (SPEC §5.2) is shipped: a blocking JSON-RPC 2.0 stdio server (MCP protocol 2025-11-25) exposing the eight read verbs as tools; the root AGENTS.md engine lines describe the full degradation ladder — files → CLI → MCP. (2026-07-20)
+**Status: v1 released and self-hosting.** SPEC Draft 0.8 is the contract; the Rust engine (`stele-cli`, binary `stele`) implements it and runs on this repository (`.stele/graph.lock` is committed, CI runs `stele check` + `stele emit --check`), with the EXAMPLE.md failure gallery as its integration-test oracle. The full surface is shipped: the six-class assertion suite, `emit` with byte-identity checking, the query verbs, and MCP `stele serve` (JSON-RPC 2.0 over stdio exposing the eight read verbs as tools) — the complete degradation ladder, files → CLI → MCP. Binary releases (v0.1.1) ship per-platform from the tag-triggered release workflow, and the first external adoption is live: a real umbrella repo runs a pinned `stele check` + `stele emit --check` gate in CI. (2026-07-21)
 
 | artifact | what it is |
 | --- | --- |
+| [GUIDE.md](./GUIDE.md) | the five-minute adoption path — install, scaffold, anchor, build, enforce, query |
 | [SPEC.md](./SPEC.md) | the v1 specification — model, sources, assertion suite, query surface, process contract |
 | [EXAMPLE.md](./EXAMPLE.md) | worked example on a fictional monorepo: every artifact, an agent session with token accounting, a CI failure gallery |
 | [research/report.md](./research/report.md) | the evidence base: cited state-of-the-art survey the design decisions trace to |
@@ -23,7 +24,7 @@ A Rust single-binary that compiles a typed knowledge graph from three authored s
 curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash
 ```
 
-Or from source: `cargo install --git https://github.com/jgeschwendt/stele stele-cli`.
+Or from source: `cargo install --git https://github.com/jgeschwendt/stele stele-cli`. Then see [GUIDE.md](./GUIDE.md) — `stele init` to scaffold, `stele build` + `stele emit` to compile and materialize the graph, `stele check` in CI to enforce it.
 
 ## Why this exists (the one-paragraph version)
 

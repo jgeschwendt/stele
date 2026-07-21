@@ -20,6 +20,7 @@ This repo eats its own convention: the block above is a real stele node — `ste
 
 | where | what |
 | --- | --- |
+| GUIDE.md | the adoption path — install → init → anchor → build → CI |
 | SPEC.md | the v1 specification (read §1 constraints + §2 model first) |
 | EXAMPLE.md | worked example — read this first to feel the design |
 | research/ | evidence base: report, claim ledger, primary-source findings |

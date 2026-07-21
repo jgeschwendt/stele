@@ -1816,6 +1816,23 @@ const CARGO_BUILTINS: [&str; 19] = [
     "install", "new", "publish", "remove", "run", "test", "tree", "update",
 ];
 
+/// The shell builtins the liveness resolver (§4.6) treats as always-resolved — rung (a),
+/// ahead of PATH. A builtin is executed directly by the shell and has no executable file
+/// to find on `PATH`, so PATH resolution would false-flag it; worse, some hosts ship a
+/// PATH shim for a builtin (macOS `/usr/bin/cd`) and others do not, making resolution
+/// platform-dependent. This is the 15 POSIX.1-2017 special built-ins (§2.14) plus the
+/// ubiquitous regular built-ins standardized in the Shell & Utilities volume — `colon`
+/// and `dot` appear as their command tokens `:` and `.`, `test` as both `test` and `[`.
+/// Arguments past the first token are not inspected, consistent with the rest of §4.6.
+/// Source: pubs.opengroup.org/onlinepubs/9699919799/utilities/V3_chap02.html#tag_18_14
+/// (special built-ins) + .../V3_chap04.html (cd, echo, false, printf, pwd, read, test,
+/// true, type, ulimit, umask, wait). Alpha-sorted (ASCII).
+const SHELL_BUILTINS: [&str; 28] = [
+    ".", ":", "[", "break", "cd", "continue", "echo", "eval", "exec", "exit", "export", "false",
+    "printf", "pwd", "read", "readonly", "return", "set", "shift", "test", "times", "trap", "true",
+    "type", "ulimit", "umask", "unset", "wait",
+];
+
 /// The liveness class (§4.6). For every declared command on every node: parse it into
 /// shell-operator-separated segments and RESOLVE each segment's executable (always); and
 /// when `ctx.run_commands` is set, additionally EXECUTE the whole command from the repo
@@ -1994,6 +2011,13 @@ fn resolve_segment(
     let tokens = tokenize(segment);
     let words = skip_env_assignments(&tokens);
     let first = words.first()?.as_str();
+    // Rung (a): a shell builtin resolves unconditionally — it has no executable file to
+    // find on PATH, so PATH resolution would false-flag it. `cd` in particular ships as
+    // `/usr/bin/cd` on macOS but is builtin-only on Linux, which made resolution
+    // platform-dependent (a false liveness finding on CI hosts only) before this rung.
+    if SHELL_BUILTINS.contains(&first) {
+        return None;
+    }
     let sub = words.get(1).map(String::as_str);
 
     match (first, runners) {

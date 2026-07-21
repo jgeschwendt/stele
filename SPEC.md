@@ -209,7 +209,7 @@ Fallback signal (parser-less languages only): commits touching the anchored regi
 
 ### 4.6 Liveness
 
-Every declared command is parsed and its executable resolved; `check --run-commands` optionally executes them scoped (the bonfires tier — off by default, on for nightly). Each command string is tokenized with POSIX shell word-splitting; leading `VAR=value` assignments are skipped; the first remaining token is the executable. It resolves if it is (a) on `PATH`, (b) a repo-relative file with the executable bit, or (c) a known task of a detected runner — `mix <task>` → `mix.exs`/`mix help`, `npm|pnpm|yarn run <s>` → `package.json` scripts, `cargo <sub>` → builtins+aliases, `just <r>` → justfile. Shell operators (`&&`, `||`, `|`, `;`) split the string into multiple commands, each resolved independently.
+Every declared command is parsed and its executable resolved; `check --run-commands` optionally executes them scoped (the bonfires tier — off by default, on for nightly). Each command string is tokenized with POSIX shell word-splitting; leading `VAR=value` assignments are skipped; the first remaining token is the executable. It resolves if it is (a) a POSIX shell builtin (`cd`, `test`, `export`, …), (b) on `PATH`, (c) a repo-relative file with the executable bit, or (d) a known task of a detected runner — `mix <task>` → `mix.exs`/`mix help`, `npm|pnpm|yarn run <s>` → `package.json` scripts, `cargo <sub>` → builtins+aliases, `just <r>` → justfile. Shell operators (`&&`, `||`, `|`, `;`) split the string into multiple commands, each resolved independently.
 
 ## 5. Query surface
 

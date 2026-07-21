@@ -125,6 +125,11 @@ pub enum Mode {
 /// `home` and `work` are the identical verbatim path, so threading them apart is a strict
 /// no-op; only undercover mode separates them.
 pub struct Workspace {
+    /// The git common directory (`git rev-parse --git-common-dir`, canonicalized) — the
+    /// directory whose `info/exclude` carries the undercover managed block (§3.5). Read only
+    /// in [`Mode::Undercover`] (for the self-healing exclude re-install); in [`Mode::Normal`]
+    /// it holds `work` verbatim (the cheapest value — never read).
+    pub common: PathBuf,
     pub home: PathBuf,
     pub mode: Mode,
     pub work: PathBuf,
@@ -169,6 +174,30 @@ fn git_common_dir(work: &Path) -> Option<PathBuf> {
     absolute.canonicalize().ok()
 }
 
+/// The canonicalized top-level of the work tree containing `work` (`git rev-parse
+/// --show-toplevel`), or `None` on any failure (non-repo cwd, git will not spawn,
+/// uncanonicalizable path). Distinct from [`git_common_dir`]'s home: the undercover shim
+/// (§3.5) belongs at the invoking WORK-TREE ROOT, not at `work` (which is the cwd — a subdir
+/// invocation would otherwise land `CLAUDE.local.md` deep in the tree, where the root-anchored
+/// `/CLAUDE.local.md` exclude entry never matches). In a linked worktree this is that
+/// worktree's own root — the correct shim location.
+fn git_toplevel(work: &Path) -> Option<PathBuf> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(work)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Path::new(trimmed).canonicalize().ok()
+}
+
 /// Resolve the [`Workspace`] for `work` once at dispatch entry (§3.5). The graph home is
 /// the canonicalized parent of the git common dir; when `<home>/.stele/undercover` exists
 /// the result is [`Mode::Undercover`] rooted there. On ANY failure to locate the home
@@ -178,6 +207,7 @@ fn git_common_dir(work: &Path) -> Option<PathBuf> {
 /// verbs' own exit-2 paths (`git ls-files` reports "not a git repository").
 pub fn resolve_workspace(work: &Path) -> Workspace {
     let normal = || Workspace {
+        common: work.to_path_buf(),
         home: work.to_path_buf(),
         mode: Mode::Normal,
         work: work.to_path_buf(),
@@ -189,8 +219,10 @@ pub fn resolve_workspace(work: &Path) -> Workspace {
         return normal();
     };
     if home.join(UNDERCOVER_MARKER).exists() {
+        let home = home.to_path_buf();
         Workspace {
-            home: home.to_path_buf(),
+            common,
+            home,
             mode: Mode::Undercover,
             work: work.to_path_buf(),
         }
@@ -403,6 +435,10 @@ fn build(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
     // disk (§5.3 build atomicity) — an undercover repo that later adopts a shared committed
     // graph fails fast rather than rewriting the private lock. Normal mode never reaches here.
     if ws.mode == Mode::Undercover {
+        // Self-heal (§3.5): re-install the `info/exclude` block before writing any artifact, so a
+        // historically-partial or hand-deleted block is repaired and the lock never surfaces in
+        // `git status`. No-ops when the block is already present.
+        ensure_info_exclude(&ws.common)?;
         reject_shared_graph_conflict(&ws.work, &tracked_files(&ws.work)?)?;
     }
     let mut graph = build_graph(ws)?;
@@ -456,6 +492,9 @@ fn check(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
     // Mutual exclusion (§3.5): a tracked shared graph coexisting with the undercover marker is
     // exit 2, surfaced BEFORE the assertion suite runs. Normal mode never reaches here.
     if ws.mode == Mode::Undercover {
+        // Self-heal (§3.5): re-ensure the `info/exclude` block (no-op when unchanged) so a lost
+        // block is repaired on the next `check`, keeping the work tree clean.
+        ensure_info_exclude(&ws.common)?;
         reject_shared_graph_conflict(&ws.work, &tracked)?;
     }
     let graph = build_graph(ws)?;
@@ -647,6 +686,12 @@ fn emit(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
         )));
     }
     let lock = lock::parse_lock(&on_disk)?;
+
+    if ws.mode == Mode::Undercover {
+        // Self-heal (§3.5): re-ensure the `info/exclude` block before rendering, so the shim and
+        // overlay this emit (re)writes never surface in `git status`. No-op when unchanged.
+        ensure_info_exclude(&ws.common)?;
+    }
 
     // `--claude-rules` is a normal-mode-only projection (§3.5): undercover materializes exactly
     // ONE file, the `CLAUDE.local.md` shim, so the multi-file `.claude/rules/*.md` fan-out has
@@ -840,11 +885,17 @@ fn ensure_shim(ws: &Workspace, lock: &Lock) -> Result<()> {
                 .map_err(|e| SteleError::internal(format!("write {CLAUDE_SHIM}: {e}")))
         }
         Mode::Undercover => {
-            let path = ws.work.join(CLAUDE_LOCAL_SHIM);
+            // The shim belongs at the invoking WORK-TREE ROOT (§3.5), not at `ws.work` (the cwd):
+            // from a subdir, `ws.work` is that subdir, and a `CLAUDE.local.md` written there is not
+            // matched by the root-anchored `/CLAUDE.local.md` exclude entry — so it would leak into
+            // `git status`. Resolve the top-level via git; fall back to `ws.work` only if git will
+            // not answer (already inside a resolved undercover invocation, so this is near-total).
+            let root = git_toplevel(&ws.work).unwrap_or_else(|| ws.work.clone());
+            let path = root.join(CLAUDE_LOCAL_SHIM);
             if path.exists() {
                 return Ok(());
             }
-            let import = shim_import_path(&ws.work, &ws.home);
+            let import = shim_import_path(&root, &ws.home);
             let content = format!("@{}\n", import.to_string_lossy().replace('\\', "/"));
             std::fs::write(&path, content)
                 .map_err(|e| SteleError::internal(format!("write {CLAUDE_LOCAL_SHIM}: {e}")))
@@ -1552,11 +1603,13 @@ fn init(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
 /// `stele init --undercover` (§3.5): scaffold a private overlay graph rooted at the parent
 /// of the git common dir, never touching the tracked tree. The steps run in a fixed order —
 /// (1) resolve the home directly from the common dir (the marker does not exist yet, so
-/// `ws.mode` is Normal at entry); (2) reject mutual exclusion with a tracked shared graph
-/// BEFORE any write; (3) write the deterministic marker; (4) scaffold the overlay root system
-/// node plus one container per proposable top dir, leaving any existing overlay file untouched;
-/// (5) install the `info/exclude` managed block. No `git add`, no `git check-ignore` filter —
-/// the overlay is never tracked, so `git status` stays clean. Re-running is idempotent (exit 0).
+/// `ws.mode` is Normal at entry); (2) refuse a submodule checkout (home inside `.git`);
+/// (3) reject mutual exclusion with a tracked shared graph BEFORE any write; (4) install the
+/// `info/exclude` managed block FIRST, before any artifact exists, so a failed exclude write
+/// aborts init having created nothing (no leak window); (5) write the deterministic marker;
+/// (6) scaffold the overlay root system node plus one container per proposable top dir, leaving
+/// any existing overlay file untouched. No `git add`, no `git check-ignore` filter — the overlay
+/// is never tracked, so `git status` stays clean. Re-running is idempotent (exit 0).
 fn init_undercover(ws: &Workspace) -> Result<CommandOutput> {
     let work = &ws.work;
     // (1) Home = parent of the canonicalized git common dir (as [`resolve_workspace`] resolves
@@ -1570,15 +1623,32 @@ fn init_undercover(ws: &Workspace) -> Result<CommandOutput> {
         SteleError::internal("git common dir has no parent to root the graph home".to_string())
     })?;
 
+    // (2) Submodule refusal (§3.5): in a submodule the git common dir is
+    // `<superproject>/.git/modules/<name>`, so the home would fall INSIDE the superproject's
+    // `.git` — the overlay and marker would land in version-control internals. A `.git` component
+    // anywhere in the resolved home covers every submodule shape → exit 2, no write. (v2 concern.)
+    if home.components().any(|c| c.as_os_str() == ".git") {
+        return Err(SteleError::input_msg(
+            "undercover mode does not support submodule checkouts (the git common dir lives \
+             inside the superproject)",
+        ));
+    }
+
     let tracked = tracked_files(work)?;
-    // (2) Mutual exclusion (§3.5): a tracked stele-block AGENTS.md or a tracked `.stele/` path
+    // (3) Mutual exclusion (§3.5): a tracked stele-block AGENTS.md or a tracked `.stele/` path
     // means the repo already carries a shared committed graph — refuse before writing a byte.
     reject_shared_graph_conflict(work, &tracked)?;
 
-    // (3) Marker — its presence is what selects undercover mode on every later invocation.
+    // (4) Exclude block FIRST — before any artifact under `<home>/.stele/` exists (§3.5). Install
+    // it before the marker so that if `info/exclude` cannot be written (a read-only `.git/info`),
+    // init aborts having created nothing: no marker, no overlay, nothing to leak into `git status`.
+    // Gitignore entries for not-yet-existent paths are harmless. This is the ordering guarantee.
+    ensure_info_exclude(&common)?;
+
+    // (5) Marker — its presence is what selects undercover mode on every later invocation.
     write_undercover_marker(home)?;
 
-    // (4) Overlay scaffold: reuse the normal-init proposal set verbatim against the tracked
+    // (6) Overlay scaffold: reuse the normal-init proposal set verbatim against the tracked
     // roster. Post-guard `existing` is empty (no tracked node), so every top dir is proposed.
     let adr_dir = detect_adr_dir(&tracked);
     let existing = existing_node_dirs(work, &tracked)?;
@@ -1601,9 +1671,6 @@ fn init_undercover(ws: &Workspace) -> Result<CommandOutput> {
             &mut written,
         )?;
     }
-
-    // (5) Hide the overlay + shim from `git status` via the shared common-dir exclude file.
-    ensure_info_exclude(&common)?;
 
     Ok(CommandOutput::new(
         json!({ "wrote": written }),
@@ -1681,8 +1748,33 @@ fn ensure_info_exclude(common: &Path) -> Result<()> {
     };
     let updated = rewrite_exclude_block(&existing);
     if updated != existing {
-        std::fs::write(&path, &updated)
-            .map_err(|e| SteleError::internal(format!("write {}: {e}", path.display())))?;
+        // Atomic (§3.5): temp file in the same directory then rename, mirroring
+        // [`write_lock_atomic`] — an interrupted write never leaves a half-rewritten exclude
+        // (which could unhide the overlay). The temp lives inside `.git/info/`, never the work
+        // tree, so it cannot itself surface in `git status`.
+        write_atomic(&dir, "exclude", &updated)?;
+    }
+    Ok(())
+}
+
+/// Write `name` under `dir` via a unique temp file + rename (§3.5/§5.3 atomicity): an
+/// interrupted or partial write never replaces the live file. The temp name carries the
+/// pid + a process-local counter so concurrent writers never collide, and it is cleaned up
+/// best-effort if the rename fails. Shared by the `info/exclude` install; the lock has its
+/// own [`write_lock_atomic`] (same discipline, its own create-dir step).
+fn write_atomic(dir: &Path, name: &str, bytes: &str) -> Result<()> {
+    static TEMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = TEMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temp_name = format!(".{name}.tmp.{}.{seq}", std::process::id());
+    let temp = dir.join(&temp_name);
+    std::fs::write(&temp, bytes)
+        .map_err(|e| SteleError::internal(format!("write {}: {e}", temp.display())))?;
+    if let Err(e) = std::fs::rename(&temp, dir.join(name)) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(SteleError::internal(format!(
+            "rename into {}: {e}",
+            dir.join(name).display()
+        )));
     }
     Ok(())
 }
@@ -2533,6 +2625,7 @@ mod tests {
     /// returns for a normal checkout, without the `resolve_workspace` git spawn.
     fn normal_workspace(root: &Path) -> Workspace {
         Workspace {
+            common: root.to_path_buf(),
             home: root.to_path_buf(),
             mode: Mode::Normal,
             work: root.to_path_buf(),

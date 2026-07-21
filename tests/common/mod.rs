@@ -8,9 +8,36 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 
 /// The `stele` binary Cargo built for this test run.
 pub const BIN: &str = env!("CARGO_BIN_EXE_stele");
+
+/// A process-lifetime global git config that neutralizes the developer's host git config AND
+/// the XDG `core.excludesFile` (`~/.config/git/ignore`). This machine's global ignore lists
+/// `**/CLAUDE.local.md`, which would MASK an undercover shim leaking into `git status` and make
+/// the leak tests pass vacuously. `GIT_CONFIG_GLOBAL=/dev/null` alone does NOT disable the XDG
+/// excludes file (its default path is not config-derived, verified 2026-07-21), so the isolation
+/// config sets `core.excludesFile = /dev/null` explicitly.
+fn git_config_global() -> &'static Path {
+    static PATH: OnceLock<PathBuf> = OnceLock::new();
+    PATH.get_or_init(|| {
+        let mut path = std::env::temp_dir();
+        path.push(format!("stele-test-gitconfig-{}", std::process::id()));
+        fs::write(&path, "[core]\n\texcludesFile = /dev/null\n").expect("write test git config");
+        path
+    })
+    .as_path()
+}
+
+/// Isolate a spawned `git` (or `stele`, whose own `git` children inherit this env) from host and
+/// user git config: replace the global config with [`git_config_global`] and void the system
+/// config. Every `Command` the harness spawns routes through this so an empty `git status` proves
+/// the engine's exclude block, never the developer's machine.
+pub fn isolate_git(cmd: &mut Command) -> &mut Command {
+    cmd.env("GIT_CONFIG_GLOBAL", git_config_global())
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+}
 
 const FIXTURE_ACME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/acme");
 
@@ -72,11 +99,13 @@ impl Fixture {
         let dir = tempfile::tempdir().expect("create clone dir");
         let root = dir.path().to_path_buf();
         let url = format!("file://{}", self.root.display());
-        let out = Command::new("git")
-            .args(["clone", "--depth", "1", &url, "."])
-            .current_dir(&root)
-            .output()
-            .expect("spawn git clone");
+        let out = isolate_git(
+            Command::new("git")
+                .args(["clone", "--depth", "1", &url, "."])
+                .current_dir(&root),
+        )
+        .output()
+        .expect("spawn git clone");
         assert!(
             out.status.success(),
             "git clone --depth 1 failed:\n{}",
@@ -142,12 +171,14 @@ impl Fixture {
     /// child `PATH` is forced through `stub-bin` (§4.6) so liveness PATH resolution is
     /// host-independent — identical on a dev box and a bare CI host.
     pub fn run(&self, args: &[&str]) -> RunResult {
-        let output = Command::new(BIN)
-            .args(args)
-            .current_dir(&self.root)
-            .env("PATH", self.child_path())
-            .output()
-            .expect("spawn stele binary");
+        let output = isolate_git(
+            Command::new(BIN)
+                .args(args)
+                .current_dir(&self.root)
+                .env("PATH", self.child_path()),
+        )
+        .output()
+        .expect("spawn stele binary");
         RunResult {
             code: output.status.code().expect("stele terminated by signal"),
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
@@ -162,15 +193,17 @@ impl Fixture {
     /// child-PATH discipline as [`Self::run`] so command resolution stays host-independent.
     pub fn run_with_stdin(&self, args: &[&str], stdin: &str) -> RunResult {
         use std::io::Write;
-        let mut child = Command::new(BIN)
-            .args(args)
-            .current_dir(&self.root)
-            .env("PATH", self.child_path())
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("spawn stele binary");
+        let mut child = isolate_git(
+            Command::new(BIN)
+                .args(args)
+                .current_dir(&self.root)
+                .env("PATH", self.child_path()),
+        )
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn stele binary");
         child
             .stdin
             .take()
@@ -250,9 +283,7 @@ impl Fixture {
     }
 
     fn git(&self, args: &[&str]) {
-        let output = Command::new("git")
-            .args(args)
-            .current_dir(&self.root)
+        let output = isolate_git(Command::new("git").args(args).current_dir(&self.root))
             .output()
             .expect("spawn git");
         assert!(
@@ -427,12 +458,14 @@ impl GroveFixture {
     /// Run the built binary from `dir` (a worktree the operator is working in), with the same
     /// §4.6 child-PATH discipline as [`Fixture::run`] so command resolution is host-independent.
     pub fn run_from(&self, dir: &Path, args: &[&str]) -> RunResult {
-        let output = Command::new(BIN)
-            .args(args)
-            .current_dir(dir)
-            .env("PATH", child_path(&self.stub_bin))
-            .output()
-            .expect("spawn stele binary");
+        let output = isolate_git(
+            Command::new(BIN)
+                .args(args)
+                .current_dir(dir)
+                .env("PATH", child_path(&self.stub_bin)),
+        )
+        .output()
+        .expect("spawn stele binary");
         RunResult {
             code: output.status.code().expect("stele terminated by signal"),
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
@@ -510,9 +543,7 @@ impl Default for GroveFixture {
 
 /// Run `git` in `cwd`, asserting success — the grove harness's construction primitive.
 fn run_git(cwd: &Path, args: &[&str]) {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
+    let output = isolate_git(Command::new("git").args(args).current_dir(cwd))
         .output()
         .expect("spawn git");
     assert!(
@@ -525,9 +556,7 @@ fn run_git(cwd: &Path, args: &[&str]) {
 
 /// Run `git` in `cwd`, asserting success and returning trimmed stdout.
 fn git_stdout_in(cwd: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
+    let output = isolate_git(Command::new("git").args(args).current_dir(cwd))
         .output()
         .expect("spawn git");
     assert!(

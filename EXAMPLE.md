@@ -340,8 +340,10 @@ Queries are byte-for-byte what the tracked repo returns — same graph, sources 
 
 ```
 $ stele invariants --touching apps/web/lib/billing
-billing/refund-cap  · refunds never exceed captured amount, enforced at the changeset
-/money-type         · all money amounts are integer cents end-to-end
+invariants (3):
+  / · money-type — all money amounts are integer cents end-to-end; floats never represent currency (→ lm:money-type)
+  apps/web/lib/billing · billing-idempotency — every mutation is idempotent by (account_id, idempotency_key) — retries must be safe (→ lm:billing-idempotency)
+  apps/web/lib/billing · refund-cap — refunds never exceed captured amount, enforced at the changeset, not the controller (→ lm:refund-cap)
 ```
 
 The territory of `.stele/tree/apps/web/lib/billing/AGENTS.md` is `apps/web/lib/billing`; the anchor scan, exhaustiveness, and freshness still run over the tracked work-tree code, so the assertion suite (§4) behaves exactly as in §8 — only the node sources moved off the tree.

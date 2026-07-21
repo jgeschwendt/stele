@@ -15,9 +15,7 @@ use std::process::Command;
 /// not own), capturing status + both streams. The read/build verbs exercised here spawn only
 /// `git`, so the inherited PATH suffices — no liveness stubs needed.
 fn run_in(dir: &Path, args: &[&str]) -> RunResult {
-    let out = Command::new(common::BIN)
-        .args(args)
-        .current_dir(dir)
+    let out = common::isolate_git(Command::new(common::BIN).args(args).current_dir(dir))
         .output()
         .expect("spawn stele");
     RunResult {
@@ -45,9 +43,7 @@ fn undercover_built() -> Fixture {
 
 /// Run `git` in the fixture root and return trimmed stdout (asserting success).
 fn git_stdout(fixture: &Fixture, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(&fixture.root)
+    let out = common::isolate_git(Command::new("git").args(args).current_dir(&fixture.root))
         .output()
         .expect("spawn git");
     assert!(
@@ -172,6 +168,152 @@ fn init_undercover_on_shared_graph_exits_2() {
     // Nothing was written: no marker, no overlay.
     assert!(!fixture.path(".stele/undercover").exists());
     assert!(!fixture.path(".stele/tree").exists());
+}
+
+// The ordering guarantee (§3.5, finding 1): the `info/exclude` block is installed BEFORE any
+// artifact. When it cannot be written (read-only `.git/info`), init aborts nonzero having created
+// nothing — no `.stele/` ever surfaces in `git status`, so there is no leak window.
+#[cfg(unix)]
+#[test]
+fn init_undercover_installs_exclude_block_before_artifacts() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = committed_two_dir_repo();
+    let info = fixture.path(".git/info");
+    // Make `.git/info` unwritable, so the exclude write (the FIRST filesystem effect) fails.
+    std::fs::set_permissions(&info, std::fs::Permissions::from_mode(0o555)).expect("chmod info");
+
+    let init = fixture.run(&["init", "--undercover"]);
+
+    // Restore write perms first so TempDir cleanup can remove the tree regardless of assertions.
+    std::fs::set_permissions(&info, std::fs::Permissions::from_mode(0o755)).expect("restore info");
+
+    assert_ne!(init.code, 0, "init must fail:\n{}", init.combined());
+    // No marker, no overlay — nothing was written before the exclude install failed.
+    assert!(
+        !fixture.path(".stele/undercover").exists(),
+        "marker written despite the exclude failure (leak window)"
+    );
+    assert!(
+        !fixture.path(".stele").exists(),
+        ".stele created despite the exclude failure (leak window)"
+    );
+    // The ordering guarantee, observed through git: no `.stele` entry in status.
+    let status = git_stdout(&fixture, &["status", "--porcelain"]);
+    assert!(
+        !status.contains(".stele"),
+        ".stele leaked into git status:\n{status}"
+    );
+}
+
+// Self-heal (§3.5, finding 1): a historically-partial state — marker present, exclude block gone
+// — is repaired on the next `build`. The block returns and the work tree is clean again.
+#[test]
+fn undercover_build_self_heals_exclude_block() {
+    let fixture = undercover_built();
+
+    // Simulate a lost block: truncate `info/exclude` to empty (the block never installed, or a
+    // teammate's tooling clobbered it), leaving the marker in place.
+    fixture.write(".git/info/exclude", "");
+    // Sanity: with the block gone and host config isolated, the overlay WOULD show.
+    assert!(
+        git_stdout(&fixture, &["status", "--porcelain"]).contains(".stele"),
+        "precondition: a missing block should expose the overlay"
+    );
+
+    let build = fixture.run(&["build"]);
+    assert_eq!(build.code, 0, "build:\n{}", build.combined());
+
+    let exclude = fixture.read(".git/info/exclude");
+    assert!(
+        exclude.contains("# stele:begin undercover")
+            && exclude.contains("/.stele/")
+            && exclude.contains("/CLAUDE.local.md"),
+        "build did not re-install the exclude block:\n{exclude}"
+    );
+    assert_eq!(
+        git_stdout(&fixture, &["status", "--porcelain"]),
+        "",
+        "self-heal left the work tree dirty"
+    );
+}
+
+// The shim lands at the WORK-TREE ROOT, not the cwd (§3.5, finding 2): `emit` invoked from a
+// subdirectory still writes `CLAUDE.local.md` at the repo root, where the root-anchored
+// `/CLAUDE.local.md` exclude entry matches — so it never leaks.
+#[test]
+fn emit_from_subdir_writes_shim_at_worktree_root() {
+    let fixture = undercover_built();
+
+    // Invoke emit with cwd = the `apps/` subdirectory.
+    let emit = run_in(&fixture.path("apps"), &["emit"]);
+    assert_eq!(emit.code, 0, "emit from subdir:\n{}", emit.combined());
+
+    // Shim at the repo root, NOT in the subdir.
+    assert!(
+        fixture.path("CLAUDE.local.md").exists(),
+        "shim not at the work-tree root"
+    );
+    assert!(
+        !fixture.path("apps/CLAUDE.local.md").exists(),
+        "shim leaked into the invoking subdirectory"
+    );
+    // The leak invariant, with host git config isolated: status stays empty.
+    assert_eq!(
+        git_stdout(&fixture, &["status", "--porcelain"]),
+        "",
+        "subdir emit left the work tree dirty"
+    );
+}
+
+// Submodule refusal (§3.5, finding 3): a submodule's git common dir is
+// `<superproject>/.git/modules/<name>`, so the graph home would fall inside the superproject's
+// `.git`. init --undercover refuses with exit 2 and writes nothing under `.git/modules`.
+#[test]
+fn init_undercover_refuses_submodule() {
+    let seed = committed_two_dir_repo();
+    let sup = committed_two_dir_repo();
+
+    // Add `seed` as a local submodule `sub` of `sup` (the file protocol needs the allow flag on
+    // modern git). Isolated git so host config never interferes.
+    let url = format!("file://{}", seed.root.display());
+    let add = common::isolate_git(
+        Command::new("git")
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                &url,
+                "sub",
+            ])
+            .current_dir(&sup.root),
+    )
+    .output()
+    .expect("spawn git submodule add");
+    assert!(
+        add.status.success(),
+        "submodule add failed:\n{}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+
+    let sub = sup.path("sub");
+    let init = run_in(&sub, &["init", "--undercover"]);
+    assert_eq!(init.code, 2, "expected exit 2:\n{}", init.combined());
+    assert!(
+        init.combined().contains("submodule"),
+        "message does not mention submodule:\n{}",
+        init.combined()
+    );
+    // Nothing landed inside the superproject's git internals.
+    assert!(
+        !sup.path(".git/modules/sub/.stele").exists(),
+        "overlay leaked into the superproject .git/modules"
+    );
+    assert!(
+        !sub.join(".stele/undercover").exists(),
+        "marker written in the submodule work tree"
+    );
 }
 
 // After undercover init, `build` discovers overlay-declared nodes and warns about none of

@@ -9,4 +9,5 @@ pub mod extract;
 pub mod lock;
 pub mod model;
 pub mod parse;
+pub mod serve;
 pub mod steleignore;

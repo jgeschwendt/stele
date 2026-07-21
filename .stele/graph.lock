@@ -14,7 +14,7 @@
           "text": "every [Cn] citation must stay licensed by research/claims.md's status for that claim — never state a `reported` claim as settled fact",
           "verified": {
             "digest": null,
-            "sha": "35f09c1df0c3db8412ccb5a4d0a3a73f4aa13824"
+            "sha": "126ebf3e08158f10d4d9f0986669820154b943da"
           }
         },
         {
@@ -26,11 +26,15 @@
           "text": "SPEC.md outranks everything here — code and examples conform to it; changing behavior means revising the spec (and its decision log) first",
           "verified": {
             "digest": null,
-            "sha": "35f09c1df0c3db8412ccb5a4d0a3a73f4aa13824"
+            "sha": "126ebf3e08158f10d4d9f0986669820154b943da"
           }
         }
       ],
-      "commands": {},
+      "commands": {
+        "graph": "cargo run -- build && cargo run -- emit",
+        "lint": "cargo clippy --all-targets -- -D warnings && cargo fmt --check",
+        "test": "cargo test"
+      },
       "contains": [
         "research",
         "src",

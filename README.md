@@ -17,6 +17,14 @@ A Rust single-binary that compiles a typed knowledge graph from three authored s
 | [research/findings/](./research/findings/) | primary-source research notes, including the prior-art sweep that positions the design |
 | [research/wild-ideas.md](./research/wild-ideas.md) | the ideation corpus the design was selected from (three visions; v2 extension points derive from it) |
 
+## Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash
+```
+
+Or from source: `cargo install --git https://github.com/jgeschwendt/stele stele-cli`.
+
 ## Why this exists (the one-paragraph version)
 
 Measured evidence says coding agents don't benefit from prose overviews of a codebase — even human-written ones — and are actively harmed by stale or redundant context. What does transmit value: concrete tooling commands, non-derivable invariants and hazards, and navigation structure delivered lazily at the point of relevance. Every existing tool either *generates* docs from code (unverified, drifting) or *checks* declared architecture forward-only (never coupled to the docs agents read). stele occupies the empty intersection: the docs are a typed, queryable graph compiled from authored intent, verified against the extracted truth of the code, in CI, both directions — and they degrade to plain markdown files any harness can read. The full argument, with citations, is in [research/report.md](./research/report.md).

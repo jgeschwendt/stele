@@ -30,3 +30,9 @@ tree-sitter-typescript = "0.23.2"
 [dev-dependencies]
 serde_json = "1"
 tempfile = "3"
+
+# The distribution artifact is one self-contained executable (scripts/release.sh,
+# .github/workflows/release.yml). Strip symbols so the shipped binary is lean; every
+# release build (local assembly + CI matrix) inherits it.
+[profile.release]
+strip = true

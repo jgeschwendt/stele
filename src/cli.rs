@@ -102,6 +102,14 @@ impl CommandOutput {
 /// outcome; otherwise a success prints its human line to stdout and an error prints
 /// `file:line: message` to stderr.
 pub fn run(args: &[String]) -> i32 {
+    // `--version`/`-V` short-circuits every other verb: print `stele <version>` (the
+    // engine's own version, from CARGO_PKG_VERSION) to stdout and exit 0. It is what
+    // scripts/install.sh calls to confirm the landed binary runs, so it must never
+    // require a lock or a git repo.
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("stele {}", env!("CARGO_PKG_VERSION"));
+        return 0;
+    }
     // `serve` (§5.2) owns stdin/stdout for MCP JSON-RPC framing, so it is intercepted
     // BEFORE the `--json` envelope machinery — its stdout must carry only protocol
     // messages, never a CLI envelope.
@@ -169,8 +177,8 @@ fn dispatch(root: &Path, args: &[&str]) -> Result<CommandOutput> {
         Some(other) => Err(SteleError::input_msg(format!("unknown command: {other:?}"))),
         None => Err(SteleError::input_msg(
             "usage: stele root | node <id> | unfold <id> | invariants | hazards | nodes | \
-             check | emit | blame | build | init | serve   (add --json for the machine \
-             envelope; serve speaks MCP on stdio and takes no --json)",
+             check | emit | blame | build | init | serve | --version   (add --json for the \
+             machine envelope; serve speaks MCP on stdio and takes no --json)",
         )),
     }
 }

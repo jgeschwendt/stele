@@ -1,0 +1,92 @@
+name: Release
+
+# stele release: on a v* tag, create the GitHub release on THIS (public) repo, then
+# build a per-platform matrix producing one artifact per platform —
+# stele-<arch>-<os>.tar.gz (a single stripped `stele` binary) + a .sha256 sidecar.
+# Stable tags (no -suffix) publish as latest; -canary.N / -rc.N publish as prereleases.
+# No downloads repo, no App token, no self-update: the artifact is one static executable
+# published on jgeschwendt/stele itself, so the default GITHUB_TOKEN suffices.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build (must already exist or be created here)"
+        required: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write # gh release create/upload on this repo
+
+jobs:
+  # Create the release first so the artifact matrix has something to upload to.
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create release (idempotent)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          # A pre-release suffix (v0.1.0-canary.1, v0.1.0-rc.1) publishes as a
+          # prerelease; a bare semver (v0.1.0) publishes as the latest stable release.
+          args=(--repo "$GITHUB_REPOSITORY" --title "$TAG" --notes "stele $TAG")
+          if [[ "$TAG" == *-* ]]; then args+=(--prerelease); fi
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$TAG" "${args[@]}"
+
+  build:
+    needs: [create-release]
+    # Fail fast instead of GitHub's 24h max: a runner the org can't provide should error
+    # in minutes, not hang a day.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # All four platforms build natively on standard GitHub-hosted runners that are
+          # free for public repos (verified 2026-07-20 against github/docs
+          # data/reusables/actions/supported-github-runners.md). macos-15-intel is now a
+          # standard runner, so — unlike grove — stele ships x86_64-darwin too.
+          - os: macos-15
+            platform: aarch64-darwin
+          - os: macos-15-intel
+            platform: x86_64-darwin
+          - os: ubuntu-latest
+            platform: x86_64-linux
+          - os: ubuntu-24.04-arm
+            platform: aarch64-linux
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # The tag is the version. Stamp Cargo.toml's [package] version so the released
+      # binary reports the exact release version via `stele --version` (release.sh reads
+      # this same value).
+      - name: Stamp version from tag
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VSN="${TAG#v}"
+          sed -i.bak -E "s/^version = \"[^\"]+\"/version = \"${VSN}\"/" Cargo.toml && rm -f Cargo.toml.bak
+          grep -m1 '^version = ' Cargo.toml
+
+      - name: Assemble artifact
+        run: sh scripts/release.sh
+
+      - name: Upload artifact to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VSN="${TAG#v}"
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            "dist/${VSN}/stele-${{ matrix.platform }}.tar.gz" \
+            "dist/${VSN}/stele-${{ matrix.platform }}.tar.gz.sha256"

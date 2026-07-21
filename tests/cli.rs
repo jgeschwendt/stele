@@ -236,3 +236,18 @@ fn lock_gate_and_report_and_json_envelope() {
         root_json.stdout
     );
 }
+
+// Probe 11 — `stele --version` prints `stele <CARGO_PKG_VERSION>` to stdout and exits 0
+// WITHOUT a lock or git repo (scripts/install.sh calls it to confirm the landed binary
+// runs). The bare `Fixture` is a git repo with no lock; the flag must short-circuit
+// before any lock/repo gate.
+#[test]
+fn version_flag_prints_version_without_a_lock() {
+    let expected = format!("stele {}\n", env!("CARGO_PKG_VERSION"));
+    let fixture = Fixture::bare();
+    for flag in ["--version", "-V"] {
+        let out = fixture.run(&[flag]);
+        assert_eq!(out.code, 0, "{}", out.combined());
+        assert_eq!(out.stdout, expected, "{flag}: {}", out.combined());
+    }
+}

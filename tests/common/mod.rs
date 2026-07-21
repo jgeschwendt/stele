@@ -7,7 +7,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 /// The `stele` binary Cargo built for this test run.
 pub const BIN: &str = env!("CARGO_BIN_EXE_stele");
@@ -153,6 +153,36 @@ impl Fixture {
             .env("PATH", self.child_path())
             .output()
             .expect("spawn stele binary");
+        RunResult {
+            code: output.status.code().expect("stele terminated by signal"),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        }
+    }
+
+    /// Spawn the binary feeding `stdin`, then read both streams to completion once the
+    /// child exits — the `stele serve` harness (§5.2). The whole input is written up
+    /// front and stdin is then closed; the MCP server reads to EOF and exits, so the
+    /// captured stdout holds every newline-delimited response in request order. Same
+    /// child-PATH discipline as [`Self::run`] so command resolution stays host-independent.
+    pub fn run_with_stdin(&self, args: &[&str], stdin: &str) -> RunResult {
+        use std::io::Write;
+        let mut child = Command::new(BIN)
+            .args(args)
+            .current_dir(&self.root)
+            .env("PATH", self.child_path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn stele binary");
+        child
+            .stdin
+            .take()
+            .expect("child stdin")
+            .write_all(stdin.as_bytes())
+            .expect("write child stdin");
+        let output = child.wait_with_output().expect("wait for stele");
         RunResult {
             code: output.status.code().expect("stele terminated by signal"),
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),

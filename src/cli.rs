@@ -102,6 +102,12 @@ impl CommandOutput {
 /// outcome; otherwise a success prints its human line to stdout and an error prints
 /// `file:line: message` to stderr.
 pub fn run(args: &[String]) -> i32 {
+    // `serve` (§5.2) owns stdin/stdout for MCP JSON-RPC framing, so it is intercepted
+    // BEFORE the `--json` envelope machinery — its stdout must carry only protocol
+    // messages, never a CLI envelope.
+    if args.first().map(String::as_str) == Some("serve") {
+        return crate::serve::run(Path::new("."), args);
+    }
     let json = args.iter().any(|a| a == JSON_FLAG);
     let rest: Vec<&str> = args
         .iter()
@@ -163,9 +169,59 @@ fn dispatch(root: &Path, args: &[&str]) -> Result<CommandOutput> {
         Some(other) => Err(SteleError::input_msg(format!("unknown command: {other:?}"))),
         None => Err(SteleError::input_msg(
             "usage: stele root | node <id> | unfold <id> | invariants | hazards | nodes | \
-             check | emit | blame | build | init   (add --json for the machine envelope)",
+             check | emit | blame | build | init | serve   (add --json for the machine \
+             envelope; serve speaks MCP on stdio and takes no --json)",
         )),
     }
+}
+
+/// One read/query verb rendered for the MCP tier (§5.2): `text` is byte-identical to the
+/// CLI human-path stdout of `stele <verb>`, and `exit` is the §5.3 process class. serve
+/// builds a verb argv from a tool's named parameters, calls [`serve_render`], and packages
+/// this as an MCP tool result.
+pub struct VerbRender {
+    pub exit: i32,
+    pub text: String,
+}
+
+/// Dispatch one verb and render it exactly as [`run`]'s human path would print to stdout —
+/// the single code path the CLI and `serve` share (§5.2: same engine, tools mirror the
+/// verbs, no duplicated rendering). A success prints its summary line (findings render
+/// instead when present) plus any `--report` block; an input/internal error becomes
+/// `text = <error message>` with the error's exit class. serve maps exit ≥ 2 to an
+/// `isError` tool result (§5.2).
+pub fn serve_render(root: &Path, argv: &[&str]) -> VerbRender {
+    match dispatch(root, argv) {
+        Ok(output) => {
+            let exit = if output.findings.is_empty() { 0 } else { 1 };
+            let mut text = String::new();
+            if output.findings.is_empty() {
+                if let Some(summary) = &output.summary {
+                    // `run` prints the summary with `println!`, appending one newline.
+                    text.push_str(summary);
+                    text.push('\n');
+                }
+            } else {
+                text.push_str(&assert::render_human(&output.findings));
+            }
+            if let Some(report) = &output.report {
+                text.push_str(report);
+            }
+            VerbRender { exit, text }
+        }
+        Err(error) => VerbRender {
+            exit: error.exit as i32,
+            text: format!("{error}"),
+        },
+    }
+}
+
+/// Confirm `root` is inside a git work tree (§2.4 scan scope) — the precondition
+/// `serve` checks at startup before entering its MCP loop (a non-repo cwd surfaces as
+/// the same exit-2 input error the CLI verbs give). Reuses the tracked-file probe.
+pub fn ensure_git_repo(root: &Path) -> Result<()> {
+    git_tracked_files(root)?;
+    Ok(())
 }
 
 /// Print the one §5.3 JSON envelope. `findings` carries the assertion results (§4);

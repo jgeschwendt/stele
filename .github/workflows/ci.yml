@@ -8,7 +8,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         # Full history: stele's freshness class (§4.5) walks verified.sha..HEAD; a shallow
         # (fetch-depth 1) clone prunes the watermark commit and makes churn uncountable.
         with:

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "stele": {
+      "command": "stele",
+      "args": ["serve"]
+    }
+  }
+}

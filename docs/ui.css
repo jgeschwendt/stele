@@ -1,0 +1,1684 @@
+/* ui.css — Joshua Geschwendt's semantic component library.
+   Pure CSS on custom properties. No build step, no framework dependency.
+   Layers: tokens → base → components. Cascade layers keep Tailwind (or anything
+   else) able to override components without !important. */
+
+@layer ui.tokens, ui.base, ui.components;
+
+/* ══════════════════════════════════════════════════════════════════════════
+   TOKENS
+   Light is the ground truth on :root. Dark arrives three ways:
+     1. @media (prefers-color-scheme: dark) — guarded so [data-theme="light"] wins
+     2. [data-theme="dark"] — a manual toggle wins over a light system
+     3. [data-theme="light"] — restated so a manual toggle wins over a dark system
+   Every color has its definition on bare :root; the blocks below only reassign.
+   ══════════════════════════════════════════════════════════════════════════ */
+@layer ui.tokens {
+  :root {
+    color-scheme: light;
+
+    /* ── surfaces & ink (light: white and green) ── */
+    --ui-bg: #ffffff;
+    --ui-surface: #fbfcfa;
+    --ui-surface-raised: #ffffff;
+    --ui-sunken: #f2f4f0;
+    --ui-border: #e2e6df;
+    --ui-border-strong: #c8d0c5;
+    --ui-fg: #141c15;
+    --ui-fg-muted: #5a6b5b;
+    --ui-fg-faint: #879287;
+    --ui-fg-inverse: #ffffff;
+
+    /* ── accent ── */
+    --ui-accent: #476349;
+    --ui-accent-hover: #3b5340;
+    --ui-accent-active: #2f4333;
+    --ui-accent-fg: #ffffff;
+    --ui-accent-soft: #eaefe9;
+    --ui-accent-soft-fg: #3b5340;
+    --ui-accent-ring: rgba(71, 99, 73, 0.32);
+
+    /* ── status ── */
+    --ui-danger: #b4262a;
+    --ui-danger-soft: #fdecec;
+    --ui-info: #1d5fa8;
+    --ui-info-soft: #e9f1fa;
+    --ui-ok: #476349;
+    --ui-ok-soft: #eaefe9;
+    --ui-warn: #c86a17;
+    /* the orange darkened until a sentence of it clears AA on white and on its
+       own tint; dark mode has no such trouble and aliases the ink back to warn */
+    --ui-warn-ink: #9c500f;
+    --ui-warn-soft: #fdf1e4;
+
+    /* ── type ── */
+    --ui-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --ui-font-sans:
+      -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", sans-serif;
+    --ui-leading-body: 1.55;
+    --ui-leading-tight: 1.25;
+    --ui-text-2xs: 0.6875rem; /* 11px */
+    --ui-text-xs: 0.75rem; /* 12px */
+    --ui-text-sm: 0.8125rem; /* 13px */
+    --ui-text-md: 0.875rem; /* 14px */
+    --ui-text-lg: 1rem; /* 16px */
+    --ui-text-xl: 1.25rem; /* 20px */
+    --ui-text-2xl: 1.625rem; /* 26px */
+    --ui-tracking-caps: 0.07em;
+    --ui-tracking-tight: -0.011em;
+    --ui-weight-bold: 650;
+    --ui-weight-medium: 550;
+    --ui-weight-normal: 400;
+
+    /* ── metrics ── */
+    --ui-radius-full: 999px;
+    --ui-radius-lg: 12px;
+    --ui-radius-md: 8px;
+    --ui-radius-sm: 4px;
+    --ui-space-1: 4px;
+    --ui-space-2: 8px;
+    --ui-space-3: 12px;
+    --ui-space-4: 16px;
+    --ui-space-5: 24px;
+    --ui-space-6: 32px;
+    --ui-space-7: 48px;
+
+    /* ── depth ── */
+    --ui-shadow-sm: 0 1px 2px rgba(20, 28, 21, 0.06);
+    --ui-shadow-md: 0 2px 4px rgba(20, 28, 21, 0.05), 0 8px 20px rgba(20, 28, 21, 0.06);
+    --ui-shadow-lg: 0 12px 40px rgba(20, 28, 21, 0.12);
+    --ui-glow: none;
+
+    /* ── motion ── */
+    --ui-ease: cubic-bezier(0.32, 0.72, 0, 1);
+    --ui-fast: 110ms;
+    --ui-slow: 240ms;
+  }
+
+  /* dark: black and gold */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+
+      --ui-bg: #08090a;
+      --ui-surface: #101113;
+      --ui-surface-raised: #16181b;
+      --ui-sunken: #0c0d0f;
+      --ui-border: #24262a;
+      --ui-border-strong: #3a3d43;
+      --ui-fg: #ece7db;
+      --ui-fg-muted: #9b9487;
+      --ui-fg-faint: #6b675e;
+      --ui-fg-inverse: #08090a;
+
+      --ui-accent: #cfa14d;
+      --ui-accent-hover: #ddb56b;
+      --ui-accent-active: #b88b3d;
+      --ui-accent-fg: #14100a;
+      --ui-accent-soft: rgba(207, 161, 77, 0.14);
+      --ui-accent-soft-fg: #ddb56b;
+      --ui-accent-ring: rgba(207, 161, 77, 0.36);
+
+      --ui-danger: #f0655c;
+      --ui-danger-soft: rgba(240, 101, 92, 0.14);
+      --ui-info: #6aa8f0;
+      --ui-info-soft: rgba(106, 168, 240, 0.14);
+      --ui-ok: #8fae94;
+      --ui-ok-soft: rgba(143, 174, 148, 0.14);
+      --ui-warn: #f5893a;
+      --ui-warn-ink: #f5893a;
+      --ui-warn-soft: rgba(245, 137, 58, 0.14);
+
+      --ui-glow: 0 0 14px rgba(207, 161, 77, 0.38);
+      --ui-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.6);
+      --ui-shadow-md: 0 2px 4px rgba(0, 0, 0, 0.5), 0 8px 24px rgba(0, 0, 0, 0.55);
+      --ui-shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.7);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+
+    --ui-bg: #08090a;
+    --ui-surface: #101113;
+    --ui-surface-raised: #16181b;
+    --ui-sunken: #0c0d0f;
+    --ui-border: #24262a;
+    --ui-border-strong: #3a3d43;
+    --ui-fg: #ece7db;
+    --ui-fg-muted: #9b9487;
+    --ui-fg-faint: #6b675e;
+    --ui-fg-inverse: #08090a;
+
+    --ui-accent: #cfa14d;
+    --ui-accent-hover: #ddb56b;
+    --ui-accent-active: #b88b3d;
+    --ui-accent-fg: #14100a;
+    --ui-accent-soft: rgba(207, 161, 77, 0.14);
+    --ui-accent-soft-fg: #ddb56b;
+    --ui-accent-ring: rgba(207, 161, 77, 0.36);
+
+    --ui-danger: #f0655c;
+    --ui-danger-soft: rgba(240, 101, 92, 0.14);
+    --ui-info: #6aa8f0;
+    --ui-info-soft: rgba(106, 168, 240, 0.14);
+    --ui-ok: #8fae94;
+    --ui-ok-soft: rgba(143, 174, 148, 0.14);
+    --ui-warn: #f5893a;
+    --ui-warn-ink: #f5893a;
+    --ui-warn-soft: rgba(245, 137, 58, 0.14);
+
+    --ui-glow: 0 0 14px rgba(207, 161, 77, 0.38);
+    --ui-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.6);
+    --ui-shadow-md: 0 2px 4px rgba(0, 0, 0, 0.5), 0 8px 24px rgba(0, 0, 0, 0.55);
+    --ui-shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.7);
+  }
+
+  :root[data-theme="light"] {
+    color-scheme: light;
+
+    --ui-bg: #ffffff;
+    --ui-surface: #fbfcfa;
+    --ui-surface-raised: #ffffff;
+    --ui-sunken: #f2f4f0;
+    --ui-border: #e2e6df;
+    --ui-border-strong: #c8d0c5;
+    --ui-fg: #141c15;
+    --ui-fg-muted: #5a6b5b;
+    --ui-fg-faint: #879287;
+    --ui-fg-inverse: #ffffff;
+
+    --ui-accent: #476349;
+    --ui-accent-hover: #3b5340;
+    --ui-accent-active: #2f4333;
+    --ui-accent-fg: #ffffff;
+    --ui-accent-soft: #eaefe9;
+    --ui-accent-soft-fg: #3b5340;
+    --ui-accent-ring: rgba(71, 99, 73, 0.32);
+
+    --ui-danger: #b4262a;
+    --ui-danger-soft: #fdecec;
+    --ui-info: #1d5fa8;
+    --ui-info-soft: #e9f1fa;
+    --ui-ok: #476349;
+    --ui-ok-soft: #eaefe9;
+    --ui-warn: #c86a17;
+    --ui-warn-ink: #9c500f;
+    --ui-warn-soft: #fdf1e4;
+
+    --ui-glow: none;
+    --ui-shadow-sm: 0 1px 2px rgba(20, 28, 21, 0.06);
+    --ui-shadow-md: 0 2px 4px rgba(20, 28, 21, 0.05), 0 8px 20px rgba(20, 28, 21, 0.06);
+    --ui-shadow-lg: 0 12px 40px rgba(20, 28, 21, 0.12);
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   BASE — opt-in page reset. Skip by not putting .ui on <html>/<body>.
+   ══════════════════════════════════════════════════════════════════════════ */
+@layer ui.base {
+  /* the hidden attribute outranks any component display rule.
+     zero specificity via :where, and !important inverts the layer order so a
+     base-layer declaration beats ui.components — otherwise .pill's
+     `display: inline-flex` quietly wins and [hidden] does nothing.
+     hidden="until-found" is exempt: the UA needs it findable to reveal it. */
+  :where([hidden]:not([hidden="until-found"])) {
+    display: none !important;
+  }
+
+  .ui {
+    -webkit-font-smoothing: antialiased;
+    background: var(--ui-bg);
+    color: var(--ui-fg);
+    font-family: var(--ui-font-sans);
+    font-size: var(--ui-text-md);
+    line-height: var(--ui-leading-body);
+  }
+
+  .ui *,
+  .ui *::before,
+  .ui *::after {
+    box-sizing: border-box;
+  }
+
+  /* ── reset ─────────────────────────────────────────────────────────────────
+     A modern reset in the Andy Bell / Josh Comeau line, adapted: it corrects the
+     UA where the UA is wrong for a layout engine, and stops. It is NOT Preflight
+     — nothing here strips an element's meaning, because .ui is opt-in and a
+     semantic library that unstyles <ul> and <button> makes bare markup lie.
+     Every rule is :where(), so specificity 0: components and consumers override
+     without a fight, and a page dropping .ui gets the UA back whole. */
+
+  /* UA margins are vertical rhythm from a document engine; layout owns spacing
+     here. Lists are absent on purpose — a bare <ul> keeps its indent and its
+     bullets, and drops them by SAYING so with role="list". */
+  :where(
+    .ui blockquote,
+    .ui body,
+    .ui dd,
+    .ui dl,
+    .ui figure,
+    .ui h1,
+    .ui h2,
+    .ui h3,
+    .ui h4,
+    .ui h5,
+    .ui h6,
+    .ui p,
+    .ui pre
+  ) {
+    margin: 0;
+  }
+
+  :where(.ui ol[role="list"], .ui ul[role="list"]) {
+    list-style: none;
+    padding-left: 0;
+  }
+
+  /* replaced elements are boxes, not letters: the inline baseline gap under an
+     unwrapped <img> is a bug in every layout that has ever met it */
+  :where(.ui canvas, .ui img, .ui picture, .ui svg, .ui video) {
+    display: block;
+    max-width: 100%;
+  }
+
+  /* form controls opt out of inheritance for historical reasons only */
+  :where(.ui button, .ui input, .ui select, .ui textarea) {
+    font: inherit;
+  }
+
+  :where(.ui button) {
+    cursor: pointer;
+  }
+
+  /* a long token — a URL, a hash, a device id — must not widen the page */
+  :where(.ui h1, .ui h2, .ui h3, .ui h4, .ui h5, .ui h6, .ui p) {
+    overflow-wrap: break-word;
+  }
+
+  .ui :focus-visible {
+    outline: 2px solid var(--ui-accent);
+    outline-offset: 2px;
+  }
+
+  .ui ::selection {
+    background: var(--ui-accent-soft);
+  }
+
+  /* typographic scale — restrained, tight, hex-like */
+  .h1,
+  .h2,
+  .h3 {
+    color: var(--ui-fg);
+    letter-spacing: var(--ui-tracking-tight);
+    line-height: var(--ui-leading-tight);
+  }
+
+  .h1 {
+    font-size: var(--ui-text-2xl);
+    font-weight: var(--ui-weight-bold);
+  }
+  .h2 {
+    font-size: var(--ui-text-xl);
+    font-weight: var(--ui-weight-bold);
+  }
+  .h3 {
+    font-size: var(--ui-text-lg);
+    font-weight: var(--ui-weight-medium);
+  }
+
+  .eyebrow {
+    color: var(--ui-fg-faint);
+    font-family: var(--ui-font-mono);
+    font-size: var(--ui-text-2xs);
+    font-weight: var(--ui-weight-medium);
+    letter-spacing: var(--ui-tracking-caps);
+    text-transform: uppercase;
+  }
+
+  .lead {
+    color: var(--ui-fg-muted);
+    font-size: var(--ui-text-lg);
+  }
+  .muted {
+    color: var(--ui-fg-muted);
+  }
+  .faint {
+    color: var(--ui-fg-faint);
+  }
+  .mono {
+    font-family: var(--ui-font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .hr {
+    background: var(--ui-border);
+    border: 0;
+    height: 1px;
+    margin: var(--ui-space-5) 0;
+  }
+
+  .link {
+    color: var(--ui-accent);
+    text-decoration-color: var(--ui-accent-ring);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 2px;
+    transition: color var(--ui-fast) var(--ui-ease);
+  }
+
+  .link:hover {
+    color: var(--ui-accent-hover);
+    text-decoration-color: currentColor;
+  }
+
+  /* layout helpers — the few that every page needs and no page should re-derive */
+  .stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ui-space-3);
+  }
+  .row {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ui-space-2);
+  }
+  .spacer {
+    flex: 1 1 auto;
+  }
+
+  [data-grid] {
+    align-items: start;
+    display: grid;
+    gap: var(--ui-space-4);
+    grid-template-columns: repeat(auto-fit, minmax(var(--ui-grid-min, 280px), 1fr));
+  }
+
+  [data-container] {
+    margin-inline: auto;
+    max-width: var(--ui-container, 100rem);
+    padding-inline: var(--ui-space-5);
+    width: 100%;
+  }
+
+  /* The preference is a request to stop moving, not to stop three animations,
+     so it is answered once here rather than per-component. !important inverts
+     the layer order so ui.components cannot re-animate underneath it.
+     Near-zero rather than `none`: a 0.01ms transition still fires
+     transitionend, so code that awaits one does not hang forever. */
+  @media (prefers-reduced-motion: reduce) {
+    :where(.ui, .ui *, .ui *::before, .ui *::after) {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      scroll-behavior: auto !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   COMPONENTS
+   ══════════════════════════════════════════════════════════════════════════ */
+@layer ui.components {
+  /* ── icon ──────────────────────────────────────────────────────────────── */
+  .icon {
+    display: inline-block;
+    fill: currentColor;
+    flex: none;
+    height: var(--ui-icon-size, 1.15em);
+    vertical-align: -0.18em;
+    width: var(--ui-icon-size, 1.15em);
+  }
+
+  .icon-lg {
+    --ui-icon-size: 1.5em;
+  }
+  .icon-sm {
+    --ui-icon-size: 1em;
+  }
+
+  /* ── appbar ────────────────────────────────────────────────────────────── */
+  .appbar {
+    align-items: center;
+    background: var(--ui-surface);
+    border-bottom: 1px solid var(--ui-border);
+    display: flex;
+    gap: var(--ui-space-3);
+    padding: var(--ui-space-2) var(--ui-space-4);
+  }
+
+  .appbar-title {
+    align-items: center;
+    display: flex;
+    font-size: var(--ui-text-md);
+    font-weight: var(--ui-weight-bold);
+    gap: var(--ui-space-2);
+    letter-spacing: var(--ui-tracking-tight);
+  }
+
+  .appbar-title small {
+    color: var(--ui-fg-faint);
+    font-size: var(--ui-text-xs);
+    font-weight: var(--ui-weight-normal);
+  }
+
+  .appbar-nav {
+    align-items: center;
+    display: flex;
+    gap: var(--ui-space-1);
+  }
+
+  /* ── strip ─────────────────────────────────────────────────────────────────
+     A full-bleed status band, chrome rather than content: it sits directly under
+     .appbar, spans the viewport, and stays one line. Not a .notice — that
+     one is a boxed thing inside a layout. */
+  .strip {
+    align-items: center;
+    background: var(--ui-sunken);
+    border-bottom: 1px solid var(--ui-border);
+    color: var(--ui-fg-muted);
+    display: flex;
+    font-family: var(--ui-font-mono);
+    font-size: var(--ui-text-2xs);
+    gap: var(--ui-space-2);
+    line-height: 1.5;
+    padding: var(--ui-space-1) var(--ui-space-4);
+    white-space: nowrap;
+  }
+
+  .strip-tag {
+    color: var(--ui-fg-faint);
+    flex: none;
+    font-size: 10px;
+    font-weight: var(--ui-weight-bold);
+    letter-spacing: var(--ui-tracking-caps);
+    text-transform: uppercase;
+  }
+
+  .strip-msg {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .strip-accent {
+    background: var(--ui-accent-soft);
+    border-bottom-color: var(--ui-accent);
+    color: var(--ui-accent-soft-fg);
+  }
+  .strip-danger {
+    background: var(--ui-danger-soft);
+    border-bottom-color: var(--ui-danger);
+    color: var(--ui-danger);
+  }
+  .strip-info {
+    background: var(--ui-info-soft);
+    border-bottom-color: var(--ui-info);
+    color: var(--ui-info);
+  }
+  .strip-ok {
+    background: var(--ui-ok-soft);
+    border-bottom-color: var(--ui-ok);
+    color: var(--ui-ok);
+  }
+  .strip-warn {
+    background: var(--ui-warn-soft);
+    border-bottom-color: var(--ui-warn);
+    color: var(--ui-warn-ink);
+  }
+
+  .strip-accent .strip-tag,
+  .strip-danger .strip-tag,
+  .strip-info .strip-tag,
+  .strip-ok .strip-tag,
+  .strip-warn .strip-tag {
+    color: inherit;
+  }
+
+  /* ── button ────────────────────────────────────────────────────────────── */
+  .btn {
+    align-items: center;
+    background: var(--ui-surface-raised);
+    border: 1px solid var(--ui-border-strong);
+    border-radius: var(--ui-radius-md);
+    box-shadow: var(--ui-shadow-sm);
+    color: var(--ui-fg);
+    cursor: pointer;
+    display: inline-flex;
+    font-family: inherit;
+    font-size: var(--ui-text-sm);
+    font-weight: var(--ui-weight-medium);
+    gap: var(--ui-space-2);
+    justify-content: center;
+    line-height: 1;
+    padding: var(--ui-space-2) var(--ui-space-3);
+    text-decoration: none;
+    transition:
+      background var(--ui-fast) var(--ui-ease),
+      border-color var(--ui-fast) var(--ui-ease),
+      color var(--ui-fast) var(--ui-ease);
+    user-select: none;
+    white-space: nowrap;
+  }
+
+  .btn:hover {
+    background: var(--ui-sunken);
+    border-color: var(--ui-fg-faint);
+  }
+  .btn:active {
+    transform: translateY(0.5px);
+  }
+
+  .btn:disabled,
+  .btn[aria-disabled="true"] {
+    cursor: not-allowed;
+    opacity: 0.45;
+    pointer-events: none;
+  }
+
+  .btn-primary {
+    background: var(--ui-accent);
+    border-color: transparent;
+    color: var(--ui-accent-fg);
+  }
+
+  .btn-primary:hover {
+    background: var(--ui-accent-hover);
+    border-color: transparent;
+  }
+  .btn-primary:active {
+    background: var(--ui-accent-active);
+  }
+
+  .btn-danger {
+    background: transparent;
+    border-color: var(--ui-danger);
+    color: var(--ui-danger);
+  }
+
+  .btn-danger:hover {
+    background: var(--ui-danger-soft);
+    border-color: var(--ui-danger);
+  }
+
+  /* outline: transparent fill, the colour carried by border and text. .btn-danger
+     is the destructive member of this family and predates the name. */
+  .btn-outline {
+    background: transparent;
+    border-color: var(--ui-border-strong);
+    box-shadow: none;
+    color: var(--ui-fg-muted);
+  }
+
+  .btn-outline:hover {
+    background: var(--ui-sunken);
+    border-color: var(--ui-fg-faint);
+    color: var(--ui-fg);
+  }
+
+  .btn-outline-accent {
+    background: transparent;
+    border-color: var(--ui-accent);
+    box-shadow: none;
+    color: var(--ui-accent-soft-fg);
+  }
+
+  .btn-outline-accent:hover {
+    background: var(--ui-accent-soft);
+    border-color: var(--ui-accent);
+    color: var(--ui-accent-soft-fg);
+  }
+
+  .btn-outline-info {
+    background: transparent;
+    border-color: var(--ui-info);
+    box-shadow: none;
+    color: var(--ui-info);
+  }
+
+  .btn-outline-info:hover {
+    background: var(--ui-info-soft);
+    border-color: var(--ui-info);
+    color: var(--ui-info);
+  }
+
+  .btn-ghost {
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+    color: var(--ui-fg-muted);
+  }
+
+  .btn-ghost:hover {
+    background: var(--ui-sunken);
+    border-color: transparent;
+    color: var(--ui-fg);
+  }
+
+  .btn-quiet {
+    background: var(--ui-sunken);
+    border-color: var(--ui-border);
+    box-shadow: none;
+    color: var(--ui-fg-muted);
+  }
+
+  .btn-quiet:hover {
+    color: var(--ui-fg);
+  }
+
+  /* on = a latched toggle button (pause, live, follow) */
+  .btn.is-on {
+    background: var(--ui-accent-soft);
+    border-color: var(--ui-accent);
+    color: var(--ui-accent-soft-fg);
+  }
+
+  .btn-sm {
+    font-size: var(--ui-text-2xs);
+    padding: var(--ui-space-1) var(--ui-space-2);
+  }
+  .btn-lg {
+    font-size: var(--ui-text-md);
+    padding: var(--ui-space-3) var(--ui-space-5);
+  }
+  .btn-icon {
+    padding: var(--ui-space-2);
+  }
+
+  .btn-group {
+    display: inline-flex;
+  }
+
+  .btn-group > .btn {
+    border-radius: 0;
+    box-shadow: none;
+    margin-left: -1px;
+  }
+  .btn-group > .btn:first-child {
+    border-radius: var(--ui-radius-md) 0 0 var(--ui-radius-md);
+    margin-left: 0;
+  }
+  .btn-group > .btn:last-child {
+    border-radius: 0 var(--ui-radius-md) var(--ui-radius-md) 0;
+  }
+  .btn-group > .btn:hover,
+  .btn-group > .btn.is-on {
+    position: relative;
+    z-index: 1;
+  }
+
+  /* ── pill (a nav/label capsule) ────────────────────────────────────────── */
+  .pill {
+    align-items: center;
+    background: var(--ui-sunken);
+    border: 1px solid var(--ui-border);
+    border-radius: var(--ui-radius-full);
+    color: var(--ui-fg-muted);
+    display: inline-flex;
+    font-family: var(--ui-font-mono);
+    font-size: var(--ui-text-2xs);
+    gap: var(--ui-space-1);
+    line-height: 1;
+    padding: 4px 10px;
+    text-decoration: none;
+    transition:
+      border-color var(--ui-fast) var(--ui-ease),
+      color var(--ui-fast) var(--ui-ease);
+    white-space: nowrap;
+  }
+
+  a.pill:hover {
+    border-color: var(--ui-border-strong);
+    color: var(--ui-fg);
+  }
+
+  .pill.is-active,
+  .pill[aria-current] {
+    background: var(--ui-accent-soft);
+    border-color: var(--ui-accent);
+    color: var(--ui-accent-soft-fg);
+  }
+
+  .pill-accent {
+    border-color: var(--ui-accent);
+    color: var(--ui-accent-soft-fg);
+  }
+  .pill-danger {
+    background: var(--ui-danger-soft);
+    border-color: var(--ui-danger);
+    color: var(--ui-danger);
+  }
+  .pill-info {
+    background: var(--ui-info-soft);
+    border-color: var(--ui-info);
+    color: var(--ui-info);
+  }
+  .pill-ok {
+    background: var(--ui-ok-soft);
+    border-color: var(--ui-ok);
+    color: var(--ui-ok);
+  }
+  .pill-warn {
+    background: var(--ui-warn-soft);
+    border-color: var(--ui-warn);
+    color: var(--ui-warn-ink);
+  }
+
+  /* ── badge (a count or short tag; squarer than a pill) ─────────────────── */
+  .badge {
+    align-items: center;
+    background: var(--ui-sunken);
+    border: 1px solid var(--ui-border);
+    border-radius: var(--ui-radius-sm);
+    color: var(--ui-fg-muted);
+    display: inline-flex;
+    font-family: var(--ui-font-mono);
+    font-size: var(--ui-text-2xs);
+    font-variant-numeric: tabular-nums;
+    gap: 3px;
+    justify-content: center;
+    line-height: 1;
+    min-width: 1.5em;
+    padding: 3px 6px;
+  }
+
+  .badge-accent {
+    background: var(--ui-accent-soft);
+    border-color: transparent;
+    color: var(--ui-accent-soft-fg);
+  }
+  .badge-danger {
+    background: var(--ui-danger-soft);
+    border-color: transparent;
+    color: var(--ui-danger);
+  }
+  .badge-info {
+    background: var(--ui-info-soft);
+    border-color: transparent;
+    color: var(--ui-info);
+  }
+  .badge-ok {
+    background: var(--ui-ok-soft);
+    border-color: transparent;
+    color: var(--ui-ok);
+  }
+  .badge-warn {
+    background: var(--ui-warn-soft);
+    border-color: transparent;
+    color: var(--ui-warn-ink);
+  }
+
+  /* ── status dot + chip ─────────────────────────────────────────────────── */
+  .dot {
+    background: var(--ui-fg-faint);
+    border-radius: 50%;
+    display: inline-block;
+    flex: none;
+    height: 7px;
+    width: 7px;
+  }
+
+  .dot-danger {
+    background: var(--ui-danger);
+    box-shadow: 0 0 7px var(--ui-danger);
+  }
+  .dot-info {
+    background: var(--ui-info);
+  }
+  .dot-ok {
+    background: var(--ui-ok);
+    box-shadow: 0 0 7px var(--ui-ok);
+  }
+  .dot-warn {
+    background: var(--ui-warn);
+  }
+  .dot-pulse {
+    animation: ui-pulse 1.8s var(--ui-ease) infinite;
+  }
+
+  /* a chip is a label/value readout: `wpm 172` */
+  .chip {
+    align-items: baseline;
+    background: var(--ui-sunken);
+    border: 1px solid var(--ui-border);
+    border-radius: var(--ui-radius-sm);
+    color: var(--ui-fg-faint);
+    display: inline-flex;
+    font-family: var(--ui-font-mono);
+    font-size: var(--ui-text-2xs);
+    gap: var(--ui-space-1);
+    padding: 4px 8px;
+    white-space: nowrap;
+  }
+
+  .chip b,
+  .chip .chip-value {
+    color: var(--ui-fg);
+    font-size: var(--ui-text-xs);
+    font-variant-numeric: tabular-nums;
+    font-weight: var(--ui-weight-bold);
+  }
+
+  .chip-danger b {
+    color: var(--ui-danger);
+  }
+  .chip-ok b {
+    color: var(--ui-ok);
+  }
+  .chip-warn b {
+    color: var(--ui-warn-ink);
+  }
+
+  .chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ui-space-1);
+  }
+
+  /* ── card ──────────────────────────────────────────────────────────────── */
+  .card {
+    background: var(--ui-surface-raised);
+    border: 1px solid var(--ui-border);
+    border-radius: var(--ui-radius-lg);
+    box-shadow: var(--ui-shadow-sm);
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    overflow: hidden;
+    transition:
+      border-color var(--ui-slow) var(--ui-ease),
+      box-shadow var(--ui-slow) var(--ui-ease);
+  }
+
+  .card-hoverable:hover {
+    border-color: var(--ui-border-strong);
+    box-shadow: var(--ui-shadow-md);
+  }
+
+  .card-head {
+    align-items: center;
+    border-bottom: 1px solid var(--ui-border);
+    display: flex;
+    gap: var(--ui-space-2);
+    padding: var(--ui-space-3) var(--ui-space-4);
+  }
+
+  .card-body {
+    padding: var(--ui-space-4);
+  }
+
+  .card-foot {
+    align-items: center;
+    background: var(--ui-surface);
+    border-top: 1px solid var(--ui-border);
+    display: flex;
+    gap: var(--ui-space-2);
+    padding: var(--ui-space-2) var(--ui-space-4);
+  }
+
+  /* ── panel (the instrument-panel variant: tighter, monospace chrome) ───── */
+  .panel {
+    background: var(--ui-surface);
+    border: 1px solid var(--ui-border);
+    border-radius: var(--ui-radius-md);
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .panel-head {
+    align-items: center;
+    background: var(--ui-sunken);
+    border-bottom: 1px solid var(--ui-border);
+    box-shadow: inset 2px 0 0 var(--ui-panel-accent, transparent);
+    display: flex;
+    gap: var(--ui-space-2);
+    padding: var(--ui-space-2) var(--ui-space-3);
+    user-select: none;
+  }
+
+  .panel-name {
+    color: var(--ui-panel-accent, var(--ui-fg));
+    font-family: var(--ui-font-mono);
+    font-size: var(--ui-text-xs);
+    font-weight: var(--ui-weight-bold);
+    letter-spacing: 0.04em;
+  }
+
+  .panel-sub {
+    color: var(--ui-fg-faint);
+    font-size: var(--ui-text-2xs);
+    letter-spacing: 0.02em;
+  }
+
+  .panel-body {
+    overflow: auto;
+    padding: var(--ui-space-3);
+  }
+
+  .panel.is-collapsed .panel-body {
+    display: none;
+  }
+
+  /* ── list / listrow ────────────────────────────────────────────────────────
+     A dense selectable row, sized for the inside of a panel: a mono name, some
+     meta, and actions that stay right-aligned. The rail on the left is the
+     selection signal, so the row never has to move to show it is current. */
+  .list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .listrow {
+    align-items: center;
+    background: transparent;
+    border: 1px solid transparent;
+    border-left: 2px solid transparent;
+    border-radius: var(--ui-radius-sm);
+    color: var(--ui-fg-muted);
+    cursor: pointer;
+    display: flex;
+    font-size: var(--ui-text-xs);
+    gap: var(--ui-space-2);
+    padding: var(--ui-space-1) var(--ui-space-2);
+    text-align: left;
+    transition:
+      background var(--ui-fast) var(--ui-ease),
+      border-color var(--ui-fast) var(--ui-ease),
+      color var(--ui-fast) var(--ui-ease);
+    width: 100%;
+  }
+
+  .listrow:hover {
+    background: var(--ui-sunken);
+    border-color: var(--ui-border);
+    border-left-color: var(--ui-border-strong);
+  }
+
+  .listrow:focus-visible {
+    background: var(--ui-sunken);
+    outline: 2px solid var(--ui-accent);
+    outline-offset: -1px;
+  }
+
+  .listrow-name {
+    color: var(--ui-fg);
+    font-family: var(--ui-font-mono);
+    font-weight: var(--ui-weight-medium);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .listrow-meta {
+    align-items: center;
+    color: var(--ui-fg-faint);
+    display: flex;
+    flex: none;
+    font-family: var(--ui-font-mono);
+    font-size: var(--ui-text-2xs);
+    gap: var(--ui-space-1);
+  }
+
+  .listrow-actions {
+    align-items: center;
+    display: flex;
+    flex: none;
+    gap: var(--ui-space-1);
+    margin-left: auto;
+    opacity: 0;
+    transition: opacity var(--ui-fast) var(--ui-ease);
+  }
+
+  /* actions stay hidden until the row is engaged — a wall of buttons reads as noise */
+  .listrow.is-current .listrow-actions,
+  .listrow:focus-visible .listrow-actions,
+  .listrow:focus-within .listrow-actions,
+  .listrow:hover .listrow-actions {
+    opacity: 1;
+  }
+
+  .listrow.is-current {
+    background: var(--ui-accent-soft);
+    border-color: transparent;
+    border-left-color: var(--ui-accent);
+    color: var(--ui-accent-soft-fg);
+  }
+
+  .listrow.is-current .listrow-name {
+    color: var(--ui-accent-soft-fg);
+  }
+
+  /* faint ink loses AA once the row is tinted, so a tinted row promotes its meta */
+  .listrow.is-current .listrow-meta {
+    color: var(--ui-fg-muted);
+  }
+
+  /* Warning is a condition, selection is a state, and two tints in one list read
+     as one muddled emphasis whichever hues they are. Selection keeps the fill;
+     a warned row is marked by its rail and its name alone. (This split predates
+     the orange — warn was the accent's brass in dark and the two could not both
+     be a tint. The collision is gone; the split is kept because it was right.) */
+  .listrow.is-warned {
+    border-left-color: var(--ui-warn);
+  }
+
+  .listrow.is-warned .listrow-name {
+    color: var(--ui-warn-ink);
+  }
+
+  .listrow.is-busy {
+    animation: ui-pulse 1.4s var(--ui-ease) infinite;
+    cursor: progress;
+  }
+
+  .listrow:disabled,
+  .listrow[aria-disabled="true"] {
+    cursor: not-allowed;
+    opacity: 0.45;
+    pointer-events: none;
+  }
+  .panel.is-paused .panel-head {
+    box-shadow: inset 0 2px 0 var(--ui-warn);
+  }
+  .panel-wide {
+    grid-column: 1 / -1;
+  }
+
+  /* ── mono readout / kbd / code ─────────────────────────────────────────── */
+  .readout {
+    background: var(--ui-sunken);
+    border: 1px solid var(--ui-border);
+    border-radius: var(--ui-radius-sm);
+    color: var(--ui-fg-muted);
+    display: block;
+    font-family: var(--ui-font-mono);
+    font-size: var(--ui-text-xs);
+    line-height: 1.6;
+    overflow: auto;
+    padding: var(--ui-space-3);
+    tab-size: 2;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .readout b {
+    color: var(--ui-fg);
+    font-weight: var(--ui-weight-bold);
+  }
+  .readout .readout-t {
+    color: var(--ui-fg-faint);
+  }
+  .readout .readout-key {
+    color: var(--ui-accent-soft-fg);
+    font-weight: var(--ui-weight-bold);
+  }
+
+  /* a big single number, the kind a dashboard leads with */
+  .metric {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .metric-value {
+    color: var(--ui-fg);
+    font-family: var(--ui-font-mono);
+    font-size: var(--ui-text-2xl);
+    font-variant-numeric: tabular-nums;
+    font-weight: var(--ui-weight-bold);
+    letter-spacing: var(--ui-tracking-tight);
+    line-height: 1.1;
+  }
+
+  .metric-label {
+    color: var(--ui-fg-faint);
+    font-family: var(--ui-font-mono);
+    font-size: var(--ui-text-2xs);
+    letter-spacing: var(--ui-tracking-caps);
+    text-transform: uppercase;
+  }
+
+  .metric-delta-down {
+    color: var(--ui-danger);
+  }
+  .metric-delta-up {
+    color: var(--ui-ok);
+  }
+
+  .code {
+    background: var(--ui-sunken);
+    border: 1px solid var(--ui-border);
+    border-radius: 4px;
+    font-family: var(--ui-font-mono);
+    font-size: 0.9em;
+    padding: 1px 5px;
+  }
+
+  .kbd {
+    background: var(--ui-surface-raised);
+    border: 1px solid var(--ui-border-strong);
+    border-radius: 4px;
+    box-shadow: 0 1px 0 var(--ui-border-strong);
+    color: var(--ui-fg-muted);
+    display: inline-block;
+    font-family: var(--ui-font-mono);
+    font-size: var(--ui-text-2xs);
+    line-height: 1.4;
+    min-width: 1.6em;
+    padding: 2px 5px;
+    text-align: center;
+  }
+
+  /* ── transcript ────────────────────────────────────────────────────────── */
+  .transcript {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ui-space-3);
+  }
+
+  .transcript-turn {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .transcript-who {
+    color: var(--ui-fg-faint);
+    font-family: var(--ui-font-mono);
+    font-size: var(--ui-text-2xs);
+    letter-spacing: var(--ui-tracking-caps);
+    text-transform: uppercase;
+  }
+
+  .transcript-turn-self .transcript-who {
+    color: var(--ui-info);
+  }
+  .transcript-turn-agent .transcript-who {
+    color: var(--ui-accent-soft-fg);
+  }
+  .transcript-text {
+    color: var(--ui-fg);
+    font-size: var(--ui-text-md);
+    line-height: 1.7;
+  }
+
+  /* word-level states, the contract ra's ears panel renders */
+  .word-ghost {
+    color: var(--ui-danger);
+    opacity: 0.85;
+    text-decoration: line-through;
+  }
+  .word-tentative {
+    color: var(--ui-fg-muted);
+    font-style: italic;
+    opacity: 0.82;
+  }
+  .word-stable {
+    color: var(--ui-fg);
+  }
+
+  /* ── toggle (switch) ───────────────────────────────────────────────────── */
+  .toggle {
+    align-items: center;
+    cursor: pointer;
+    display: inline-flex;
+    gap: var(--ui-space-2);
+    user-select: none;
+  }
+
+  .toggle > input {
+    appearance: none;
+    background: var(--ui-border-strong);
+    border-radius: var(--ui-radius-full);
+    cursor: pointer;
+    flex: none;
+    height: 18px;
+    margin: 0;
+    position: relative;
+    transition: background var(--ui-fast) var(--ui-ease);
+    width: 32px;
+  }
+
+  .toggle > input::after {
+    background: var(--ui-surface-raised);
+    border-radius: 50%;
+    content: "";
+    height: 14px;
+    left: 2px;
+    position: absolute;
+    top: 2px;
+    transition: transform var(--ui-fast) var(--ui-ease);
+    width: 14px;
+  }
+
+  .toggle > input:checked {
+    background: var(--ui-accent);
+  }
+  .toggle > input:checked::after {
+    transform: translateX(14px);
+  }
+  .toggle > input:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+  .toggle-label {
+    color: var(--ui-fg-muted);
+    font-size: var(--ui-text-sm);
+  }
+
+  /* segmented control — a toggle with more than two states */
+  .segmented {
+    background: var(--ui-sunken);
+    border: 1px solid var(--ui-border);
+    border-radius: var(--ui-radius-md);
+    display: inline-flex;
+    gap: 2px;
+    padding: 2px;
+  }
+
+  .segmented > button {
+    background: transparent;
+    border: 0;
+    border-radius: var(--ui-radius-sm);
+    color: var(--ui-fg-muted);
+    cursor: pointer;
+    font-size: var(--ui-text-xs);
+    /* the control owns its leading: `font: inherit` in the reset would otherwise
+       hand it the body's 1.55 and make the strip four pixels taller than .btn */
+    line-height: normal;
+    padding: 4px 10px;
+    transition:
+      background var(--ui-fast) var(--ui-ease),
+      color var(--ui-fast) var(--ui-ease);
+  }
+
+  .segmented > button:hover {
+    color: var(--ui-fg);
+  }
+
+  .segmented > button[aria-pressed="true"] {
+    background: var(--ui-surface-raised);
+    box-shadow: var(--ui-shadow-sm);
+    color: var(--ui-fg);
+  }
+
+  /* ── form ──────────────────────────────────────────────────────────────── */
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ui-space-1);
+  }
+
+  .label {
+    color: var(--ui-fg-muted);
+    font-size: var(--ui-text-xs);
+    font-weight: var(--ui-weight-medium);
+  }
+
+  .hint {
+    color: var(--ui-fg-faint);
+    font-size: var(--ui-text-2xs);
+  }
+
+  .input,
+  .select,
+  .textarea {
+    background: var(--ui-surface-raised);
+    border: 1px solid var(--ui-border-strong);
+    border-radius: var(--ui-radius-md);
+    color: var(--ui-fg);
+    font-size: var(--ui-text-sm);
+    /* the field owns its leading: `font: inherit` in the reset would otherwise
+       hand it the body's 1.55 and grow every control by four pixels */
+    line-height: normal;
+    padding: var(--ui-space-2) var(--ui-space-3);
+    transition:
+      border-color var(--ui-fast) var(--ui-ease),
+      box-shadow var(--ui-fast) var(--ui-ease);
+    width: 100%;
+  }
+
+  .input::placeholder,
+  .textarea::placeholder {
+    color: var(--ui-fg-faint);
+  }
+
+  .input:focus,
+  .select:focus,
+  .textarea:focus {
+    border-color: var(--ui-accent);
+    box-shadow: 0 0 0 3px var(--ui-accent-ring);
+    outline: none;
+  }
+
+  .input:disabled,
+  .select:disabled,
+  .textarea:disabled {
+    background: var(--ui-sunken);
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+
+  .input-invalid,
+  .input[aria-invalid="true"] {
+    border-color: var(--ui-danger);
+  }
+
+  /* one size up — for an editor where the input is the page, not a field in a form */
+  .input-lg {
+    font-size: var(--ui-text-lg);
+    padding: var(--ui-space-3) var(--ui-space-4);
+  }
+
+  /* one size down — the toolbar and legend scale, cut to pair with .select-sm.
+     Width is left alone: a small input is still as wide as its container until
+     the page hands it a content-driven one. */
+  .input-sm {
+    font-size: var(--ui-text-xs);
+    padding: var(--ui-space-1) var(--ui-space-2);
+  }
+
+  .input-mono {
+    font-family: var(--ui-font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+  .input-num {
+    text-align: right;
+    width: 8ch;
+  }
+
+  .select {
+    appearance: none;
+    background-image:
+      linear-gradient(45deg, transparent 50%, currentColor 50%),
+      linear-gradient(135deg, currentColor 50%, transparent 50%);
+    background-position:
+      right 14px center,
+      right 9px center;
+    background-repeat: no-repeat;
+    background-size:
+      5px 5px,
+      5px 5px;
+    padding-right: var(--ui-space-6);
+  }
+
+  /* toolbar select — sized to its longest option plus the caret gutter, not to
+     the row. `width: auto` alone would let the caret sit on the text, so the
+     gutter is re-cut smaller rather than dropped. */
+  .select-sm {
+    background-position:
+      right 10px center,
+      right 6px center;
+    font-size: var(--ui-text-xs);
+    max-width: 100%;
+    padding: var(--ui-space-1) var(--ui-space-5) var(--ui-space-1) var(--ui-space-2);
+    width: auto;
+  }
+
+  .textarea {
+    line-height: var(--ui-leading-body);
+    min-height: 5.5em;
+    resize: vertical;
+  }
+
+  /* iOS auto-zoom floor. Safari on iOS scales the whole viewport up when it
+     focuses a form control computing under 16px — and never scales back out, so
+     one tap on a filter field leaves the page magnified. Every control here
+     trips it, including the large one: with `.ui` on the root the rem tokens
+     resolve against --ui-text-md, so measured the controls run 10.5px for the
+     -sm variants, 11.375px for .input/.select/.textarea, and 14px for .input-lg
+     — not one of them clears 16px, so the floor covers all three sizes.
+     `@supports (-webkit-touch-callout: none)` is the narrowest honest fence — it
+     matches WebKit on iOS and nothing else — so the compact scale survives
+     intact on every platform where the zoom cannot happen. The alternatives are
+     both worse: `maximum-scale=1` in the viewport meta stops the zoom by taking
+     pinch-zoom away from everyone, including the people who need it; a blanket
+     16px floor inflates the toolbar and legend scale on desktop, where the whole
+     point of -sm is that it is small. 16px is spelled literally, not as a token
+     — the trigger is a computed pixel threshold, and every token here is
+     rem-relative to a root the page is free to move. The -sm widths are
+     ch-based (.input-num, .select-sm's `width: auto`), so they grow with the
+     text and keep their content fit rather than clipping it. */
+  @supports (-webkit-touch-callout: none) {
+    .input,
+    .input-lg,
+    .input-sm,
+    .select,
+    .select-sm,
+    .textarea {
+      font-size: 16px;
+    }
+  }
+
+  /* ── table ─────────────────────────────────────────────────────────────── */
+  [data-table] {
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: var(--ui-text-sm);
+    width: 100%;
+  }
+
+  [data-table] th {
+    background: var(--ui-sunken);
+    border-bottom: 1px solid var(--ui-border);
+    color: var(--ui-fg-faint);
+    font-family: var(--ui-font-mono);
+    font-size: var(--ui-text-2xs);
+    font-weight: var(--ui-weight-medium);
+    letter-spacing: var(--ui-tracking-caps);
+    padding: var(--ui-space-2) var(--ui-space-3);
+    text-align: left;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  [data-table] td {
+    border-bottom: 1px solid var(--ui-border);
+    padding: var(--ui-space-2) var(--ui-space-3);
+    vertical-align: top;
+  }
+
+  [data-table] tbody tr:last-child td {
+    border-bottom: 0;
+  }
+  .table-hover tbody tr:hover td {
+    background: var(--ui-sunken);
+  }
+  .table-num {
+    font-family: var(--ui-font-mono);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+  }
+  .table-mono {
+    font-family: var(--ui-font-mono);
+  }
+  .table-wrap {
+    overflow-x: auto;
+  }
+
+  /* ── meter (a bounded bar) ─────────────────────────────────────────────── */
+  .meter {
+    background: var(--ui-sunken);
+    border-radius: var(--ui-radius-full);
+    height: 6px;
+    overflow: hidden;
+    width: 100%;
+  }
+
+  .meter > span {
+    background: var(--ui-accent);
+    display: block;
+    height: 100%;
+    transition: width var(--ui-slow) var(--ui-ease);
+    width: var(--ui-meter-value, 0%);
+  }
+
+  .meter-danger > span {
+    background: var(--ui-danger);
+  }
+  .meter-warn > span {
+    background: var(--ui-warn);
+  }
+
+  /* ── orb (the mic switch: breathing when live, slashed when muted) ─────── */
+  .orb {
+    background: none;
+    border: 0;
+    cursor: pointer;
+    display: inline-grid;
+    flex: none;
+    height: var(--ui-orb-size, 34px);
+    padding: 0;
+    place-items: center;
+    position: relative;
+    width: var(--ui-orb-size, 34px);
+  }
+
+  .orb-ring {
+    animation: ui-breathe 3.4s ease-in-out infinite;
+    border: 2px solid var(--ui-accent);
+    border-radius: 50%;
+    box-shadow:
+      var(--ui-glow),
+      inset 0 0 10px var(--ui-accent-soft);
+    height: 100%;
+    transition:
+      border-color var(--ui-slow) var(--ui-ease),
+      opacity var(--ui-slow) var(--ui-ease);
+    width: 100%;
+  }
+
+  .orb-slash {
+    background: var(--ui-fg-muted);
+    border-radius: 2px;
+    height: 2px;
+    opacity: 0;
+    position: absolute;
+    rotate: -45deg;
+    transition: opacity var(--ui-fast) var(--ui-ease);
+    width: 78%;
+  }
+
+  .orb:hover:not(:disabled) .orb-ring {
+    border-color: var(--ui-accent-hover);
+  }
+
+  .orb.is-muted .orb-ring {
+    animation: none;
+    border-color: var(--ui-fg-faint);
+    box-shadow: none;
+    opacity: 0.5;
+  }
+
+  .orb.is-muted .orb-slash {
+    opacity: 0.9;
+  }
+
+  .orb.is-down .orb-ring {
+    animation: none;
+    border-color: var(--ui-border-strong);
+    box-shadow: none;
+    opacity: 0.5;
+  }
+
+  .orb:disabled {
+    cursor: default;
+  }
+
+  /* ── notice ────────────────────────────────────────────────────────────── */
+  .notice {
+    align-items: flex-start;
+    background: var(--ui-sunken);
+    border: 1px solid var(--ui-border);
+    border-left: 3px solid var(--ui-fg-faint);
+    border-radius: var(--ui-radius-md);
+    display: flex;
+    font-size: var(--ui-text-sm);
+    gap: var(--ui-space-2);
+    padding: var(--ui-space-3);
+  }
+
+  .notice-danger {
+    background: var(--ui-danger-soft);
+    border-color: var(--ui-border);
+    border-left-color: var(--ui-danger);
+  }
+  .notice-info {
+    background: var(--ui-info-soft);
+    border-color: var(--ui-border);
+    border-left-color: var(--ui-info);
+  }
+  .notice-ok {
+    background: var(--ui-ok-soft);
+    border-color: var(--ui-border);
+    border-left-color: var(--ui-ok);
+  }
+  .notice-warn {
+    background: var(--ui-warn-soft);
+    border-color: var(--ui-border);
+    border-left-color: var(--ui-warn);
+  }
+
+  /* ── empty state ───────────────────────────────────────────────────────── */
+  .empty {
+    color: var(--ui-fg-faint);
+    font-family: var(--ui-font-mono);
+    font-size: var(--ui-text-xs);
+    padding: var(--ui-space-5) var(--ui-space-3);
+    text-align: center;
+  }
+
+  /* ── tooltip (CSS-only, on [data-ui-tip]) ──────────────────────────────── */
+  .tip {
+    position: relative;
+  }
+
+  .tip::after {
+    background: var(--ui-fg);
+    border-radius: var(--ui-radius-sm);
+    bottom: calc(100% + 6px);
+    color: var(--ui-bg);
+    content: attr(data-ui-tip);
+    font-family: var(--ui-font-mono);
+    font-size: var(--ui-text-2xs);
+    left: 50%;
+    opacity: 0;
+    padding: 4px 7px;
+    pointer-events: none;
+    position: absolute;
+    transition: opacity var(--ui-fast) var(--ui-ease);
+    translate: -50% 0;
+    white-space: nowrap;
+    z-index: 20;
+  }
+
+  .tip:focus-visible::after,
+  .tip:hover::after {
+    opacity: 1;
+  }
+
+  /* ── animation ─────────────────────────────────────────────────────────── */
+  @keyframes ui-breathe {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.66;
+    }
+  }
+
+  @keyframes ui-pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.35;
+    }
+  }
+}

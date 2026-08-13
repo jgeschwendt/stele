@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en" class="ui">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>stele — docs</title>
+<!-- ui.css is vendored byte-synced from jgeschwendt/ui (ui.css @ 4f1d9db) — sync, never edit here -->
+<link rel="stylesheet" href="ui.css" />
+<link rel="stylesheet" href="plan.css" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23476349'/%3E%3Cpath d='M5.5 12.25V6.5a2.5 2.5 0 0 1 5 0v5.75Z' fill='white'/%3E%3Crect x='3.75' y='12.25' width='8.5' height='1.5' rx='0.5' fill='white'/%3E%3C/svg%3E" />
+</head>
+<body data-page="docs">
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+<!-- Phosphor Icons (regular), MIT (c) 2023 Phosphor Icons — via jgeschwendt/ui icons/ -->
+<symbol id="ph-bank" viewBox="0 0 256 256" fill="currentColor"><path d="M24,104H48v64H32a8,8,0,0,0,0,16H224a8,8,0,0,0,0-16H208V104h24a8,8,0,0,0,4.19-14.81l-104-64a8,8,0,0,0-8.38,0l-104,64A8,8,0,0,0,24,104Zm40,0H96v64H64Zm80,0v64H112V104Zm48,64H160V104h32ZM128,41.39,203.74,88H52.26ZM248,208a8,8,0,0,1-8,8H16a8,8,0,0,1,0-16H240A8,8,0,0,1,248,208Z"/></symbol>
+<symbol id="ph-circle-half" viewBox="0 0 256 256" fill="currentColor"><path d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm8,16.37a86.4,86.4,0,0,1,16,3V212.67a86.4,86.4,0,0,1-16,3Zm32,9.26a87.81,87.81,0,0,1,16,10.54V195.83a87.81,87.81,0,0,1-16,10.54ZM40,128a88.11,88.11,0,0,1,80-87.63V215.63A88.11,88.11,0,0,1,40,128Zm160,50.54V77.46a87.82,87.82,0,0,1,0,101.08Z"/></symbol>
+<symbol id="ph-moon" viewBox="0 0 256 256" fill="currentColor"><path d="M233.54,142.23a8,8,0,0,0-8-2,88.08,88.08,0,0,1-109.8-109.8,8,8,0,0,0-10-10,104.84,104.84,0,0,0-52.91,37A104,104,0,0,0,136,224a103.09,103.09,0,0,0,62.52-20.88,104.84,104.84,0,0,0,37-52.91A8,8,0,0,0,233.54,142.23ZM188.9,190.34A88,88,0,0,1,65.66,67.11a89,89,0,0,1,31.4-26A106,106,0,0,0,96,56,104.11,104.11,0,0,0,200,160a106,106,0,0,0,14.92-1.06A89,89,0,0,1,188.9,190.34Z"/></symbol>
+<symbol id="ph-sun" viewBox="0 0 256 256" fill="currentColor"><path d="M120,40V16a8,8,0,0,1,16,0V40a8,8,0,0,1-16,0Zm72,88a64,64,0,1,1-64-64A64.07,64.07,0,0,1,192,128Zm-16,0a48,48,0,1,0-48,48A48.05,48.05,0,0,0,176,128ZM58.34,69.66A8,8,0,0,0,69.66,58.34l-16-16A8,8,0,0,0,42.34,53.66Zm0,116.68-16,16a8,8,0,0,0,11.32,11.32l16-16a8,8,0,0,0-11.32-11.32ZM192,72a8,8,0,0,0,5.66-2.34l16-16a8,8,0,0,0-11.32-11.32l-16,16A8,8,0,0,0,192,72Zm5.66,114.34a8,8,0,0,0-11.32,11.32l16,16a8,8,0,0,0,11.32-11.32ZM48,128a8,8,0,0,0-8-8H16a8,8,0,0,0,0,16H40A8,8,0,0,0,48,128Zm80,80a8,8,0,0,0-8,8v24a8,8,0,0,0,16,0V216A8,8,0,0,0,128,208Zm112-88H216a8,8,0,0,0,0,16h24a8,8,0,0,0,0-16Z"/></symbol>
+</svg>
+
+<header class="appbar">
+  <h1 class="appbar-title">
+    <svg class="icon" aria-hidden="true"><use href="#ph-bank" /></svg>
+    stele <small>· docs</small>
+  </h1>
+  <span class="spacer"></span>
+  <div class="segmented" role="group" aria-label="theme">
+    <button type="button" data-theme-set="light" aria-pressed="false" title="light">
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#ph-sun" /></svg>light
+    </button>
+    <button type="button" data-theme-set="auto" aria-pressed="true" title="follow the system">
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#ph-circle-half" /></svg>auto
+    </button>
+    <button type="button" data-theme-set="dark" aria-pressed="false" title="dark">
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#ph-moon" /></svg>dark
+    </button>
+  </div>
+</header>
+
+<div class="strip strip-accent">
+  <span class="strip-tag">docs</span>
+  <span class="strip-msg">this page mirrors <code class="code">README.md</code> and <code class="code">GUIDE.md</code> — the SPEC is the contract.</span>
+</div>
+
+<main class="plan-shell" data-container>
+
+<header class="stack">
+  <p class="eyebrow">authored intent vs extracted truth</p>
+  <p class="lead plan-lead">stele compiles a typed knowledge graph from three authored sources — the
+    file tree, comment anchors, and typed blocks in AGENTS.md files — and reconciles it against a
+    graph extracted from the code. CI asserts the two against each other in both directions: an
+    undeclared dependency means the code broke the signature, an unbacked declaration means the doc
+    lied. The same graph answers agent queries and materializes standard-compliant AGENTS.md files,
+    so every harness gets the full content with zero engine.</p>
+  <p class="plan-flavor"><em>stele</em> /ˈstiːli/ — an inscribed standing stone that publicly declares
+    the law. The territory is checked against it.</p>
+  <div class="row">
+    <span class="badge badge-accent">v0.2.0 · undercover mode</span>
+    <span class="badge">SPEC Draft 0.9 — the contract</span>
+    <span class="badge">self-hosting: this repo runs its own gate</span>
+  </div>
+  <nav class="row plan-toc" aria-label="sections">
+    <a class="pill" href="#install">install</a>
+    <a class="pill" href="#ladder">degradation ladder</a>
+    <a class="pill" href="#adopt">adoption path</a>
+    <a class="pill" href="#assertions">assertion suite</a>
+    <a class="pill" href="#query">query surface</a>
+    <a class="pill" href="#undercover">undercover mode</a>
+    <a class="pill" href="#artifacts">artifacts</a>
+  </nav>
+</header>
+
+<section class="plan-section" id="install" data-component="install">
+  <header>
+    <h2 class="h2">Install</h2>
+    <p class="plan-note">One static executable. The installer resolves a release, verifies the
+      sha256, and drops the binary in <code class="code">~/.local/bin</code>.</p>
+  </header>
+  <pre class="snippet">curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash</pre>
+  <pre class="snippet"><span class="snippet-note"># pin a version</span>
+curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash -s v0.2.0
+
+<span class="snippet-note"># prereleases</span>
+curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | channel=canary bash</pre>
+  <pre class="snippet"><span class="snippet-note"># from source</span>
+cargo install --git https://github.com/jgeschwendt/stele stele-cli</pre>
+</section>
+
+<section class="plan-section" id="ladder" data-component="ladder">
+  <header>
+    <h2 class="h2">The degradation ladder</h2>
+    <p class="plan-note">Files → CLI → MCP is a spec invariant, not an implementation detail. Each
+      rung adds capability; none becomes a reading dependency.</p>
+  </header>
+  <div class="rungs">
+    <article class="card">
+      <div class="card-head">
+        <span class="rung-step">rung 1</span>
+        <strong>files</strong>
+      </div>
+      <div class="card-body">Emitted AGENTS.md files are complete, standard-compliant markdown.
+        Every harness that reads AGENTS.md gets the whole graph content with zero tooling
+        installed.</div>
+    </article>
+    <article class="card">
+      <div class="card-head">
+        <span class="rung-step">rung 2</span>
+        <strong>CLI</strong>
+      </div>
+      <div class="card-body">The <code class="code">stele</code> binary adds verification and lazy
+        navigation: query verbs read the committed lock, and <code class="code">check</code> enforces
+        the graph against the code in CI.</div>
+    </article>
+    <article class="card">
+      <div class="card-head">
+        <span class="rung-step">rung 3</span>
+        <strong>MCP</strong>
+      </div>
+      <div class="card-body"><code class="code">stele serve</code> speaks JSON-RPC 2.0 over stdio and
+        exposes the read verbs as tools. Never required — every tool has a CLI equivalent, every CLI
+        answer is derivable from the files.</div>
+    </article>
+  </div>
+</section>
+
+<section class="plan-section" id="adopt" data-component="adopt">
+  <header>
+    <h2 class="h2">Adoption path</h2>
+    <p class="plan-note">Bare repo to CI-enforced graph. The long form is
+      <code class="code">GUIDE.md</code>; every rule behind it is in the SPEC.</p>
+  </header>
+  <ol class="steps">
+    <li><strong>Install</strong> — one binary, pinned in CI to the version you tested against.</li>
+    <li><strong>Scaffold</strong> — <code class="code">stele init</code> from the repo root scaffolds
+      AGENTS.md skeletons: a <code class="code">system</code> node at the root,
+      <code class="code">container</code> nodes for candidate directories. Fill in
+      <code class="code">purpose</code>, real <code class="code">commands</code>, and the claims worth
+      enforcing; delete the skeletons that don't deserve a node. The graph follows interface
+      boundaries, not the tree.</li>
+    <li><strong>Anchor your claims</strong> — every invariant and hazard names an anchor:
+      <code class="code">path#symbol</code> for a definition or markdown heading, or
+      <code class="code">lm:&lt;slug&gt;</code> for a named landmark comment that survives renames and
+      moves. Anchors are what make a claim checkable.</li>
+    <li><strong>Build</strong> — <code class="code">stele build</code> compiles authored sources into
+      <code class="code">.stele/graph.lock</code> and <code class="code">.stele/index/</code>. Build is
+      the reconciliation point: it re-stamps each claim's verified mark against current code, so run
+      it locally once you've reviewed that the claim still holds.</li>
+    <li><strong>Emit</strong> — <code class="code">stele emit</code> renders the router regions into
+      AGENTS.md, the transpose indexes, and the shim. Anything outside a marker region stays
+      yours.</li>
+    <li><strong>Commit</strong> — the AGENTS.md files, the lock, the indexes. The lock is the
+      canonical graph: queries and CI read it and never re-derive it. Paths the engine should never
+      scan go in a root <code class="code">.steleignore</code>, gitignore syntax.</li>
+    <li><strong>Enforce</strong> — CI checks out full history (freshness walks blame), then runs
+      <code class="code">stele check</code> followed by <code class="code">stele emit --check</code>.
+      CI never runs <code class="code">stele build</code> — that would launder staleness.</li>
+    <li><strong>Query</strong> — agents and humans read the graph instead of grepping docs, over the
+      CLI or MCP.</li>
+  </ol>
+  <pre class="snippet">stele init                     <span class="snippet-note"># scaffold nodes</span>
+stele build &amp;&amp; stele emit      <span class="snippet-note"># compile the lock, render the files</span>
+stele check                    <span class="snippet-note"># six assertion classes, exit 1 on violations</span>
+stele emit --check             <span class="snippet-note"># committed files vs what the lock renders</span></pre>
+  <pre class="snippet"><span class="snippet-note"># the CI gate</span>
+- uses: actions/checkout@v5
+  with:
+    fetch-depth: 0        <span class="snippet-note"># full history — freshness checks use blame</span>
+- run: curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash -s v0.2.0
+- run: ~/.local/bin/stele check
+- run: ~/.local/bin/stele emit --check</pre>
+</section>
+
+<section class="plan-section" id="assertions" data-component="assertions">
+  <header>
+    <h2 class="h2">The assertion suite</h2>
+    <p class="plan-note">Six classes over lock vs. code. <code class="code">stele check</code> exits
+      nonzero with findings; <code class="code">--only &lt;class&gt;</code> narrows it,
+      <code class="code">--run-commands</code> actually executes documented commands,
+      <code class="code">--freeze</code> accepts the current structure as the baseline, and
+      <code class="code">--json</code> gives the machine envelope.</p>
+  </header>
+  <div class="table-wrap">
+    <table data-table>
+      <thead><tr><th>class</th><th>catches</th></tr></thead>
+      <tbody>
+        <tr data-class="referential"><td class="table-mono">referential</td><td>anchors pointing at symbols, landmarks, or files that no longer exist</td></tr>
+        <tr data-class="structural"><td class="table-mono">structural</td><td>declared dependencies the code doesn't have — and code dependencies never declared</td></tr>
+        <tr data-class="exhaustiveness"><td class="table-mono">exhaustiveness</td><td>directories no node covers — unrouted context an agent can't navigate to</td></tr>
+        <tr data-class="budget"><td class="table-mono">budget</td><td>node docs exceeding their token budget</td></tr>
+        <tr data-class="freshness"><td class="table-mono">freshness</td><td>anchored code changed since the claim was last verified (<code class="code">stele blame &lt;node&gt;/&lt;slug&gt;</code> shows who and when)</td></tr>
+        <tr data-class="liveness"><td class="table-mono">liveness</td><td>documented <code class="code">commands:</code> that no longer resolve or run</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="plan-note plan-note-after"><code class="code">stele emit --check</code> is the
+    seventh gate in practice: it fails when committed AGENTS.md files diverge from what the lock
+    would render.</p>
+</section>
+
+<section class="plan-section" id="query" data-component="query">
+  <header>
+    <h2 class="h2">Query surface</h2>
+    <p class="plan-note">Plain subcommands and flags — no query grammar. The cross-cutting queries
+      are the capability nested files cannot provide at any size: the transpose of the whole graph,
+      materialized from one lock.</p>
+  </header>
+  <pre class="snippet">stele root                                  <span class="snippet-note"># the system node — start here</span>
+stele unfold payments --depth 2             <span class="snippet-note"># a node with its children</span>
+stele invariants --touching src/charge.rs   <span class="snippet-note"># claims governing the file you're editing</span>
+stele hazards                               <span class="snippet-note"># every active hazard</span>
+stele nodes --kind container                <span class="snippet-note"># the graph by kind</span>
+stele blame payments/idempotent-charges     <span class="snippet-note"># provenance of one claim</span></pre>
+  <p class="plan-note plan-note-after">For MCP-capable harnesses,
+    <code class="code">stele serve</code> exposes the same read verbs as tools:</p>
+  <pre class="snippet">{ "mcpServers": { "stele": { "command": "stele", "args": ["serve"] } } }</pre>
+</section>
+
+<section class="plan-section" id="undercover" data-component="undercover">
+  <header>
+    <h2 class="h2">Undercover mode</h2>
+    <p class="plan-note">v0.2.0's headline. When you're the only stele user on a shared repo — a
+      work, upstream, or open-source checkout whose collaborators must never see a stele artifact —
+      run the graph privately.</p>
+  </header>
+  <pre class="snippet">stele init --undercover</pre>
+  <ul class="stack claims" role="list">
+    <li data-undercover="home"><strong>the graph home is the parent of the git common dir</strong> —
+      the repo root in a normal checkout, the shared bare root in a grove layout, so every linked
+      worktree reads the same private graph and it survives worktree churn.</li>
+    <li data-undercover="overlay"><strong>node sources live in an untracked overlay</strong> —
+      <code class="code">&lt;home&gt;/.stele/tree/&lt;dir&gt;/AGENTS.md</code>, mirroring tree paths,
+      alongside the private lock and transpose indexes.</li>
+    <li data-undercover="shim"><strong>one materialized file</strong> —
+      <code class="code">CLAUDE.local.md</code>, a relative <code class="code">@</code>-import of the
+      overlay root that Claude Code auto-loads. Analogous to any other
+      <code class="code">.local</code> file: yours, never committed.</li>
+    <li data-undercover="clean"><strong>git status stays clean</strong> — a managed block in the
+      common dir's <code class="code">info/exclude</code> hides the private paths. Only the marker's
+      presence selects the mode; without it every command is byte-for-byte normal.</li>
+    <li data-undercover="ladder"><strong>the ladder trades its files rung for invisibility</strong> —
+      no CI story, because nothing is committed for a pipeline to gate;
+      <code class="code">stele check</code> is yours to run locally, and your surface is CLI → MCP
+      plus the shim.</li>
+  </ul>
+</section>
+
+<section class="plan-section" id="artifacts" data-component="artifacts">
+  <header>
+    <h2 class="h2">Artifacts</h2>
+    <p class="plan-note">The repository carries the whole design; this page is a summary of the first
+      two.</p>
+  </header>
+  <div class="table-wrap">
+    <table data-table>
+      <thead><tr><th>artifact</th><th>what it is</th></tr></thead>
+      <tbody>
+        <tr data-artifact="guide"><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/stele/blob/main/GUIDE.md">GUIDE.md</a></td><td>the adoption path — install, scaffold, anchor, build, enforce, query, undercover</td></tr>
+        <tr data-artifact="spec"><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/stele/blob/main/SPEC.md">SPEC.md</a></td><td>the contract — model, sources, assertion suite, query surface, process contract</td></tr>
+        <tr data-artifact="example"><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/stele/blob/main/EXAMPLE.md">EXAMPLE.md</a></td><td>worked example on a fictional monorepo: every artifact, an agent session with token accounting, a CI failure gallery</td></tr>
+        <tr data-artifact="report"><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/stele/blob/main/research/report.md">research/report.md</a></td><td>the evidence base — cited survey the design decisions trace to</td></tr>
+        <tr data-artifact="repo"><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/stele">jgeschwendt/stele</a></td><td>the engine — a Rust single binary, self-hosting on its own graph</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="plan-foot">stele v0.2.0 · SPEC Draft 0.9 · this page mirrors README.md and GUIDE.md; the
+    SPEC is the contract.</p>
+</section>
+
+</main>
+
+<script>
+/* The theme contract, verbatim from jgeschwendt/ui docs.js — same localStorage
+   key, so a theme chosen on the ui pages is the theme this one opens in. */
+const THEME_KEY = "ui-theme";
+function applyTheme(mode) {
+  const root = document.documentElement;
+  if (mode === "auto") {
+    root.removeAttribute("data-theme");
+    localStorage.removeItem(THEME_KEY);
+  } else {
+    root.dataset.theme = mode;
+    localStorage.setItem(THEME_KEY, mode);
+  }
+  for (const b of document.querySelectorAll("[data-theme-set]")) {
+    b.setAttribute("aria-pressed", String(b.dataset.themeSet === mode));
+  }
+}
+for (const b of document.querySelectorAll("[data-theme-set]")) {
+  b.addEventListener("click", () => applyTheme(b.dataset.themeSet));
+}
+applyTheme(localStorage.getItem(THEME_KEY) || "auto");
+</script>
+</body>
+</html>

@@ -4,3 +4,6 @@ tests/fixtures/
 # CI plumbing, not architecture — kept out of the graph so its tracked dot-dir needs no
 # node and never trips exhaustiveness (§4.3).
 .github/
+# The published GitHub Pages site (a mirror of README.md and GUIDE.md plus vendored ui.css)
+# — presentation, not architecture, so it needs no node and never trips §4.3.
+docs/

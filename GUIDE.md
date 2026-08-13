@@ -8,7 +8,7 @@ The five-minute path from a bare repo to a CI-enforced agent-doc graph. The [SPE
 curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash
 ```
 
-Pin a version with `… | bash -s v0.1.1`; prereleases with `… | channel=canary bash`. The binary lands in `~/.local/bin/stele`. From source: `cargo install --git https://github.com/jgeschwendt/stele stele-cli`.
+Pin a version with `… | bash -s v0.2.0`; prereleases with `… | channel=canary bash`. The binary lands in `~/.local/bin/stele`. From source: `cargo install --git https://github.com/jgeschwendt/stele stele-cli`.
 
 ## 2 · Scaffold
 
@@ -72,7 +72,7 @@ stele:
     - uses: actions/checkout@v5
       with:
         fetch-depth: 0        # full history — freshness checks use blame
-    - run: curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash -s v0.1.1
+    - run: curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash -s v0.2.0
     - run: ~/.local/bin/stele check
     - run: ~/.local/bin/stele emit --check
 ```

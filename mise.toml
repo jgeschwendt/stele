@@ -1,2 +1,3 @@
 [tools]
+lefthook = "1"
 rust = "stable"

@@ -1,0 +1,3 @@
+# One chained command: the graph gate needs the build, so CI order is load-bearing.
+[pre-push.commands.ci]
+run = "cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo build && ./target/debug/stele check && ./target/debug/stele emit --check"

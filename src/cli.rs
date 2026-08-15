@@ -2634,12 +2634,19 @@ mod tests {
 
     /// Run `git` in `root`, asserting success — the tracked-file/staging surface `init`
     /// needs (§2.4). Kept minimal: `init` reads `git ls-files` and calls `git add`.
+    /// Repo-locating vars are dropped — under a git hook, an inherited `GIT_DIR`
+    /// would point the fixture's git at the host repo.
     fn git(root: &Path, args: &[&str]) {
-        let out = Command::new("git")
-            .args(args)
-            .current_dir(root)
-            .output()
-            .expect("run git");
+        let mut cmd = Command::new("git");
+        for var in [
+            "GIT_COMMON_DIR",
+            "GIT_DIR",
+            "GIT_INDEX_FILE",
+            "GIT_WORK_TREE",
+        ] {
+            cmd.env_remove(var);
+        }
+        let out = cmd.args(args).current_dir(root).output().expect("run git");
         assert!(out.status.success(), "git {args:?}: {out:?}");
     }
 

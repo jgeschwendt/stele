@@ -32,9 +32,24 @@ fn git_config_global() -> &'static Path {
 
 /// Isolate a spawned `git` (or `stele`, whose own `git` children inherit this env) from host and
 /// user git config: replace the global config with [`git_config_global`] and void the system
-/// config. Every `Command` the harness spawns routes through this so an empty `git status` proves
-/// the engine's exclude block, never the developer's machine.
+/// config, and drop the repo-locating variables git exports into hook children (under a
+/// `pre-push` hook, an inherited `GIT_DIR` points every fixture's git at the host repo). Every
+/// `Command` the harness spawns routes through this so an empty `git status` proves the engine's
+/// exclude block, never the developer's machine.
 pub fn isolate_git(cmd: &mut Command) -> &mut Command {
+    for var in [
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_PREFIX",
+        "GIT_QUARANTINE_PATH",
+        "GIT_WORK_TREE",
+    ] {
+        cmd.env_remove(var);
+    }
     cmd.env("GIT_CONFIG_GLOBAL", git_config_global())
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
 }

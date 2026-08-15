@@ -1,3 +1,5 @@
 # One chained command: the graph gate needs the build, so CI order is load-bearing.
+# The unset scrubs the repo-locating env git exports into hooks — inherited, it points
+# the test fixtures' git (and any child git) at this repo instead of their sandboxes.
 [pre-push.commands.ci]
-run = "cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo build && ./target/debug/stele check && ./target/debug/stele emit --check"
+run = "unset $(git rev-parse --local-env-vars); cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo build && ./target/debug/stele check && ./target/debug/stele emit --check"

@@ -1,0 +1,94 @@
+name: update-deps
+
+# Daily dependency refresh: `cargo update` off main (semver-compatible,
+# lockfile only — major bumps stay manual), shipped as an auto-merge PR. The
+# required checks are the merge gate — this workflow never builds or tests.
+# Red runs are repaired on the update-deps branch by the local
+# `github-failures` routine. Copied from jlg.io's update-deps (per-repo
+# copies, no reusable workflow — decided 2026-08-30).
+#
+# The bump is deterministic shell; claude-code-action ships it (commit, push,
+# PR, auto-merge) on the Claude GitHub App's credentials. That identity is
+# the point, not a convenience: events created by GITHUB_TOKEN trigger no
+# workflows, so a GITHUB_TOKEN-opened PR would sit with its required checks
+# forever unstarted, and a GITHUB_TOKEN-armed auto-merge would land on main
+# without triggering push workflows. A real app's token has neither problem.
+# Needs the Claude GitHub App (github.com/apps/claude) installed on the repo
+# and the CLAUDE_CODE_OAUTH_TOKEN secret (`claude setup-token`).
+#
+# The schedule is a fallback, not the primary fire: GitHub delays `schedule:`
+# events under load (~5h observed on jlg.io). The punctual morning run is a
+# local `workflow_dispatch` from the `update-deps-dispatch` routine at 10:30
+# UTC; this cron catches days that machine is off. Duplicate fires are cheap:
+# the guard skips while a PR is open, and a second bump on an already-shipped
+# day finds no diff.
+on:
+  schedule:
+    - cron: '47 12 * * *'
+  workflow_dispatch:
+
+concurrency:
+  cancel-in-progress: false
+  group: update-deps
+
+permissions:
+  actions: read
+  contents: write
+  id-token: write
+  pull-requests: write
+
+jobs:
+  ship:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # One open update-deps PR at a time — yesterday's red PR is being
+      # repaired, not superseded.
+      - id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -n "$(gh pr list -R "$GITHUB_REPOSITORY" --head update-deps --state open --json number --jq '.[].number')" ]; then
+            echo "open update-deps PR still pending — not stacking a second"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.guard.outputs.skip != 'true'
+        uses: actions/checkout@v5
+
+      - if: steps.guard.outputs.skip != 'true'
+        uses: jdx/mise-action@v2
+
+      - if: steps.guard.outputs.skip != 'true'
+        id: bump
+        run: |
+          cargo update
+
+          if git diff --quiet; then
+            echo "already at latest — nothing to ship"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Runs only when the bump changed something — quiet days spend nothing.
+      - if: steps.bump.outputs.changed == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_args: --model sonnet --allowedTools "Bash(git:*),Bash(gh:*)"
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            The working tree carries today's dependency bump (`cargo
+            update`, lockfile only) — already run. Change no files; your job
+            is only to ship what is here:
+
+            1. `git checkout -b update-deps`
+            2. `git commit --no-verify -am "chore(deps): daily cargo update"`
+               (--no-verify: hooks are not installed in this runner; the PR's
+               required checks cover everything they would)
+            3. `git push -f origin update-deps`
+            4. `gh pr create --head update-deps --title "chore(deps): daily cargo update"`
+               with a short body: the notable version bumps read from the
+               Cargo.lock diff, plus the line "Auto-merges on green; a red
+               run is repaired on this branch by the `github-failures`
+               routine."
+            5. `gh pr merge update-deps --auto --squash`

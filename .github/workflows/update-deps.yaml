@@ -16,15 +16,12 @@ name: update-deps
 # Needs the Claude GitHub App (github.com/apps/claude) installed on the repo
 # and the CLAUDE_CODE_OAUTH_TOKEN secret (`claude setup-token`).
 #
-# The schedule is a fallback, not the primary fire: GitHub delays `schedule:`
-# events under load (~5h observed on jlg.io). The punctual morning run is a
-# local `workflow_dispatch` from the `update-deps-dispatch` routine at 10:30
-# UTC; this cron catches days that machine is off. Duplicate fires are cheap:
-# the guard skips while a PR is open, and a second bump on an already-shipped
-# day finds no diff.
+# The schedule is best-effort: GitHub can fire it hours after the cron under
+# load (~5h observed on jlg.io). Good enough for a daily refresh; for an
+# immediate bump: `gh workflow run update-deps.yaml`.
 on:
   schedule:
-    - cron: '47 12 * * *'
+    - cron: '47 9 * * *'
   workflow_dispatch:
 
 concurrency:

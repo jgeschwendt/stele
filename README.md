@@ -29,3 +29,14 @@ Or from source: `cargo install --git https://github.com/jgeschwendt/stele stele-
 ## Why this exists (the one-paragraph version)
 
 Measured evidence says coding agents don't benefit from prose overviews of a codebase — even human-written ones — and are actively harmed by stale or redundant context. What does transmit value: concrete tooling commands, non-derivable invariants and hazards, and navigation structure delivered lazily at the point of relevance. Every existing tool either *generates* docs from code (unverified, drifting) or *checks* declared architecture forward-only (never coupled to the docs agents read). stele occupies the empty intersection: the docs are a typed, queryable graph compiled from authored intent, verified against the extracted truth of the code, in CI, both directions — and they degrade to plain markdown files any harness can read. The full argument, with citations, is in [research/report.md](./research/report.md).
+
+## License
+
+Copyright Joshua Geschwendt.
+
+Licensed under the [PolyForm Noncommercial License
+1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0) — the full text is in
+[LICENSE.md](./LICENSE.md). Any noncommercial purpose is permitted; commercial use
+requires a separate license from the author.
+
+External contributions are not accepted — the chain of title stays with one owner.

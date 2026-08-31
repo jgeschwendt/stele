@@ -1206,7 +1206,7 @@
     line-height: 1.7;
   }
 
-  /* word-level states, the contract ra's ears panel renders */
+  /* word-level states, the contract a live-transcript panel renders */
   .word-ghost {
     color: var(--ui-danger);
     opacity: 0.85;

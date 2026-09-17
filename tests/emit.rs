@@ -225,6 +225,68 @@ fn emit_never_overwrites_a_teams_claude_file() {
     );
 }
 
+/// Every NESTED node's directory in acme — the root (`AGENTS.md`) is covered by the
+/// root-shim tests above.
+const ACME_NESTED_DIRS: [&str; 5] = [
+    "apps/web",
+    "apps/web/lib/billing",
+    "apps/web/lib/store",
+    "apps/worker",
+    "packages/shared",
+];
+
+// Claude Code loads no AGENTS.md natively at any level (verified 2026-09-16, 2.1.273): a
+// nested node file is invisible unless its directory also carries the one-line CLAUDE.md
+// shim, which Claude Code lazily loads on the first read under that directory.
+#[test]
+fn emit_creates_a_claude_shim_beside_every_nested_node() {
+    let fixture = built();
+    for dir in ACME_NESTED_DIRS {
+        assert!(
+            !fixture.path(&format!("{dir}/CLAUDE.md")).exists(),
+            "{dir}/CLAUDE.md exists before emit"
+        );
+    }
+
+    assert_eq!(fixture.run(&["emit"]).code, 0);
+    for dir in ACME_NESTED_DIRS {
+        assert_eq!(
+            fixture.read(&format!("{dir}/CLAUDE.md")),
+            "@AGENTS.md\n",
+            "nested shim at {dir}"
+        );
+    }
+}
+
+#[test]
+fn emit_never_overwrites_a_teams_nested_claude_file() {
+    let fixture = built();
+    let authored = "# billing house rules\n\nhand-authored, keep me.\n";
+    fixture.write("apps/web/lib/billing/CLAUDE.md", authored);
+
+    assert_eq!(fixture.run(&["emit"]).code, 0);
+    assert_eq!(fixture.read("apps/web/lib/billing/CLAUDE.md"), authored);
+    // The untouched siblings still get theirs.
+    assert_eq!(fixture.read("apps/worker/CLAUDE.md"), "@AGENTS.md\n");
+}
+
+// A shim is not a generated region: like the root shim, the nested ones are ensure-on-write
+// only and `emit --check` never diffs them.
+#[test]
+fn emit_check_ignores_the_nested_shims() {
+    let fixture = built();
+    assert_eq!(fixture.run(&["emit"]).code, 0);
+
+    fixture.delete_file("apps/worker/CLAUDE.md");
+    fixture.delete_file("packages/shared/CLAUDE.md");
+    let check = fixture.run(&["emit", "--check"]);
+    assert_eq!(check.code, 0, "{}", check.combined());
+    assert!(
+        !fixture.path("apps/worker/CLAUDE.md").exists(),
+        "emit --check wrote a nested shim"
+    );
+}
+
 // ─── --claude-rules opt-in (§3.3) ────────────────────────────────────────────
 
 #[test]

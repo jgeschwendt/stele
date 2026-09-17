@@ -54,10 +54,10 @@ Anchors are what make claims checkable: when the anchored code changes, the clai
 
 ```sh
 stele build   # compiles authored sources → .stele/graph.lock (+ .stele/index/)
-stele emit    # renders router regions into AGENTS.md, transpose indexes, the CLAUDE.md shim
+stele emit    # renders router regions into AGENTS.md, transpose indexes, the CLAUDE.md shims (root + one per nested node)
 ```
 
-Commit everything: the `AGENTS.md` files, `.stele/graph.lock`, `.stele/index/`. The lock is the canonical graph — queries and CI read it, never re-derive it.
+Commit everything: the `AGENTS.md` files, their `CLAUDE.md` shims, `.stele/graph.lock`, `.stele/index/`. The lock is the canonical graph — queries and CI read it, never re-derive it.
 
 `build` is the reconciliation point: it re-stamps each claim's `verified` mark against the current code. Run it locally when you've reviewed that a claim still holds; **CI never runs `stele build`** — that would launder staleness.
 

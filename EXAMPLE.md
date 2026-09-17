@@ -6,30 +6,35 @@ Companion to SPEC.md draft 0.9. A fictional-but-realistic monorepo (`acme`): Pho
 
 ```
 acme/
-├── AGENTS.md                      ← system node (source + rendering, §3.1)
-├── CLAUDE.md                      ← one line: @AGENTS.md
+├── AGENTS.md                 ← system node (source + rendering, §3.1)
+├── CLAUDE.md                 ← one line: @AGENTS.md
 ├── .stele/
-│   ├── graph.lock                 ← compiled graph, committed
+│   ├── graph.lock            ← compiled graph, committed
 │   └── index/
-│       ├── invariants.md          ← generated transpose (spec §6.1)
+│       ├── invariants.md     ← generated transpose (spec §6.1)
 │       └── hazards.md
 ├── adr/
 │   └── 0007-integer-cents.md
 ├── apps/
 │   ├── web/
-│   │   ├── AGENTS.md              ← container node
+│   │   ├── AGENTS.md         ← container node
+│   │   ├── CLAUDE.md         ← one line: @AGENTS.md
 │   │   └── lib/
 │   │       ├── billing/
-│   │       │   ├── AGENTS.md      ← component node
+│   │       │   ├── AGENTS.md ← component node
+│   │       │   ├── CLAUDE.md ← one line: @AGENTS.md
 │   │       │   ├── charge.ex
 │   │       │   └── refund.ex
 │   │       └── store/
-│   │           └── AGENTS.md      ← component node
+│   │           ├── AGENTS.md ← component node
+│   │           └── CLAUDE.md ← one line: @AGENTS.md
 │   └── worker/
-│       └── AGENTS.md              ← container node
+│       ├── AGENTS.md         ← container node
+│       └── CLAUDE.md         ← one line: @AGENTS.md
 └── packages/
     └── shared/
-        └── AGENTS.md              ← container node (TypeScript)
+        ├── AGENTS.md         ← container node (TypeScript)
+        └── CLAUDE.md         ← one line: @AGENTS.md
 ```
 
 ## 2. Root `AGENTS.md` (system node) — the initialContext
@@ -288,12 +293,13 @@ exit 1
 
 ## 9. The degradation ladder, shown
 
-| harness                          | what it gets                                                                     | what it loses                                            |
-| -------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| Codex / anything AGENTS.md-aware | root + nearest-file-wins chain, complete typed content, hazards, router-as-prose | cross-cutting queries; lazy unfold (its chain is static) |
-| Any harness + Bash               | above + `stele unfold/invariants/check` as tool calls                            | nothing material                                         |
-| Claude Code + MCP                | above + typed tools, no shell round-trips                                        | —                                                        |
-| Human with an editor             | readable markdown files, one per directory, plus one YAML block each             | nothing — that's the point                               |
+| harness                          | what it gets                                                                                                                                                                                                | what it loses                                             |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| Codex / anything AGENTS.md-aware | root + nearest-file-wins chain, complete typed content, hazards, router-as-prose                                                                                                                            | cross-cutting queries; lazy unfold (its chain is static)  |
+| Claude Code (files only)         | the same chain, via the `CLAUDE.md` = `@AGENTS.md` shims `emit` writes at the root and beside every nested node — no native AGENTS.md loading; nested shims load lazily on first read under their directory | same as above; one extra one-line file per node directory |
+| Any harness + Bash               | above + `stele unfold/invariants/check` as tool calls                                                                                                                                                       | nothing material                                          |
+| Claude Code + MCP                | above + typed tools, no shell round-trips                                                                                                                                                                   | —                                                         |
+| Human with an editor             | readable markdown files, one per directory, plus one YAML block each                                                                                                                                        | nothing — that's the point                                |
 
 ## 10. Standing holes (author-acknowledged, wanting attack)
 

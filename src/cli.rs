@@ -660,7 +660,11 @@ const INVARIANTS_INDEX: &str = "invariants.md";
 const HAZARDS_INDEX: &str = "hazards.md";
 /// The `.claude/rules/` directory (§3.3), relative to the repo root.
 const CLAUDE_RULES_DIR: &str = ".claude/rules";
-/// The CLAUDE.md shim (§3.3): one line pointing Claude Code at AGENTS.md.
+/// The CLAUDE.md shim (§3.3): one line pointing Claude Code at the sibling AGENTS.md.
+/// Written at the graph home AND beside every nested node's AGENTS.md — Claude Code has no
+/// native AGENTS.md discovery at any level (verified empirically 2026-09-16, 2.1.273), but a
+/// nested `CLAUDE.md` is lazily loaded on the first read under its directory, and its
+/// `@AGENTS.md` import pulls the sibling node file with it.
 const CLAUDE_SHIM: &str = "CLAUDE.md";
 const CLAUDE_SHIM_CONTENT: &str = "@AGENTS.md\n";
 /// The undercover shim (§3.5): the single materialized file, at the invoking work-tree
@@ -864,13 +868,16 @@ fn write_under_root(root: &Path, dir: &str, name: &str, content: &str) -> Result
         .map_err(|e| SteleError::internal(format!("write {dir}/{name}: {e}")))
 }
 
-/// Ensure the harness shim exists when the graph declares a system node (§3.3/§3.5),
+/// Ensure the harness shims exist when the graph declares a system node (§3.3/§3.5),
 /// mode-aware. Normal: `CLAUDE.md` = `@AGENTS.md` at the graph home (today's behavior,
-/// byte-identical). Undercover: `CLAUDE.local.md` at the invoking WORK-tree root, a single
-/// relative `@`-import of the overlay root node (§3.5). Both are only-if-absent — an
-/// existing shim is the operator's (or team's) and is never overwritten, even when it
-/// differs. Like the §3.3 `CLAUDE.md` shim this is ensure-on-write only; `emit --check`
-/// does NOT diff it (the shim is not a generated region — see [`emit_check`]).
+/// byte-identical) AND one beside every nested node's AGENTS.md — Claude Code loads no
+/// AGENTS.md natively at any level, so without the nested shim a node file is invisible
+/// (verified empirically 2026-09-16, 2.1.273). Undercover: `CLAUDE.local.md` at the invoking
+/// WORK-tree root, a single relative `@`-import of the overlay root node (§3.5) — exactly one
+/// materialized file, so no nested shims (nothing is ever written under `.stele/tree/`).
+/// All are only-if-absent — an existing shim is the operator's (or team's) and is never
+/// overwritten, even when it differs. This is ensure-on-write only; `emit --check` does NOT
+/// diff any shim (a shim is not a generated region — see [`emit_check`]).
 fn ensure_shim(ws: &Workspace, lock: &Lock) -> Result<()> {
     if !lock.nodes.contains_key(crate::model::SYSTEM_ID) {
         return Ok(());
@@ -878,11 +885,11 @@ fn ensure_shim(ws: &Workspace, lock: &Lock) -> Result<()> {
     match ws.mode {
         Mode::Normal => {
             let path = ws.home.join(CLAUDE_SHIM);
-            if path.exists() {
-                return Ok(());
+            if !path.exists() {
+                std::fs::write(&path, CLAUDE_SHIM_CONTENT)
+                    .map_err(|e| SteleError::internal(format!("write {CLAUDE_SHIM}: {e}")))?;
             }
-            std::fs::write(&path, CLAUDE_SHIM_CONTENT)
-                .map_err(|e| SteleError::internal(format!("write {CLAUDE_SHIM}: {e}")))
+            ensure_nested_shims(ws, lock)
         }
         Mode::Undercover => {
             // The shim belongs at the invoking WORK-TREE ROOT (§3.5), not at `ws.work` (the cwd):
@@ -901,6 +908,29 @@ fn ensure_shim(ws: &Workspace, lock: &Lock) -> Result<()> {
                 .map_err(|e| SteleError::internal(format!("write {CLAUDE_LOCAL_SHIM}: {e}")))
         }
     }
+}
+
+/// Ensure a `CLAUDE.md` = `@AGENTS.md` shim beside every NESTED node's AGENTS.md (§3.3),
+/// normal mode only. The system node is skipped — its directory is the graph home, already
+/// covered by the root shim in [`ensure_shim`]. Only-if-absent, exactly like the root shim:
+/// a directory that already carries a `CLAUDE.md` keeps the team's file byte-for-byte, and
+/// `emit --check` never diffs these.
+fn ensure_nested_shims(ws: &Workspace, lock: &Lock) -> Result<()> {
+    for id in lock.nodes.keys() {
+        if id == crate::model::SYSTEM_ID {
+            continue;
+        }
+        let Some(dir) = node_agents_path(ws, id).parent().map(Path::to_path_buf) else {
+            continue;
+        };
+        let path = ws.home.join(dir).join(CLAUDE_SHIM);
+        if path.exists() {
+            continue;
+        }
+        std::fs::write(&path, CLAUDE_SHIM_CONTENT)
+            .map_err(|e| SteleError::internal(format!("write {}: {e}", path.display())))?;
+    }
+    Ok(())
 }
 
 /// The relative path from the canonicalized work-tree root to the overlay root node file

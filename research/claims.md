@@ -8,9 +8,9 @@ note: spec is deliberately schema-free Markdown; "nearest file wins"; formal mer
 
 ## C2: Claude Code does NOT natively read AGENTS.md; bridge = CLAUDE.md containing `@AGENTS.md` (or symlink)
 
-status: reported (official docs, fetched 2026-07-19)
-for: code.claude.com/docs/en/memory
-note: negative capability claim — re-verify at design time (platform may add native support).
+status: established (official docs, fetched 2026-07-19; verified empirically 2026-09-16 against Claude Code 2.1.273)
+for: code.claude.com/docs/en/memory; sentinel-fixture probe 2026-09-16 (root AGENTS.md alone, nested AGENTS.md beside and without a CLAUDE.md, nested CLAUDE.md `@AGENTS.md` shim) with the session transcript grepped for `nested_memory` attachments
+note: negative capability claim — re-verify at design time (platform may add native support). Holds at every level: a root AGENTS.md without the shim is not loaded; a nested AGENTS.md is never auto-loaded on Read, with or without a sibling CLAUDE.md; the binary's only AGENTS.md strings are the Codex `/import` mapper. A nested CLAUDE.md IS lazily injected when a file under it is read, and a nested one-line `@AGENTS.md` shim pulls the sibling AGENTS.md the same way — so "nearest file wins" (C1) is Codex-only for Claude Code unless stele emits a shim beside every nested node file or `emit --claude-rules`.
 
 ## C3: Claude Code loading — ancestors full at launch; subdir CLAUDE.md on-demand on file read (NOT re-injected post-compaction); @-imports all load at launch, max 4 hops, NO context savings; path-scoped .claude/rules = native progressive disclosure
 

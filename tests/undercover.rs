@@ -433,6 +433,44 @@ fn emit_undercover_writes_regions_indexes_and_local_shim() {
     );
 }
 
+// Undercover materializes EXACTLY ONE file (§3.5): the §3.3 nested `CLAUDE.md` shims are a
+// normal-mode projection, so no shim is ever written into the `.stele/tree/` overlay (which
+// Claude Code never reads directly) nor beside a work-tree directory.
+#[test]
+fn emit_undercover_writes_no_nested_claude_shims() {
+    let fixture = undercover_built();
+
+    let emit = fixture.run(&["emit"]);
+    assert_eq!(emit.code, 0, "emit:\n{}", emit.combined());
+
+    // Overlay nodes exist (init scaffolds one per top-level dir) — and none carries a shim.
+    assert!(fixture.path(".stele/tree/apps/AGENTS.md").exists());
+    assert!(fixture.path(".stele/tree/packages/AGENTS.md").exists());
+    for rel in [
+        "CLAUDE.md",
+        ".stele/tree/CLAUDE.md",
+        ".stele/tree/apps/CLAUDE.md",
+        ".stele/tree/packages/CLAUDE.md",
+        "apps/CLAUDE.md",
+        "apps/web/CLAUDE.md",
+        "packages/CLAUDE.md",
+        "packages/shared/CLAUDE.md",
+    ] {
+        assert!(
+            !fixture.path(rel).exists(),
+            "undercover emit materialized {rel}"
+        );
+    }
+
+    // Still exactly one materialized file, and the work tree stays byte-clean.
+    assert_eq!(fixture.read("CLAUDE.local.md"), "@.stele/tree/AGENTS.md\n");
+    assert_eq!(
+        git_stdout(&fixture, &["status", "--porcelain"]),
+        "",
+        "emit left the work tree dirty"
+    );
+}
+
 // An operator's pre-existing `CLAUDE.local.md` is never overwritten (only-if-absent, §3.5).
 #[test]
 fn emit_undercover_respects_existing_claude_local() {

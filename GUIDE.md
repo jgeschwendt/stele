@@ -8,7 +8,26 @@ The five-minute path from a bare repo to a CI-enforced agent-doc graph. The [SPE
 curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash
 ```
 
-Pin a version with `… | bash -s v0.2.0`; prereleases with `… | channel=canary bash`. The binary lands in `~/.local/bin/stele`. From source: `cargo install --git https://github.com/jgeschwendt/stele stele-cli`.
+Pin a version with `… | bash -s v0.3.0`; prereleases with `… | channel=canary bash`. The binary lands in `~/.local/bin/stele`. From source: `cargo install --git https://github.com/jgeschwendt/stele stele-cli`.
+
+### Upgrading from 0.2
+
+A repo whose lock is `version` 1 fails every verb until it is migrated (SPEC §3.2, no dual-read) —
+
+```
+committed lock is version 1; this engine writes version 2. run stele migrate, then stele build
+```
+
+One pass, once per repo:
+
+```sh
+stele migrate   # rewrites the old notation in place, over build's scan scope; idempotent
+git diff        # review it — migrate warns on a dirty tree rather than refusing
+stele build     # re-locks at version 2
+stele emit      # re-renders the regions with the new markers
+```
+
+Then commit the sources, the shims, `.stele/graph.lock` and `.stele/index/` together. A repo scaffolded at 0.3.0 or later never runs `migrate`.
 
 ## 2 · Scaffold
 
@@ -33,11 +52,15 @@ invariants:
     anchor: src/charge.rs#create_charge
 hazards:
   - claim: refund webhooks arrive out of order; never assume capture precedes refund
-    anchor: lm:webhook-dispatch
+    anchor: ※ webhook-dispatch
+edges:
+  decided_by: [§ 0007]
 ```
 
-Anything below the block is yours — ordinary markdown, untouched by the engine.
+<!-- @stele --><!-- @end -->
 ````
+
+Anything outside those two markers is yours — ordinary markdown, untouched by the engine. The empty region is what `emit` fills in step 4; everything strictly between `<!-- @stele -->` and `<!-- @end -->` is engine-owned from then on.
 
 Fill in `purpose` (what an agent can't derive from the tree), real `commands`, and the claims worth enforcing. Delete skeletons for directories that don't deserve a node — shallow is fine; the graph should follow interface boundaries, not mirror the tree.
 
@@ -46,7 +69,9 @@ Fill in `purpose` (what an agent can't derive from the tree), real `commands`, a
 Every invariant or hazard needs an anchor tying it to code, one of:
 
 - **`path#symbol`** — a definition in that file (`src/charge.rs#create_charge`), or a heading slug in a markdown file (`SPEC.md#decision-log`).
-- **`lm:<slug>`** — a named landmark: put a `stele:landmark <slug>` comment on the definition in the source file. Survives renames and moves that `path#symbol` doesn't.
+- **`※ <slug>`** — a named landmark: put a `// ※ <slug>` comment on the definition in the source file, in that language's native comment syntax. The `anchor:` field quotes the comment verbatim — glyph, one space, slug — so one `rg '※ '` finds declaration and reference alike. Survives renames and moves that `path#symbol` doesn't.
+
+A `⊨ <node-id>/<slug>` comment closes the loop the other way, binding a code region back to a declared claim. A `※` or `⊨` whose payload isn't a well-formed slug or address is prose and is silently ignored (SPEC §2.5) — `※` is an everyday annotation mark, so the scanner never errors on one. Decisions are referenced as `decided_by: [§ 0007]`, resolved against the repo's ADR directory.
 
 Anchors are what make claims checkable: when the anchored code changes, the claim goes stale and CI says so.
 
@@ -54,7 +79,7 @@ Anchors are what make claims checkable: when the anchored code changes, the clai
 
 ```sh
 stele build   # compiles authored sources → .stele/graph.lock (+ .stele/index/)
-stele emit    # renders router regions into AGENTS.md, transpose indexes, the CLAUDE.md shims (root + one per nested node)
+stele emit    # fills each `<!-- @stele -->` … `<!-- @end -->` region, transpose indexes, the CLAUDE.md shims (root + one per nested node)
 ```
 
 Commit everything: the `AGENTS.md` files, their `CLAUDE.md` shims, `.stele/graph.lock`, `.stele/index/`. The lock is the canonical graph — queries and CI read it, never re-derive it.
@@ -72,7 +97,7 @@ stele:
     - uses: actions/checkout@v5
       with:
         fetch-depth: 0        # full history — freshness checks use blame
-    - run: curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash -s v0.2.0
+    - run: curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash -s v0.3.0
     - run: ~/.local/bin/stele check
     - run: ~/.local/bin/stele emit --check
 ```

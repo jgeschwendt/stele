@@ -1,6 +1,12 @@
 {
   "adrs": {},
-  "landmarks": {},
+  "landmarks": {
+    "refund-cap": {
+      "file": "tests/gallery.rs",
+      "line": 79,
+      "node": "tests"
+    }
+  },
   "nodes": {
     "/": {
       "budget": null,
@@ -14,7 +20,7 @@
           "text": "every [Cn] citation must stay licensed by research/claims.md's status for that claim — never state a `reported` claim as settled fact",
           "verified": {
             "digest": null,
-            "sha": "ce1dd2c9f761c78ce36140ab8cd08682162a6d00"
+            "sha": "014364789b1802a881b4ae711fde7f564008e59b"
           }
         },
         {
@@ -26,7 +32,7 @@
           "text": "SPEC.md outranks everything here — code and examples conform to it; changing behavior means revising the spec (and its decision log) first",
           "verified": {
             "digest": null,
-            "sha": "ce1dd2c9f761c78ce36140ab8cd08682162a6d00"
+            "sha": "014364789b1802a881b4ae711fde7f564008e59b"
           }
         }
       ],
@@ -102,7 +108,7 @@
       },
       "id": "src",
       "kind": "container",
-      "purpose": "The stele engine. cli.rs is the command pipeline (build/check/emit); model.rs the typed graph, anchors.rs the §2.5 scanner, assert.rs the six §4 checks, extract.rs the import extractors."
+      "purpose": "The stele engine. cli.rs is the command pipeline; model.rs the typed graph, anchors.rs the §2.5 scanner, assert.rs the six §4 checks, extract.rs the extractors, legacy.rs the migrate rewrite."
     },
     "tests": {
       "budget": null,
@@ -122,5 +128,5 @@
       "purpose": "Integration + unit suite and the CI oracle. common/mod.rs is the git-repo harness; gallery.rs mirrors EXAMPLE §8's failure gallery. fixtures/ (steleignored) is the acme worked example."
     }
   },
-  "version": 1
+  "version": 2
 }

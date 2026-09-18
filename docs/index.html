@@ -55,8 +55,8 @@
   <p class="plan-flavor"><em>stele</em> /ˈstiːli/ — an inscribed standing stone that publicly declares
     the law. The territory is checked against it.</p>
   <div class="row">
-    <span class="badge badge-accent">v0.2.0 · undercover mode</span>
-    <span class="badge">SPEC Draft 0.9 — the contract</span>
+    <span class="badge badge-accent">v0.3.0 · glyph notation</span>
+    <span class="badge">SPEC Draft 0.10 — the contract</span>
     <span class="badge">self-hosting: this repo runs its own gate</span>
   </div>
   <nav class="row plan-toc" aria-label="sections">
@@ -78,7 +78,7 @@
   </header>
   <pre class="snippet">curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash</pre>
   <pre class="snippet"><span class="snippet-note"># pin a version</span>
-curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash -s v0.2.0
+curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash -s v0.3.0
 
 <span class="snippet-note"># prereleases</span>
 curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | channel=canary bash</pre>
@@ -139,8 +139,10 @@ cargo install --git https://github.com/jgeschwendt/stele stele-cli</pre>
       boundaries, not the tree.</li>
     <li><strong>Anchor your claims</strong> — every invariant and hazard names an anchor:
       <code class="code">path#symbol</code> for a definition or markdown heading, or
-      <code class="code">lm:&lt;slug&gt;</code> for a named landmark comment that survives renames and
-      moves. Anchors are what make a claim checkable.</li>
+      <code class="code">※ &lt;slug&gt;</code> for a named landmark comment
+      (<code class="code">// ※ refund-cap</code>) that survives renames and moves — the
+      <code class="code">anchor:</code> field quotes that token verbatim. Anchors are what make a
+      claim checkable.</li>
     <li><strong>Build</strong> — <code class="code">stele build</code> compiles authored sources into
       <code class="code">.stele/graph.lock</code> and <code class="code">.stele/index/</code>. Build is
       the reconciliation point: it re-stamps each claim's verified mark against current code, so run
@@ -165,7 +167,7 @@ stele emit --check             <span class="snippet-note"># committed files vs w
 - uses: actions/checkout@v5
   with:
     fetch-depth: 0        <span class="snippet-note"># full history — freshness checks use blame</span>
-- run: curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash -s v0.2.0
+- run: curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash -s v0.3.0
 - run: ~/.local/bin/stele check
 - run: ~/.local/bin/stele emit --check</pre>
 </section>
@@ -262,7 +264,7 @@ stele blame payments/idempotent-charges     <span class="snippet-note"># provena
       </tbody>
     </table>
   </div>
-  <p class="plan-foot">stele v0.2.0 · SPEC Draft 0.9 · this page mirrors README.md and GUIDE.md; the
+  <p class="plan-foot">stele v0.3.0 · SPEC Draft 0.10 · this page mirrors README.md and GUIDE.md; the
     SPEC is the contract.</p>
 </section>
 

@@ -1,6 +1,6 @@
 # stele — worked example
 
-Companion to SPEC.md draft 0.9. A fictional-but-realistic monorepo (`acme`): Phoenix web app + background worker + shared TS package. Artifacts shown in full or as labeled excerpts so the design can be attacked concretely. Hole-poking prompts marked ⚔ throughout.
+Companion to SPEC.md draft 0.10. A fictional-but-realistic monorepo (`acme`): Phoenix web app + background worker + shared TS package. Artifacts shown in full or as labeled excerpts so the design can be attacked concretely. Hole-poking prompts marked ⚔ throughout.
 
 ## 1. The repo
 
@@ -52,19 +52,19 @@ commands:
   db-reset: mix ecto.reset      # DESTRUCTIVE — drops local db
 invariants:
   - claim: all money amounts are integer cents end-to-end; floats never represent currency
-    anchor: lm:money-type
+    anchor: ※ money-type
     enforced_by: packages/shared/test/money.test.ts
 edges:
-  decided_by: [adr/0007]
+  decided_by: [§ 0007]
 budget: 900
 ```
 
-<!-- stele:begin router · generated, checked by `stele emit --check` · do not hand-edit -->
+<!-- @stele router · generated, checked by `stele emit --check` · do not hand-edit -->
 
 ## Hazards (2 active)
 
-- ⚠ `apps/worker`: dunning job is NOT idempotent per-invoice — re-running a failed batch double-emails (→ lm:dunning-batch)
-- ⚠ `apps/web/lib/billing`: Stripe webhook handler must never write inside the signature-verification transaction (→ lm:webhook-verify)
+- ⚠ `apps/worker`: dunning job is NOT idempotent per-invoice — re-running a failed batch double-emails (→ ※ dunning-batch)
+- ⚠ `apps/web/lib/billing`: Stripe webhook handler must never write inside the signature-verification transaction (→ ※ webhook-verify)
 
 ## Map
 
@@ -82,7 +82,7 @@ All invariants: `.stele/index/invariants.md` · all hazards: `.stele/index/hazar
 
 `stele` CLI available → `stele root | unfold <id> | invariants --touching <path> | hazards | nodes --kind <k>`. MCP: `stele serve`.
 No engine → everything above is complete; nested AGENTS.md files carry the detail (nearest file wins).
-<!-- stele:end -->
+<!-- @end -->
 ````
 
 Rendered size: ~500 tokens (cl100k-class approx, ±10%). That is the _entire_ always-loaded cost of this repo for a Claude session.
@@ -101,28 +101,28 @@ commands:
   test: MIX_ENV=test mix test apps/web/test/billing
 invariants:
   - claim: every mutation is idempotent by (account_id, idempotency_key) — retries must be safe
-    anchor: lm:billing-idempotency
+    anchor: ※ billing-idempotency
     enforced_by: apps/web/test/billing/idempotency_test.exs
   - claim: refunds never exceed captured amount, enforced at the changeset, not the controller
-    anchor: lm:refund-cap
+    anchor: ※ refund-cap
 hazards:
   - claim: Stripe webhook handler must never write inside the signature-verification transaction
-    anchor: lm:webhook-verify
+    anchor: ※ webhook-verify
 edges:
   depends: [apps/web/lib/store, packages/shared]
-  decided_by: [adr/0007]
+  decided_by: [§ 0007]
 budget: 600
 ```
 
-<!-- stele:begin router -->
+<!-- @stele -->
 
 ## Anchors in this territory
 
-- lm:billing-idempotency → charge.ex:41
-- lm:refund-cap → refund.ex:18
-- lm:webhook-verify → charge.ex:112
+- ※ billing-idempotency → charge.ex:41
+- ※ refund-cap → refund.ex:18
+- ※ webhook-verify → charge.ex:112
 
-<!-- stele:end -->
+<!-- @end -->
 ````
 
 ⚔ **Poke here:** `refund-cap` has no `enforced_by`. Per §2.4 it compiles but is flagged (`check` reports "1 prose-only claim") and gets the short freshness leash. Is a nag-report the right teeth, or should prose-only claims decay harder?
@@ -131,9 +131,9 @@ budget: 600
 
 ```elixir
 defmodule AcmeWeb.Billing.Refund do
-  # stele:landmark refund-cap
-  # stele:claim apps/web/lib/billing/refund-cap
-  @doc "Caps refund at remaining captured amount. See adr/0007 for integer-cents."
+  # ※ refund-cap
+  # ⊨ apps/web/lib/billing/refund-cap
+  @doc "Caps refund at remaining captured amount. See § 0007 for integer-cents."
   def changeset(refund, attrs) do
     refund
     |> cast(attrs, [:amount_cents, :charge_id])
@@ -144,6 +144,16 @@ end
 ```
 
 Note what the anchors do **not** say: no description of the cap logic (that's the code's job), no restated invariant (that's the AGENTS.md block's job). The anchor is an address + a binding.
+
+A glyph is only notation when the payload parses (§2.5). Everything below is prose the scanner silently ignores — no landmark, no binding, no error:
+
+```python
+# ※ 注意: hot path        — payload is not a slug lexeme
+# ※ note: retry twice     — `note:` is not a slug either
+# ⊨ is the models glyph   — no <node-id>/<slug> address follows
+```
+
+That silence is deliberate: `※` is an everyday annotation mark in CJK comments, so lexical strictness would fail honest files. The cost is that a typo'd landmark is not caught in the comment — it fails referentially instead, at slug-match cardinality 0 (§8.3).
 
 ⚔ **Poke here:** two lines of comment ceremony per claim. Acceptable? The alternative (`anchor: refund.ex#changeset`) needs zero comments but breaks on rename/move — landmark ids survive both.
 
@@ -172,7 +182,7 @@ packages/shared is the only constructor.
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "nodes": {
     "apps/web/lib/billing": {
       "kind": "component",
@@ -188,7 +198,7 @@ packages/shared is the only constructor.
           "id": "billing-idempotency",
           "kind": "invariant",
           "text": "every mutation is idempotent by (account_id, idempotency_key) — retries must be safe",
-          "anchor": "lm:billing-idempotency",
+          "anchor": "※ billing-idempotency",
           "resolved": "apps/web/lib/billing/charge.ex:41",
           "enforced_by": "apps/web/test/billing/idempotency_test.exs",
           "verified": { "sha": "e3f19ac…", "digest": "1f3c…" }
@@ -197,7 +207,7 @@ packages/shared is the only constructor.
           "id": "refund-cap",
           "kind": "invariant",
           "text": "refunds never exceed captured amount, enforced at the changeset, not the controller",
-          "anchor": "lm:refund-cap",
+          "anchor": "※ refund-cap",
           "resolved": "apps/web/lib/billing/refund.ex:18",
           "enforced_by": null,
           "verified": { "sha": "e3f19ac…", "digest": "a187…" }
@@ -207,6 +217,8 @@ packages/shared is the only constructor.
   }
 }
 ```
+
+`anchor` is a verbatim copy of what was authored, glyph and all. Lock *keys* stay ASCII: `landmarks{}` is keyed by the bare slug, and `decided_by` keeps the path-derived id `adr/0007` that the authored `§ 0007` resolves to (§3.2).
 
 ## 7. An agent session — "add partial-refund support"
 
@@ -218,7 +230,7 @@ What a Claude Code session actually loads, step by step:
 | 1    | task mentions refunds → router points at apps/web → `stele unfold apps/web`                                                                                          | ~100 tok        |
 | 2    | `stele unfold apps/web/lib/billing` → full billing node: commands, 2 invariants, 1 hazard, anchor table                                                              | ~250 tok        |
 | 3    | `stele invariants --touching apps/web/lib/billing` — pulls the money invariant from the SYSTEM node too (cross-cutting: it lives at root, billing inherits exposure) | ~110 tok        |
-| 4    | `rg -n "stele:landmark refund-cap"` → jump straight to refund.ex:18, read the region                                                                                 | code, on demand |
+| 4    | `rg -n '※ refund-cap'` → jump straight to refund.ex:18, read the region                                                                                              | code, on demand |
 | 5    | implement; run the node's own `test` command from step 2                                                                                                             | —               |
 
 Total doc overhead: **~950 tokens** (same basis), every one of them non-derivable (commands, invariants, hazards, addresses). The flat-file equivalent of this repo's knowledge is a typical 300–600 line CLAUDE.md (~3–6k tokens) loaded on _every_ session including the ones about CSS.
@@ -251,9 +263,9 @@ exit 1
 **8.3 Referential** — someone renames the landmark comment during a refactor:
 
 ```
-✗ referential: anchor lm:refund-cap unresolved (0 occurrences of "stele:landmark refund-cap")
+✗ referential: anchor ※ refund-cap unresolved (0 occurrences of "※ refund-cap")
   claim "refunds never exceed captured amount, enforced at the changeset, not the controller" is now unanchored — provenance broken
-✗ referential: landmark lm:money-type has slug-match cardinality 2
+✗ referential: landmark ※ money-type has slug-match cardinality 2
     packages/shared/src/legacy/money.ts:7   ← duplicated in a copy-paste refactor
     packages/shared/src/money.ts:3
 exit 1
@@ -285,7 +297,8 @@ exit 1
 
 ```
 ✗ exhaustiveness: apps/api (14 files) is covered by no node — unreachable via any router
-✗ liveness: command / :db-reset → `mix ecto.reset` — task not found in mix.exs (removed in a1b2c3d)
+  fix: declare a node for apps/api (add an AGENTS.md with a stele block), or list it in exhaustiveness.exclude
+✗ liveness: command / :db-reset → `mix ecto.reset` — task not found in mix.exs
 exit 1
 ```
 
@@ -347,9 +360,9 @@ Queries are byte-for-byte what the tracked repo returns — same graph, sources 
 ```
 $ stele invariants --touching apps/web/lib/billing
 invariants (3):
-  / · money-type — all money amounts are integer cents end-to-end; floats never represent currency (→ lm:money-type)
-  apps/web/lib/billing · billing-idempotency — every mutation is idempotent by (account_id, idempotency_key) — retries must be safe (→ lm:billing-idempotency)
-  apps/web/lib/billing · refund-cap — refunds never exceed captured amount, enforced at the changeset, not the controller (→ lm:refund-cap)
+  / · money-type — all money amounts are integer cents end-to-end; floats never represent currency (→ ※ money-type)
+  apps/web/lib/billing · billing-idempotency — every mutation is idempotent by (account_id, idempotency_key) — retries must be safe (→ ※ billing-idempotency)
+  apps/web/lib/billing · refund-cap — refunds never exceed captured amount, enforced at the changeset, not the controller (→ ※ refund-cap)
 ```
 
 The territory of `.stele/tree/apps/web/lib/billing/AGENTS.md` is `apps/web/lib/billing`; the anchor scan, exhaustiveness, and freshness still run over the tracked work-tree code, so the assertion suite (§4) behaves exactly as in §8 — only the node sources moved off the tree.

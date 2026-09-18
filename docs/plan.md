@@ -1,6 +1,6 @@
 # Plan · glyph notation (0.3.0)
 
-Status: in progress 2026-09-17 (phase 5) · owner: jlg · execution: opus agents per phase, session model reviews and gates.
+Status: done 2026-09-17 · v0.3.0 released, ten downstream trunks migrated and committed (unpushed) · owner: jlg · execution: opus agents per phase, session model reviews and gates.
 
 ## The change
 

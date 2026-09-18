@@ -11,7 +11,7 @@ mod common;
 
 use common::Fixture;
 
-/// The acme `refund-cap` claim (prose-only, `lm:` anchor into Elixir `changeset/2`),
+/// The acme `refund-cap` claim (prose-only, `※ ` anchor into Elixir `changeset/2`),
 /// mutated so the digested region drifts without touching the claim — the §8.4 setup,
 /// left uncommitted-of-lock (build ran at the clean baseline, never re-stamped).
 fn drifted_refund_cap() -> Fixture {
@@ -111,16 +111,13 @@ fn parserless_churn_fallback_fires_past_threshold() {
          purpose: parser-less churn fallback fixture\n\
          invariants:\n\
          \x20 - claim: the notes stay accurate to the code\n\
-         \x20   anchor: lm:notes-mark\n\
+         \x20   anchor: ※ notes-mark\n\
          ```\n",
     );
     // `.txt` has no bundled parser, so the claim's digest is null and freshness must
     // fall to the churn count. The landmark sits on line 1; later edits append below it,
     // so `resolved` stays notes.txt:1 and the byte-compare survives.
-    fixture.write(
-        "notes.txt",
-        "# stele:landmark notes-mark\nline one\nline two\n",
-    );
+    fixture.write("notes.txt", "# ※ notes-mark\nline one\nline two\n");
     fixture.write(".stele/config.toml", "[freshness]\nchurn_threshold = 1\n");
     fixture.commit("import churn fixture");
 
@@ -153,10 +150,10 @@ fn parserless_churn_disabled_without_a_threshold() {
          purpose: parser-less churn fallback fixture\n\
          invariants:\n\
          \x20 - claim: the notes stay accurate to the code\n\
-         \x20   anchor: lm:notes-mark\n\
+         \x20   anchor: ※ notes-mark\n\
          ```\n",
     );
-    fixture.write("notes.txt", "# stele:landmark notes-mark\nline one\n");
+    fixture.write("notes.txt", "# ※ notes-mark\nline one\n");
     fixture.commit("import churn fixture (no config)");
 
     assert_eq!(fixture.run(&["build"]).code, 0);
@@ -215,22 +212,19 @@ fn shallow_clone_reports_history_unavailable_not_silent_pass() {
     // A parser-less claim: a landmark in a .txt file (no bundled parser → churn fallback),
     // with churn_threshold 0 so any post-watermark churn would trip it.
     src.write(".stele/config.toml", "[freshness]\nchurn_threshold = 0\n");
-    src.write("notes.txt", "intro\n# stele:landmark doc-rule\nmore\n");
+    src.write("notes.txt", "intro\n# ※ doc-rule\nmore\n");
     src.write(
         "AGENTS.md",
         "# proj\n\n```stele\nkind: system\npurpose: shallow-clone probe\ninvariants:\n\
-         \x20 - claim: the documented rule holds\n    anchor: lm:doc-rule\n```\n\n\
-         <!-- stele:begin router -->\n<!-- stele:end -->\n",
+         \x20 - claim: the documented rule holds\n    anchor: ※ doc-rule\n```\n\n\
+         <!-- @stele -->\n<!-- @end -->\n",
     );
     src.commit("c1: author the node + config");
     assert_eq!(src.run(&["build"]).code, 0); // stamps verified.sha = c1
 
     // Churn the anchored file and commit (the lock rides along); HEAD is now c2, but the
     // lock's watermark still points at c1.
-    src.write(
-        "notes.txt",
-        "intro\n# stele:landmark doc-rule\nmore\nEDIT\n",
-    );
+    src.write("notes.txt", "intro\n# ※ doc-rule\nmore\nEDIT\n");
     src.commit("c2: churn the anchored file");
 
     // depth-1 clone: only c2 is present, so the c1 watermark is unreachable.

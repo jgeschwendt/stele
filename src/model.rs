@@ -8,8 +8,13 @@ use std::path::{Path, PathBuf};
 /// SPEC §2.2: `purpose` is capped at 200 characters (hard, §10 item 4).
 pub const PURPOSE_MAX_CHARS: usize = 200;
 
-/// SPEC §2.4/§2.5: the `lm:` anchor namespace whose remainder is the landmark slug verbatim.
-pub const LANDMARK_ANCHOR_PREFIX: &str = "lm:";
+/// SPEC §2.6: the `decided_by` decision-reference prefix — the glyph, ONE ASCII space,
+/// then the ADR number as its filename zero-pads it (`§ <NNNN>`).
+pub const DECISION_PREFIX: &str = "§ ";
+/// SPEC §2.4/§2.5: the landmark-anchor prefix — the glyph, ONE ASCII space, then the
+/// slug verbatim (`※ <slug>`). The `anchor:` field quotes the comment token byte for
+/// byte, so this is also the comment token's prefix.
+pub const LANDMARK_ANCHOR_PREFIX: &str = "※ ";
 /// SPEC §2.1: the system node's id — the sole non-relative id.
 pub const SYSTEM_ID: &str = "/";
 
@@ -245,8 +250,8 @@ pub struct Node {
     pub contains: Vec<String>,
 }
 
-/// A single comment-anchor occurrence (§2.4): where a `stele:landmark`/`stele:claim`
-/// token was found, repo-root-relative.
+/// A single comment-anchor occurrence (§2.4): where a landmark/claim glyph token
+/// (§2.5) was found, repo-root-relative.
 #[derive(Clone, Debug)]
 pub struct Occurrence {
     pub file: String,
@@ -265,8 +270,9 @@ pub struct ImportRef {
     pub text: String,
 }
 
-/// A `stele:claim` <addr> back-reference occurrence (§2.5). The address is stored
-/// verbatim; resolution against declared claims is Phase D referential (§4.1).
+/// A claim back-reference occurrence — a `⊨ <node-id>/<slug>` comment token
+/// (§2.5). The address is stored verbatim (glyph-free, as authored after the space);
+/// resolution against declared claims is Phase D referential (§4.1).
 #[derive(Clone, Debug)]
 pub struct ClaimAnchor {
     pub addr: String,
@@ -279,9 +285,9 @@ pub struct ClaimAnchor {
 /// `landmarks{}` map (§3.2), so build stays exit-0 even on duplicates.
 #[derive(Clone, Debug, Default)]
 pub struct AnchorData {
-    /// slug → every `stele:landmark` <slug> occurrence, insertion order preserved.
+    /// slug → every landmark-token occurrence, insertion order preserved.
     pub landmarks: BTreeMap<String, Vec<Occurrence>>,
-    /// Every `stele:claim` <addr> occurrence (resolution deferred to §4.1).
+    /// Every claim-token occurrence (resolution deferred to §4.1).
     pub claims: Vec<ClaimAnchor>,
 }
 
@@ -297,10 +303,12 @@ impl AnchorData {
 }
 
 /// A compiled ADR index entry (§2.6): the number and status parsed from an
-/// `<adrdir>/NNNN-*.md` file, keyed in the lock by [`AdrEntry::id`] (`adr/0007`).
+/// `<adrdir>/NNNN-*.md` file, keyed in the lock by [`AdrEntry::id`] — the path-derived
+/// `<adrdir>/<NNNN>`, the resolved form of an authored `§ <NNNN>` token (§3.2).
 #[derive(Clone, Debug)]
 pub struct AdrEntry {
-    /// `<adrdir>/<NNNN>` with the zero-padded number verbatim (matches `decided_by`).
+    /// `<adrdir>/<NNNN>` with the zero-padded number verbatim — the number an authored
+    /// `decided_by` token (§2.6) resolves against.
     pub id: String,
     pub number: i64,
     /// The lowercased first token of the file's `Status:` line (§4.1 checks it).
@@ -403,7 +411,7 @@ pub struct ClaimRef<'a> {
 }
 
 /// The outcome of [`Graph::resolve_claim`]. `Ambiguous` is distinct from `NotFound`
-/// so callers (blame, `stele:claim` back-references) can report a bare abbreviation
+/// so callers (blame, claim back-references) can report a bare abbreviation
 /// that matches multiple nodes.
 #[derive(Clone, Copy, Debug)]
 pub enum ClaimLookup<'a> {
@@ -504,8 +512,8 @@ pub fn normalize_id(raw: &str) -> std::result::Result<String, String> {
     Ok(segments.join("/"))
 }
 
-/// Derive a claim's slug from its `anchor` (§2.4). An `lm:<slug>` anchor yields the
-/// remainder verbatim; a `<path>#<symbol>` anchor yields `<symbol>` lowercased with
+/// Derive a claim's slug from its `anchor` (§2.4). A landmark anchor ([`LANDMARK_ANCHOR_PREFIX`]
+/// then the slug) yields the remainder verbatim; a `<path>#<symbol>` anchor yields `<symbol>` lowercased with
 /// each maximal run of non-`[a-z0-9]` collapsed to a single `-` and leading/trailing
 /// `-` stripped. Either way the result must satisfy the §2.5 slug lexeme
 /// `[a-z0-9]+(-[a-z0-9]+)*`; a malformed slug is a §5.3 input error (exit 2).
@@ -548,6 +556,33 @@ fn collapse_symbol(symbol: &str) -> String {
         }
     }
     out
+}
+
+/// The ADR number an authored `decided_by` token names (§2.6): the digits after
+/// [`DECISION_PREFIX`], which must be non-empty and all ASCII. Anything else — the
+/// pre-0.3.0 ADR-path form included — is a §5.3 input error message.
+pub fn decision_number(token: &str) -> std::result::Result<&str, String> {
+    let digits = token.strip_prefix(DECISION_PREFIX).unwrap_or_default();
+    if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+        Ok(digits)
+    } else {
+        Err(format!(
+            "decided_by entry {token:?} is not a decision reference; write \
+             \"{DECISION_PREFIX}<NNNN>\" — the glyph, one space, and the ADR number as \
+             its filename zero-pads it (§2.6)"
+        ))
+    }
+}
+
+/// Whether `addr` is a well-formed claim address `<node-id>/<slug>` (§2.4/§2.5): at
+/// least one `/`, a valid slug after the last one, and a non-empty, normalizable node
+/// id before it. The §2.5 silent-prose rule turns a `false` here into "this `⊨` is
+/// prose", never an error.
+pub fn is_claim_address(addr: &str) -> bool {
+    let Some((node, slug)) = addr.rsplit_once('/') else {
+        return false;
+    };
+    !node.is_empty() && is_valid_slug(slug) && normalize_id(node).is_ok()
 }
 
 /// The §2.5 slug lexeme check: one or more `[a-z0-9]` groups joined by single `-`,
@@ -653,7 +688,7 @@ mod tests {
 
     #[test]
     fn derive_slug_takes_landmark_remainder_verbatim() {
-        assert_eq!(derive_slug("lm:refund-cap").unwrap(), "refund-cap");
+        assert_eq!(derive_slug("※ refund-cap").unwrap(), "refund-cap");
     }
 
     #[test]
@@ -673,14 +708,35 @@ mod tests {
 
     #[test]
     fn derive_slug_rejects_malformed_landmark_slug() {
-        for anchor in [
-            "lm:Refund-Cap",
-            "lm:refund--cap",
-            "lm:-cap",
-            "lm:cap-",
-            "lm:",
-        ] {
+        for anchor in ["※ Refund-Cap", "※ refund--cap", "※ -cap", "※ cap-", "※ "] {
             assert!(derive_slug(anchor).is_err(), "{anchor:?}");
+        }
+    }
+
+    #[test]
+    fn decision_number_takes_the_digits_after_the_glyph() {
+        assert_eq!(decision_number("§ 0007").unwrap(), "0007");
+        assert_eq!(decision_number("§ 7").unwrap(), "7");
+    }
+
+    #[test]
+    fn decision_number_rejects_every_other_shape() {
+        for token in ["adr/0007", "§0007", "§  0007", "§ ", "§ seven", "0007"] {
+            assert!(decision_number(token).is_err(), "{token:?}");
+        }
+    }
+
+    #[test]
+    fn claim_address_needs_a_node_id_and_a_slug_tail() {
+        assert!(is_claim_address("billing/refund-cap"));
+        assert!(is_claim_address("apps/web/lib/billing/refund-cap"));
+    }
+
+    #[test]
+    fn claim_address_rejects_prose_payloads() {
+        // No slash, a bad tail slug, an empty node id, and an escaping node id.
+        for addr in ["is", "node/Bad_Slug", "/refund-cap", "../x/refund-cap"] {
+            assert!(!is_claim_address(addr), "{addr:?}");
         }
     }
 
@@ -757,7 +813,7 @@ mod tests {
         graph.nodes[2] = node(
             "apps/web/lib/billing",
             "apps/web/lib/billing/AGENTS.md",
-            &["lm:refund-cap"],
+            &["※ refund-cap"],
         );
         let found = graph.resolve_claim("apps/web/lib/billing/refund-cap");
         assert!(matches!(
@@ -773,7 +829,7 @@ mod tests {
         graph.nodes[2] = node(
             "apps/web/lib/billing",
             "apps/web/lib/billing/AGENTS.md",
-            &["lm:refund-cap"],
+            &["※ refund-cap"],
         );
         // `billing/refund-cap` abbreviates the full id to its final segment.
         assert!(matches!(
@@ -787,13 +843,13 @@ mod tests {
         // Two nodes share the final segment `core`; the abbreviation cannot resolve.
         let mut graph = Graph::default();
         graph
-            .insert(node("apps/web/core", "apps/web/core/AGENTS.md", &["lm:x"]))
+            .insert(node("apps/web/core", "apps/web/core/AGENTS.md", &["※ x"]))
             .unwrap();
         graph
             .insert(node(
                 "apps/worker/core",
                 "apps/worker/core/AGENTS.md",
-                &["lm:x"],
+                &["※ x"],
             ))
             .unwrap();
         assert!(matches!(

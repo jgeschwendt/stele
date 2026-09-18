@@ -25,7 +25,7 @@ fn repo() -> Fixture {
     );
     fixture.write(
         "vendor/main.py",
-        "# stele:landmark vendor-mark\nfrom app.core import x\n",
+        "# ※ vendor-mark\nfrom app.core import x\n",
     );
     fixture.commit("materialize a repo with a vendor subtree");
     fixture

@@ -57,7 +57,7 @@ fn invalid_utf8_node_source_is_a_hard_input_error() {
 
 // ─── F2: marker-lookalikes inside a fence are quotations (§3.1) ───────────────
 
-// A `stele:begin`/`stele:end` pair inside a fenced code block is literal example text,
+// A `@stele`/`@end` pair inside a fenced code block is literal example text,
 // not a generated region. Before the fix, `find_region` matched it and `emit` overwrote
 // the authored bytes between the fenced markers (silent data loss).
 #[test]
@@ -67,9 +67,9 @@ fn region_markers_inside_a_fence_are_not_a_real_region() {
          ```stele\nkind: system\n```\n\n\
          Example of the marker syntax:\n\n\
          ```markdown\n\
-         <!-- stele:begin router -->\n\
+         <!-- @stele -->\n\
          HAND-AUTHORED EXAMPLE — emit must never clobber this\n\
-         <!-- stele:end -->\n\
+         <!-- @end -->\n\
          ```\n";
     fixture.write("AGENTS.md", authored);
     fixture.commit("root whose only markers live inside a fence");
@@ -125,19 +125,19 @@ fn one_line_empty_region_form_is_accepted() {
     fixture.write("lib/AGENTS.md", "# lib\n\n```stele\nkind: container\n```\n");
     fixture.commit("root plus an empty container");
 
-    // Scaffold the canonical two-line regions, then materialize everything so the graph
-    // is fully up to date (the baseline the one-line rewrite must preserve).
+    // Scaffold the regions — `init` writes the bare one-line form (§7) — then
+    // materialize everything so the graph is fully up to date.
     assert_eq!(fixture.run(&["init"]).code, 0);
+    assert!(
+        fixture
+            .read("lib/AGENTS.md")
+            .contains("<!-- @stele --><!-- @end -->"),
+        "init did not scaffold the bare one-line region: {}",
+        fixture.read("lib/AGENTS.md")
+    );
     assert_eq!(fixture.run(&["build"]).code, 0);
     assert_eq!(fixture.run(&["emit"]).code, 0);
     assert_eq!(fixture.run(&["emit", "--check"]).code, 0);
-
-    // Collapse the container's two-line region to the one-line empty form.
-    fixture.replace(
-        "lib/AGENTS.md",
-        "<!-- stele:begin router -->\n<!-- stele:end -->",
-        "<!-- stele:begin router --><!-- stele:end -->",
-    );
     fixture.commit("one-line empty region form");
 
     // It parses as an empty region, so the container is still up to date (no exit 2).

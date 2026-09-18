@@ -7,5 +7,5 @@ edges:
   depends: [packages/shared]
 ```
 
-<!-- stele:begin router -->
-<!-- stele:end -->
+<!-- @stele -->
+<!-- @end -->

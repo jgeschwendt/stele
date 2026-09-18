@@ -34,7 +34,7 @@ fn undercover_built() -> Fixture {
     fixture.write(
         ".stele/tree/AGENTS.md",
         "# root\n\n```stele\nkind: system\npurpose: undercover root\n```\n\n\
-         <!-- stele:begin router -->\n<!-- stele:end -->\n",
+         <!-- @stele -->\n<!-- @end -->\n",
     );
     let build = fixture.run(&["build"]);
     assert_eq!(build.code, 0, "build:\n{}", build.combined());
@@ -644,7 +644,7 @@ fn shim_relative_import_from_linked_worktree() {
 // ─── Phase 5: grove-root (bare-root worktree) layout + the remaining matrix (§3.5) ───
 
 /// The overlay root system node for a grove fixture: a claim anchored at the seed's
-/// `lm:app-core` landmark (§4.5, for the per-worktree freshness split) plus an empty router
+/// `※ app-core` landmark (§4.5, for the per-worktree freshness split) plus an empty router
 /// region for `emit`. Written into the shared overlay at the graph home.
 const GROVE_OVERLAY_ROOT: &str = r#"# root
 
@@ -653,11 +653,11 @@ kind: system
 purpose: undercover grove root
 invariants:
   - claim: hello stays a pure greeting
-    anchor: lm:app-core
+    anchor: ※ app-core
 ```
 
-<!-- stele:begin router -->
-<!-- stele:end -->
+<!-- @stele -->
+<!-- @end -->
 "#;
 
 /// A grove fixture with the overlay authored and the shared private graph compiled from the

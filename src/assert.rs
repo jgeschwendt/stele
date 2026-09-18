@@ -26,9 +26,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
-/// The `stele:landmark` comment token (§2.5), quoted verbatim in the §4.1 unresolved
-/// message so the fix ("re-add the comment") is unambiguous.
-const LANDMARK_COMMENT_TOKEN: &str = "stele:landmark";
+/// The claim comment token (§2.5) — the glyph plus its single space — quoted ahead of
+/// an address in the §4.1(e) dangling-binding messages.
+const CLAIM_COMMENT_TOKEN: &str = "⊨ ";
 /// The lowercased ADR status that fails a `decided_by` target (§2.6/§4.1).
 const SUPERSEDED_STATUS: &str = "superseded";
 
@@ -294,14 +294,14 @@ fn run_class(ctx: &Context, class: AssertionClass) -> Result<Vec<Finding>> {
 /// The referential class (§4.1): (a) every claim anchor resolves; (b) every
 /// referenced-or-declared landmark slug has slug-match cardinality exactly 1; (c)
 /// every `decided_by` names an existing, non-superseded ADR; (d) every `enforced_by`
-/// names a VCS-tracked file; (e) every `stele:claim` comment resolves to a declared
+/// names a VCS-tracked file; (e) every claim-glyph comment resolves to a declared
 /// claim.
 fn referential(ctx: &Context) -> Result<Vec<Finding>> {
     let graph = ctx.graph;
     let mut findings = Vec::new();
 
     // The landmark slugs whose cardinality (b) must hold: those a claim anchor
-    // REFERENCES plus those a `stele:landmark` comment DECLARES (EXAMPLE 8.3b shows
+    // REFERENCES plus those a landmark comment DECLARES (EXAMPLE 8.3b shows
     // both). A set keeps the union unique and ordered.
     let mut slugs: BTreeSet<String> = graph.anchors.landmarks.keys().cloned().collect();
 
@@ -330,9 +330,17 @@ fn referential(ctx: &Context) -> Result<Vec<Finding>> {
             }
         }
 
-        // (c) every decided_by names an existing, non-superseded ADR.
+        // (c) every decided_by resolves to an existing, non-superseded ADR. The
+        // authored token is `§ <NNNN>` (§2.6) and the index id is path-derived
+        // (`<adrdir>/<NNNN>`, §3.2), so the number is what matches — one ADR
+        // directory is detected per repo, so the tail is unambiguous.
         for target in &node.edges.decided_by {
-            match graph.adrs.iter().find(|adr| &adr.id == target) {
+            let number = crate::model::decision_number(target).unwrap_or_default();
+            match graph
+                .adrs
+                .iter()
+                .find(|adr| adr.id.rsplit('/').next() == Some(number))
+            {
                 None => findings.push(Finding::error(
                     AssertionClass::Referential,
                     Some(node.id.clone()),
@@ -373,20 +381,23 @@ fn referential(ctx: &Context) -> Result<Vec<Finding>> {
         }
     }
 
-    // (e) every `stele:claim` comment resolves to a declared claim.
+    // (e) every claim-glyph comment resolves to a declared claim.
     for anchor in &graph.anchors.claims {
         match graph.resolve_claim(&anchor.addr) {
             ClaimLookup::Found(_) => {}
             ClaimLookup::Ambiguous => findings.push(claim_comment_dangling(
                 anchor,
                 format!(
-                    "stele:claim {} is an ambiguous abbreviation (matches multiple nodes)",
+                    "{CLAIM_COMMENT_TOKEN}{} is an ambiguous abbreviation (matches multiple nodes)",
                     anchor.addr
                 ),
             )),
             ClaimLookup::NotFound => findings.push(claim_comment_dangling(
                 anchor,
-                format!("stele:claim {} resolves to no declared claim", anchor.addr),
+                format!(
+                    "{CLAIM_COMMENT_TOKEN}{} resolves to no declared claim",
+                    anchor.addr
+                ),
             )),
         }
     }
@@ -395,12 +406,12 @@ fn referential(ctx: &Context) -> Result<Vec<Finding>> {
 }
 
 /// A §4.1(a) unresolved-anchor finding (0 occurrences/definitions). The message form
-/// matches the EXAMPLE 8.3a gallery for `lm:`; a `<path>#<symbol>` anchor gets the
+/// matches the EXAMPLE 8.3a gallery for a landmark anchor; a `<path>#<symbol>` anchor gets the
 /// analogous "0 definitions" phrasing.
 fn anchor_unresolved(node: &Node, claim: &Claim) -> Finding {
     let message = match claim.anchor.strip_prefix(LANDMARK_ANCHOR_PREFIX) {
         Some(slug) => format!(
-            "anchor {} unresolved (0 occurrences of \"{LANDMARK_COMMENT_TOKEN} {slug}\")",
+            "anchor {} unresolved (0 occurrences of \"{LANDMARK_ANCHOR_PREFIX}{slug}\")",
             claim.anchor
         ),
         None => {
@@ -430,7 +441,7 @@ fn anchor_ambiguous(node: &Node, claim: &Claim) -> Finding {
     .detail(unanchored(claim))
 }
 
-/// A §4.1(e) dangling `stele:claim` finding, anchored at the comment's `file:line`.
+/// A §4.1(e) dangling claim-comment finding, anchored at the comment's `file:line`.
 fn claim_comment_dangling(anchor: &ClaimAnchor, message: String) -> Finding {
     Finding::error(AssertionClass::Referential, None, message)
         .location(anchor.file.clone(), anchor.line)
@@ -930,8 +941,10 @@ const THOUSANDS_GROUP: usize = 3;
 const STELE_INFO: &str = "stele";
 const FENCE_MIN_LEN: usize = 3;
 const FENCE_MAX_INDENT: usize = 3;
-const BEGIN_MARKER: &str = "stele:begin";
-const END_MARKER: &str = "stele:end";
+const BEGIN_MARKER: &str = "<!-- @stele";
+const MARKER_CLOSE: &str = "-->";
+const DEFAULT_REGION_NAME: &str = "router";
+const END_MARKER: &str = "<!-- @end -->";
 
 /// The budget class (§4.4): three profiles over materialized AGENTS.md content, each
 /// finding tagged with its profile (the class stays `budget` for `--only`/`disable`).
@@ -1074,7 +1087,7 @@ fn largest_contributor(content: &str) -> Option<(String, usize)> {
 }
 
 /// Split a materialized AGENTS.md into its §4.4 budget segments in document order: the
-/// authored `stele` fenced block, each generated `stele:begin…stele:end` region, and
+/// authored `stele` fenced block, each generated `@stele`…`@end` region, and
 /// each free-prose span between them. Each segment is `(descriptor, text)`.
 fn segments(content: &str) -> Vec<(String, String)> {
     let lines: Vec<&str> = content.lines().collect();
@@ -1156,12 +1169,22 @@ fn is_close_fence(line: &str, fence_char: char, open_len: usize) -> bool {
     run >= open_len && rest[run..].trim().is_empty()
 }
 
-/// If line `i` opens a generated region (`<!-- stele:begin <name> … -->`), its name and
-/// the index of the line carrying `stele:end` (or the last line if unterminated); else
-/// `None`. A single-line `begin…end` region closes on its own line.
+/// If line `i` opens a generated region (`<!-- @stele [name] … -->`), its name and the
+/// index of the line carrying `<!-- @end -->` (or the last line if unterminated); else
+/// `None`. The name is optional (§3.1 item 2), defaulting to [`DEFAULT_REGION_NAME`];
+/// a single-line `@stele`…`@end` region closes on its own line.
 fn generated_region(lines: &[&str], i: usize) -> Option<(String, usize)> {
     let after = lines[i].split(BEGIN_MARKER).nth(1)?;
-    let name = after.split_whitespace().next().unwrap_or("").to_string();
+    let name = match after
+        .split(MARKER_CLOSE)
+        .next()
+        .unwrap_or("")
+        .split_whitespace()
+        .next()
+    {
+        Some(name) => name.to_string(),
+        None => DEFAULT_REGION_NAME.to_string(),
+    };
     let end = (i..lines.len()).find(|&j| lines[j].contains(END_MARKER));
     Some((name, end.unwrap_or(lines.len() - 1)))
 }
@@ -2432,7 +2455,7 @@ mod tests {
         let claim = Claim::authored(
             crate::model::ClaimKind::Invariant,
             "the documented rule holds".to_string(),
-            "lm:doc-rule".to_string(),
+            "※ doc-rule".to_string(),
             None,
             "doc-rule".to_string(),
         );

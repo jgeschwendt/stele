@@ -7,5 +7,5 @@ edges:
   depends: [apps/web/lib/billing]
 ```
 
-<!-- stele:begin router -->
-<!-- stele:end -->
+<!-- @stele -->
+<!-- @end -->

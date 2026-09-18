@@ -8,7 +8,7 @@
 //! set (§4.4).
 
 use crate::lock::{Lock, LockNode};
-use crate::model::{Node, Result, SYSTEM_ID, SteleError};
+use crate::model::{LANDMARK_ANCHOR_PREFIX, Node, Result, SYSTEM_ID, SteleError};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -98,7 +98,7 @@ fn render_component(lock: &Lock, node: &LockNode) -> String {
         .filter(|(_, lm)| lm.node == node.id)
         .map(|(slug, lm)| {
             format!(
-                "- lm:{slug} → {}:{}",
+                "- {LANDMARK_ANCHOR_PREFIX}{slug} → {}:{}",
                 relativize(&lm.file, &node.id),
                 lm.line
             )

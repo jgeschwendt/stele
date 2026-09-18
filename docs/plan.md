@@ -1,6 +1,6 @@
 # Plan · glyph notation (0.3.0)
 
-Status: in progress 2026-09-17 (phase 1) · owner: jlg · execution: opus agents per phase, session model reviews and gates.
+Status: in progress 2026-09-17 (phase 2) · owner: jlg · execution: opus agents per phase, session model reviews and gates.
 
 ## The change
 

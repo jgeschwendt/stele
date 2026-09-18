@@ -15,9 +15,9 @@ defmodule AcmeWeb.Billing.Refund do
   @castable_fields [:amount_cents, :charge_id]
 
   # Public API: the single cap-enforcing changeset every write path uses.
-  # stele:landmark refund-cap
-  # stele:claim apps/web/lib/billing/refund-cap
-  @doc "Caps refund at remaining captured amount. See adr/0007 for integer-cents."
+  # ※ refund-cap
+  # ⊨ apps/web/lib/billing/refund-cap
+  @doc "Caps refund at remaining captured amount. See § 0007 for integer-cents."
   def changeset(refund, attrs) do
     refund
     |> cast(attrs, @castable_fields)

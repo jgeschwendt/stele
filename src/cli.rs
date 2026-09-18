@@ -19,8 +19,8 @@ use crate::emit;
 use crate::extract;
 use crate::lock::{self, Lock, LockClaim, LockNode};
 use crate::model::{
-    AdrEntry, ExitCode, Graph, Node, NodeKind, PURPOSE_MAX_CHARS, Resolution, Result, SYSTEM_ID,
-    SteleError, Verified, normalize_id,
+    AdrEntry, DECISION_PREFIX, ExitCode, Graph, Node, NodeKind, PURPOSE_MAX_CHARS, Resolution,
+    Result, SYSTEM_ID, SteleError, Verified, normalize_id,
 };
 use crate::parse;
 use crate::steleignore::Steleignore;
@@ -479,13 +479,7 @@ fn check(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
 
     let on_disk = read_committed_lock(&ws.home)?;
 
-    let version = lock::read_version(&on_disk)?;
-    if version != lock::LOCK_VERSION {
-        return Err(SteleError::input_msg(format!(
-            "committed lock is version {version}; this engine writes version {}. {RUN_BUILD_HINT}",
-            lock::LOCK_VERSION
-        )));
-    }
+    require_lock_version(&on_disk)?;
     let committed = lock::parse_lock(&on_disk)?;
 
     let tracked = tracked_files(&ws.work)?;
@@ -603,13 +597,7 @@ fn blame(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
     };
     let config = config::load(&ws.home)?;
     let on_disk = read_committed_lock(&ws.home)?;
-    let version = lock::read_version(&on_disk)?;
-    if version != lock::LOCK_VERSION {
-        return Err(SteleError::input_msg(format!(
-            "committed lock is version {version}; this engine writes version {}. {RUN_BUILD_HINT}",
-            lock::LOCK_VERSION
-        )));
-    }
+    require_lock_version(&on_disk)?;
     let committed = lock::parse_lock(&on_disk)?;
     let tracked = tracked_files(&ws.work)?;
     let graph = build_graph(ws)?;
@@ -682,13 +670,7 @@ const CLAUDE_LOCAL_SHIM: &str = "CLAUDE.local.md";
 fn emit(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
     let _config = config::load(&ws.home)?;
     let on_disk = read_committed_lock(&ws.home)?;
-    let version = lock::read_version(&on_disk)?;
-    if version != lock::LOCK_VERSION {
-        return Err(SteleError::input_msg(format!(
-            "committed lock is version {version}; this engine writes version {}. {RUN_BUILD_HINT}",
-            lock::LOCK_VERSION
-        )));
-    }
+    require_lock_version(&on_disk)?;
     let lock = lock::parse_lock(&on_disk)?;
 
     if ws.mode == Mode::Undercover {
@@ -727,10 +709,10 @@ fn emit_write(ws: &Workspace, lock: &Lock, claude_rules: bool) -> Result<Command
         let contents = read_node_agents(root, &path)?;
         let region = require_region(&path, &contents)?;
         let rendered = emit::render_region(lock, node);
+        let head = &contents[..region.content_start];
         let updated = format!(
-            "{}{}{}",
-            &contents[..region.content_start],
-            rendered,
+            "{head}{}{rendered}{}",
+            region_lead(head, &rendered),
             &contents[region.content_end..]
         );
         if updated != contents {
@@ -763,6 +745,20 @@ fn emit_write(ws: &Workspace, lock: &Lock, claude_rules: bool) -> Result<Command
             "stele emit: rendered {regions} region(s) and 2 index file(s)"
         )),
     ))
+}
+
+/// The LF that terminates the begin marker's line before `emit` fills a region for the
+/// first time (§3.1/§7). The one-line empty form `<!-- @stele --><!-- @end -->` that
+/// `init` scaffolds owns no bytes and no newline, so filling it with non-empty content
+/// must close the marker line — otherwise the first `emit` would render a form no later
+/// `emit` reproduces, and `emit --check` would diverge forever. Empty content (a
+/// childless component's region) leaves the one-line form byte-identical.
+fn region_lead(head: &str, rendered: &str) -> &'static str {
+    if rendered.is_empty() || head.ends_with('\n') {
+        ""
+    } else {
+        "\n"
+    }
 }
 
 /// Render to memory and byte-diff against on-disk regions and index files (§3.1); any
@@ -854,7 +850,8 @@ fn require_region(path: &Path, contents: &str) -> Result<parse::Region> {
         SteleError::input(
             path,
             1,
-            "node AGENTS.md has no generated region; run stele init to scaffold it (§3.1)",
+            "node AGENTS.md has no generated region (`<!-- @stele -->` … `<!-- @end -->`); \
+             run stele init to scaffold it (§3.1)",
         )
     })
 }
@@ -1014,18 +1011,31 @@ fn check_index(root: &Path, name: &str, expected: &str, divergent: &mut Vec<Stri
 // lock is exit 2 "run stele build", they trust the lock's freshness (staleness is
 // `check`'s job). None writes anything.
 
+/// Reject a committed lock this engine cannot read (§3.2/§5.3). A version-1 lock is
+/// the pre-0.3.0 `stele:` grammar, so its fix line names `migrate` before `build`
+/// (there is no dual-read); any other unknown version keeps the plain rebuild hint.
+fn require_lock_version(on_disk: &str) -> Result<()> {
+    let version = lock::read_version(on_disk)?;
+    if version == lock::LOCK_VERSION {
+        return Ok(());
+    }
+    let fix = if version == lock::LEGACY_LOCK_VERSION {
+        lock::LEGACY_LOCK_FIX
+    } else {
+        RUN_BUILD_HINT
+    };
+    Err(SteleError::input_msg(format!(
+        "committed lock is version {version}; this engine writes version {}. {fix}",
+        lock::LOCK_VERSION
+    )))
+}
+
 /// Load + version-check + strict-parse the committed lock (§5.3), the shared front
 /// door for the read/query verbs. A missing lock → exit 2 "run stele build"; an
 /// unknown `version` → exit 2 (never best-effort parsed, §3.2).
 fn load_committed(root: &Path) -> Result<Lock> {
     let on_disk = read_committed_lock(root)?;
-    let version = lock::read_version(&on_disk)?;
-    if version != lock::LOCK_VERSION {
-        return Err(SteleError::input_msg(format!(
-            "committed lock is version {version}; this engine writes version {}. {RUN_BUILD_HINT}",
-            lock::LOCK_VERSION
-        )));
-    }
+    require_lock_version(&on_disk)?;
     lock::parse_lock(&on_disk)
 }
 
@@ -1542,9 +1552,9 @@ fn join_or_none(values: &[String]) -> String {
 
 // ─── init: the adoption scaffold (§7) ────────────────────────────────────────
 
-/// The empty generated region `init` writes (§3.1/§7): the router markers with no body
-/// between them, for `emit` to fill later.
-const EMPTY_REGION: &str = "<!-- stele:begin router -->\n<!-- stele:end -->\n";
+/// The empty generated region `init` writes (§3.1/§7): the bare one-line form, with no
+/// name and no body between the markers, for `emit` to fill later.
+const EMPTY_REGION: &str = "<!-- @stele --><!-- @end -->\n";
 
 /// The `init --undercover` flag (§3.5): scaffold a private overlay graph instead of the
 /// in-tree one. The one extra token `init` accepts; inert on every other verb.
@@ -1600,14 +1610,14 @@ fn init(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
 
     let mut written: Vec<String> = Vec::new();
     if !existing.contains("") && !skip_if_ignored(work, "AGENTS.md")? {
-        scaffold_node(work, "AGENTS.md", NodeKind::System, &adr_dir, &mut written)?;
+        scaffold_node(work, "AGENTS.md", NodeKind::System, &mut written)?;
     }
     for dir in proposable_top_dirs(&tracked, &existing, &adr_dir) {
         let path = format!("{dir}/AGENTS.md");
         if skip_if_ignored(work, &path)? {
             continue;
         }
-        scaffold_node(work, &path, NodeKind::Container, &adr_dir, &mut written)?;
+        scaffold_node(work, &path, NodeKind::Container, &mut written)?;
     }
     // An already-authored AGENTS.md that carries a stele block but no generated region
     // gets an empty region appended (§3.1: `emit` exits 2 pointing here — `init` must
@@ -1684,22 +1694,10 @@ fn init_undercover(ws: &Workspace) -> Result<CommandOutput> {
     let existing = existing_node_dirs(work, &tracked)?;
     let overlay_root = home.join(TREE_DIR);
     let mut written: Vec<String> = Vec::new();
-    scaffold_overlay_node(
-        &overlay_root,
-        "AGENTS.md",
-        NodeKind::System,
-        &adr_dir,
-        &mut written,
-    )?;
+    scaffold_overlay_node(&overlay_root, "AGENTS.md", NodeKind::System, &mut written)?;
     for dir in proposable_top_dirs(&tracked, &existing, &adr_dir) {
         let path = format!("{dir}/AGENTS.md");
-        scaffold_overlay_node(
-            &overlay_root,
-            &path,
-            NodeKind::Container,
-            &adr_dir,
-            &mut written,
-        )?;
+        scaffold_overlay_node(&overlay_root, &path, NodeKind::Container, &mut written)?;
     }
 
     Ok(CommandOutput::new(
@@ -1748,13 +1746,12 @@ fn scaffold_overlay_node(
     overlay_root: &Path,
     rel_path: &str,
     kind: NodeKind,
-    adr_dir: &str,
     written: &mut Vec<String>,
 ) -> Result<()> {
     if overlay_root.join(rel_path).exists() {
         return Ok(());
     }
-    scaffold_node(overlay_root, rel_path, kind, adr_dir, written)
+    scaffold_node(overlay_root, rel_path, kind, written)
 }
 
 /// Install the marker-fenced managed block into `<common-dir>/info/exclude` (§3.5), creating
@@ -1976,15 +1973,12 @@ fn scaffold_node(
     root: &Path,
     rel_path: &str,
     kind: NodeKind,
-    adr_dir: &str,
     written: &mut Vec<String>,
 ) -> Result<()> {
     let full = root.join(rel_path);
     let contents = match std::fs::read_to_string(&full) {
-        Ok(existing) => prepend_skeleton(rel_path, &existing, kind, adr_dir)?,
-        Err(e) if e.kind() == ErrorKind::NotFound => {
-            new_skeleton_file(rel_path, root, kind, adr_dir)
-        }
+        Ok(existing) => prepend_skeleton(rel_path, &existing, kind)?,
+        Err(e) if e.kind() == ErrorKind::NotFound => new_skeleton_file(rel_path, root, kind),
         Err(e) => return Err(SteleError::internal(format!("read {rel_path}: {e}"))),
     };
     if let Some(parent) = full.parent() {
@@ -1999,25 +1993,22 @@ fn scaffold_node(
 
 /// A brand-new node AGENTS.md (§7): `# <name>` heading, the skeleton block, then an
 /// empty generated region.
-fn new_skeleton_file(rel_path: &str, root: &Path, kind: NodeKind, adr_dir: &str) -> String {
+fn new_skeleton_file(rel_path: &str, root: &Path, kind: NodeKind) -> String {
     let name = node_display_name(rel_path, root);
-    format!(
-        "# {name}\n\n{}\n{EMPTY_REGION}",
-        skeleton_block(kind, adr_dir)
-    )
+    format!("# {name}\n\n{}\n{EMPTY_REGION}", skeleton_block(kind))
 }
 
 /// Prepend the skeleton block to a prose-only file (§7): keep a leading `# heading`
 /// first, then the block, then every existing byte of prose, then an empty region if
 /// the file carries none. Preserves all prior content.
-fn prepend_skeleton(rel_path: &str, prose: &str, kind: NodeKind, adr_dir: &str) -> Result<String> {
+fn prepend_skeleton(rel_path: &str, prose: &str, kind: NodeKind) -> Result<String> {
     let (heading, body) = split_leading_heading(prose);
     let mut out = String::new();
     if let Some(heading) = heading {
         out.push_str(heading);
         out.push_str("\n\n");
     }
-    out.push_str(&skeleton_block(kind, adr_dir));
+    out.push_str(&skeleton_block(kind));
     out.push('\n');
     out.push_str(body);
     // Append an empty region only when the (now-combined) file has none.
@@ -2056,10 +2047,10 @@ fn split_leading_heading(prose: &str) -> (Option<&str>, &str) {
 
 /// The skeleton `stele` block (§7): the required `kind` active, every other typed field
 /// present but commented out so nothing is auto-filled (purpose/invariants stay the
-/// human's to write, §7). The `decided_by` hint names the detected ADR directory.
-fn skeleton_block(kind: NodeKind, adr_dir: &str) -> String {
+/// human's to write, §7). The `decided_by` hint is the §2.6 decision token.
+fn skeleton_block(kind: NodeKind) -> String {
     format!(
-        "```stele\nkind: {}\n# purpose:            # \u{2264}{PURPOSE_MAX_CHARS}-char scent \u{2014} fill it in (never auto-generated, \u{00A7}7)\n# commands: {{}}\n# invariants: []\n# hazards: []\n# edges:\n#   depends: []\n#   decided_by: [{adr_dir}/0001]\n# budget:\n```\n",
+        "```stele\nkind: {}\n# purpose:            # \u{2264}{PURPOSE_MAX_CHARS}-char scent \u{2014} fill it in (never auto-generated, \u{00A7}7)\n# commands: {{}}\n# invariants: []\n# hazards: []\n# edges:\n#   depends: []\n#   decided_by: [{DECISION_PREFIX}0001]\n# budget:\n```\n",
         kind.as_str()
     )
 }
@@ -2262,8 +2253,8 @@ fn read_node_source(source: &Path, rel: &Path) -> Result<String> {
     }
 }
 
-/// Resolve every claim's anchor to a `file:line` (§2.4), recomputed every build. An
-/// `lm:<slug>` anchor resolves to the winning landmark occurrence (or stays `null`
+/// Resolve every claim's anchor to a `file:line` (§2.4), recomputed every build. A
+/// `※ <slug>` landmark anchor resolves to the winning landmark occurrence (or stays `null`
 /// when the slug has zero occurrences — build stays 0, §4.1 fails it later). A
 /// `<path>#<symbol>` anchor resolves via tree-sitter: exactly one definition →
 /// its line; zero or many → `null` plus the §4.1 unresolved-vs-ambiguous marker.

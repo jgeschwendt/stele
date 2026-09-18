@@ -74,14 +74,14 @@ fn semantic_edit_inside_bound_region_changes_the_digest() {
 
 // ─── (c)/(d) + binding rules: unit over digest_for_claim ──────────────────────
 
-/// An elixir module whose `# stele:landmark` comment for `cap` (line 4) immediately
+/// An elixir module whose `# ※ <slug>` landmark comment for `cap` (line 4) immediately
 /// precedes `def changeset/1` past an intervening `@doc` and blank scope. `other/1` and the
 /// `@castable_fields` attribute sit OUTSIDE the bound region.
 const ELIXIR: &str = "\
 defmodule M do
   @castable_fields [:a, :b]
 
-  # stele:landmark cap
+  # ※ cap
   @doc \"the cap changeset\"
   def changeset(attrs) do
     attrs |> cast(@castable_fields)
@@ -111,9 +111,9 @@ fn comment_churn_inside_bound_region_is_stable() {
 #[test]
 fn parserless_language_has_no_digest() {
     let dir = tempfile::tempdir().unwrap();
-    fs::write(dir.path().join("NOTES.md"), "# stele:landmark doc\ntext\n").unwrap();
+    fs::write(dir.path().join("NOTES.md"), "# ※ doc\ntext\n").unwrap();
     assert_eq!(
-        digest_for_claim(dir.path(), "lm:doc", "NOTES.md:1").unwrap(),
+        digest_for_claim(dir.path(), "※ doc", "NOTES.md:1").unwrap(),
         None,
     );
 }
@@ -158,7 +158,7 @@ fn landmark_with_no_following_definition_falls_back_to_enclosing_then_file() {
     // Tier 1: landmark on line 2 sits inside `wrapper`'s block, before no definition.
     const ENCLOSED: &str = "\
 fn wrapper(a: u32) -> u32 {
-    // stele:landmark note
+    // ※ note
     a + 1
 }
 
@@ -190,7 +190,7 @@ fn other(b: u32) -> u32 {
 const A: u32 = 1;
 const B: u32 = 2;
 
-// stele:landmark tail
+// ※ tail
 ";
     let file_base = rust_landmark_digest(TOP_LEVEL, 4).unwrap();
     assert!(is_sha256_hex(&file_base));
@@ -258,9 +258,9 @@ fn billing_refund_cap(claims: &[LockClaim]) -> &LockClaim {
         .expect("billing declares refund-cap")
 }
 
-/// The digest of `lm:cap` (landmark on line 4) over an inline elixir `m.ex`.
+/// The digest of `※ cap` (landmark on line 4) over an inline elixir `m.ex`.
 fn elixir_cap_digest(source: &str) -> Option<String> {
-    digest_inline("m.ex", source, "lm:cap", "m.ex:4")
+    digest_inline("m.ex", source, "※ cap", "m.ex:4")
 }
 
 /// The digest of `m.rs#<symbol>` over an inline rust `m.rs`.
@@ -268,9 +268,9 @@ fn rust_symbol_digest(source: &str, symbol: &str) -> Option<String> {
     digest_inline("m.rs", source, &format!("m.rs#{symbol}"), "m.rs:1")
 }
 
-/// The digest of an `lm:note` landmark on 1-based `line` over an inline rust `m.rs`.
+/// The digest of an `※ note` landmark on 1-based `line` over an inline rust `m.rs`.
 fn rust_landmark_digest(source: &str, line: usize) -> Option<String> {
-    digest_inline("m.rs", source, "lm:note", &format!("m.rs:{line}"))
+    digest_inline("m.rs", source, "※ note", &format!("m.rs:{line}"))
 }
 
 /// Write `source` to `name` in a temp dir and digest `anchor` at `resolved`.

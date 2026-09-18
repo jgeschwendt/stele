@@ -1,6 +1,6 @@
 // Money — integer-cents value type shared across the acme monorepo.
-// See adr/0007: all currency is integer cents; floats never represent money.
-// stele:landmark money-type
+// See § 0007: all currency is integer cents; floats never represent money.
+// ※ money-type
 export type Money = {
   readonly cents: number;
   readonly currency: string;

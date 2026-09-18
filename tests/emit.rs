@@ -131,18 +131,14 @@ fn assert_marker_exit_2(mutate: impl FnOnce(&Fixture)) {
 #[test]
 fn emit_rejects_begin_without_end() {
     assert_marker_exit_2(|f| {
-        f.replace("apps/web/lib/billing/AGENTS.md", "<!-- stele:end -->\n", "");
+        f.replace("apps/web/lib/billing/AGENTS.md", "<!-- @end -->\n", "");
     });
 }
 
 #[test]
 fn emit_rejects_end_without_begin() {
     assert_marker_exit_2(|f| {
-        f.replace(
-            "apps/web/lib/billing/AGENTS.md",
-            "<!-- stele:begin router -->\n",
-            "",
-        );
+        f.replace("apps/web/lib/billing/AGENTS.md", "<!-- @stele -->\n", "");
     });
 }
 
@@ -151,8 +147,8 @@ fn emit_rejects_two_begin_markers() {
     assert_marker_exit_2(|f| {
         f.replace(
             "apps/web/lib/billing/AGENTS.md",
-            "<!-- stele:begin router -->\n",
-            "<!-- stele:begin router -->\n<!-- stele:begin router -->\n",
+            "<!-- @stele -->\n",
+            "<!-- @stele -->\n<!-- @stele -->\n",
         );
     });
 }
@@ -161,11 +157,7 @@ fn emit_rejects_two_begin_markers() {
 fn emit_rejects_a_node_with_no_region_pointing_at_init() {
     let fixture = built();
     // apps/web is a node (has a stele block) whose region we strip entirely.
-    fixture.replace(
-        "apps/web/AGENTS.md",
-        "<!-- stele:begin router -->\n<!-- stele:end -->\n",
-        "",
-    );
+    fixture.replace("apps/web/AGENTS.md", "<!-- @stele -->\n<!-- @end -->\n", "");
     let emit = fixture.run(&["emit"]);
     assert_eq!(emit.code, 2, "{}", emit.combined());
     assert!(
@@ -188,13 +180,13 @@ fn emit_writes_deterministic_transpose_indexes() {
 
     // Ordered by node id then slug: the system node's money-type precedes billing's.
     assert!(
-        invariants.find("lm:money-type").unwrap()
-            < invariants.find("lm:billing-idempotency").unwrap(),
+        invariants.find("※ money-type").unwrap()
+            < invariants.find("※ billing-idempotency").unwrap(),
         "{invariants}"
     );
     // Hazards: billing's node id sorts before worker's.
     assert!(
-        hazards.find("lm:webhook-verify").unwrap() < hazards.find("lm:dunning-batch").unwrap(),
+        hazards.find("※ webhook-verify").unwrap() < hazards.find("※ dunning-batch").unwrap(),
         "{hazards}"
     );
 
@@ -312,7 +304,7 @@ fn claude_rules_are_opt_in() {
 
     let billing = fixture.read(".claude/rules/apps-web-lib-billing.md");
     assert!(billing.contains("node: apps/web/lib/billing"), "{billing}");
-    assert!(billing.contains("lm:refund-cap"), "{billing}");
+    assert!(billing.contains("※ refund-cap"), "{billing}");
 }
 
 /// The marker line that gates every generated `.claude/rules/*.md` overwrite (§3.3, F8).

@@ -37,7 +37,7 @@ fn root_renders_the_six_item_initial_context() {
     assert!(out.contains("mise install && mix deps.get"), "{out}");
     // Items 3–6 reuse the emit renderers.
     assert!(out.contains("## Hazards (2 active)"), "{out}");
-    assert!(out.contains("→ lm:dunning-batch"), "{out}");
+    assert!(out.contains("→ ※ dunning-batch"), "{out}");
     assert!(out.contains("## Map"), "{out}");
     assert!(out.contains("`stele unfold apps/web`"), "{out}");
     assert!(
@@ -70,11 +70,11 @@ fn node_resolves_abbreviation_and_prints_all_fields() {
         out.contains("depends: apps/web/lib/store, packages/shared"),
         "{out}"
     );
-    assert!(out.contains("decided_by: adr/0007"), "{out}");
+    assert!(out.contains("decided_by: § 0007"), "{out}");
     // Claims carry their slug, prose, anchor, and resolved location.
     assert!(
         out.contains("[refund-cap]")
-            && out.contains("lm:refund-cap → apps/web/lib/billing/refund.ex:18"),
+            && out.contains("※ refund-cap → apps/web/lib/billing/refund.ex:18"),
         "{out}"
     );
     assert!(out.contains("[webhook-verify]"), "{out}");

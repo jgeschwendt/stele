@@ -10,19 +10,19 @@ commands:
   db-reset: mix ecto.reset      # DESTRUCTIVE — drops local db
 invariants:
   - claim: all money amounts are integer cents end-to-end; floats never represent currency
-    anchor: lm:money-type
+    anchor: ※ money-type
     enforced_by: packages/shared/test/money.test.ts
 edges:
-  decided_by: [adr/0007]
+  decided_by: [§ 0007]
 budget: 900
 ```
 
-<!-- stele:begin router · generated, checked by `stele emit --check` · do not hand-edit -->
+<!-- @stele router · generated, checked by `stele emit --check` · do not hand-edit -->
 
 ## Hazards (2 active)
 
-- ⚠ `apps/worker`: dunning job is NOT idempotent per-invoice — re-running a failed batch double-emails (→ lm:dunning-batch)
-- ⚠ `apps/web/lib/billing`: Stripe webhook handler must never write inside the signature-verification transaction (→ lm:webhook-verify)
+- ⚠ `apps/worker`: dunning job is NOT idempotent per-invoice — re-running a failed batch double-emails (→ ※ dunning-batch)
+- ⚠ `apps/web/lib/billing`: Stripe webhook handler must never write inside the signature-verification transaction (→ ※ webhook-verify)
 
 ## Map
 
@@ -40,4 +40,4 @@ All invariants: `.stele/index/invariants.md` · all hazards: `.stele/index/hazar
 
 `stele` CLI available → `stele root | unfold <id> | invariants --touching <path> | hazards | nodes --kind <k>`. MCP: `stele serve`.
 No engine → everything above is complete; nested AGENTS.md files carry the detail (nearest file wins).
-<!-- stele:end -->
+<!-- @end -->

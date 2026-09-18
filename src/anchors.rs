@@ -1,24 +1,26 @@
 //! Comment-anchor compilation (SPEC §2.4/§2.5).
 //!
-//! Two jobs, both tree-sitter-fronted. The scanner walks VCS-tracked files for the
-//! `stele:landmark` <slug> and `stele:claim` <addr> tokens: in a file whose language
-//! has a bundled parser, only tokens inside COMMENT nodes count (a token inside a
-//! string literal is ignored); in markdown the native comment is the HTML comment, so
-//! only tokens inside `<!-- -->` count and fenced code / prose are quotations (§2.5);
-//! only a parser-less NON-markdown file falls to a lexical line scan. Symbol resolution
-//! binds a `<path>#<symbol>` anchor to a named definition via the same parsers. The
-//! language registry maps extensions to grammars; ABI compatibility of core 0.26
-//! against grammars at ABI 14/15 is verified empirically (the parse tests below
-//! exercise every bundled grammar).
+//! Two jobs, both tree-sitter-fronted. The scanner walks VCS-tracked files for the two
+//! glyph tokens of §2.5 — the landmark glyph, one ASCII space, a slug; the claim glyph,
+//! one ASCII space, a `<node-id>/<slug>` address: in a file whose language has a bundled
+//! parser, only tokens inside COMMENT nodes count (a token inside a string literal is
+//! ignored); in markdown the native comment is the HTML comment, so only tokens inside
+//! `<!-- -->` count and fenced code / prose are quotations (§2.5); only a parser-less
+//! NON-markdown file falls to a lexical line scan. Symbol resolution binds a
+//! `<path>#<symbol>` anchor to a named definition via the same parsers. The language
+//! registry maps extensions to grammars; ABI compatibility of core 0.26 against grammars
+//! at ABI 14/15 is verified empirically (the parse tests below exercise every bundled
+//! grammar).
 //!
-//! Backtick discipline in THIS file's own comments: a token is always written with a
-//! closing backtick glued immediately after it (no space between the token and the next
-//! character), so the scanner never reads the engine's own doc comment as a declaration
-//! — these comments are scanned like any other source (a dogfood constraint; §2.5).
+//! Dogfood discipline in THIS file's own comments: these comments are scanned like any
+//! other source, so a glyph token here is only ever written with a PLACEHOLDER payload
+//! (`※ <slug>`, `⊨ <node-id>/<slug>`). A placeholder is not a well-formed slug or
+//! address, so the §2.5 silent-prose rule ignores it and the engine never declares a
+//! landmark by documenting itself.
 
 use crate::model::{
     AnchorData, ClaimAnchor, LANDMARK_ANCHOR_PREFIX, Occurrence, Result, SteleError, is_absent,
-    is_valid_slug,
+    is_claim_address, is_valid_slug,
 };
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -26,10 +28,13 @@ use tree_sitter::{Language, Node, Parser};
 
 /// The `.stele/` directory prefix excluded from the anchor scan (§2.4 scan scope).
 const STELE_DIR_PREFIX: &str = ".stele/";
-/// The two comment-anchor tokens (§2.5). Distinct literals that never collide, and
-/// neither is a prefix of the other, so each is scanned independently.
-const LANDMARK_TOKEN: &str = "stele:landmark";
-const CLAIM_TOKEN: &str = "stele:claim";
+/// The two comment-anchor tokens (§2.5): each is its glyph plus the ONE ASCII space
+/// that separates it from its payload, so a glyph glued to its following character
+/// (`※注意`) never matches. Distinct glyphs that never collide, and neither is a
+/// prefix of the other, so each is scanned independently. The landmark token is
+/// exactly [`LANDMARK_ANCHOR_PREFIX`] — the `anchor:` field quotes it verbatim (§2.4).
+const CLAIM_TOKEN: &str = "⊨ ";
+const LANDMARK_TOKEN: &str = LANDMARK_ANCHOR_PREFIX;
 /// The tree-sitter field naming a definition node's identifier across the bundled
 /// grammars (rust/python/js/ts all expose `name`); symbol resolution matches on it.
 const NAME_FIELD: &str = "name";
@@ -84,7 +89,7 @@ fn language(lang: Lang) -> Language {
 /// Whether `kind` is a named-definition node for `lang` — the node set symbol
 /// resolution scans for a matching `name` field (§2.4 "function/module/class/etc.").
 /// Elixir has none: `def`/`defmodule` are macro calls, so Elixir claims bind via
-/// `lm:` landmarks (the EXAMPLE §4 trade-off), never `<path>#<symbol>`.
+/// landmark anchors (the EXAMPLE §4 trade-off), never `<path>#<symbol>`.
 fn is_definition_kind(lang: Lang, kind: &str) -> bool {
     match lang {
         Lang::Elixir => false,
@@ -122,8 +127,9 @@ fn is_definition_kind(lang: Lang, kind: &str) -> bool {
 /// AGENTS.md files included; `.steleignore`d paths never reach here — they are already
 /// gone from `tracked`). A parser-backed file counts tokens only inside comments; a
 /// markdown file counts tokens only inside HTML comments (§2.5); only a parser-less
-/// non-markdown file falls to a lexical line scan. A malformed slug in any anchor is a
-/// §5.3 input error (exit 2) naming the offending `file:line`.
+/// non-markdown file falls to a lexical line scan. A token whose payload is not a
+/// well-formed slug/address is prose and is silently ignored (§2.5) — a comment carries
+/// no exit-2 condition at all.
 pub fn scan(root: &Path, tracked: &[PathBuf]) -> Result<AnchorData> {
     let mut data = AnchorData::default();
     let mut parser = Parser::new();
@@ -136,10 +142,10 @@ pub fn scan(root: &Path, tracked: &[PathBuf]) -> Result<AnchorData> {
             continue;
         };
         match extension(rel).as_deref() {
-            Some("markdown" | "md") => scan_markdown(&contents, &file, &mut data)?,
+            Some("markdown" | "md") => scan_markdown(&contents, &file, &mut data),
             other => match other.and_then(lang_for_extension) {
                 Some(lang) => scan_parsed(&mut parser, lang, &file, &contents, &mut data)?,
-                None => scan_text(&contents, 0, &file, &mut data)?,
+                None => scan_text(&contents, 0, &file, &mut data),
             },
         }
     }
@@ -160,7 +166,7 @@ fn scan_parsed(
     let mut comments = Vec::new();
     collect_comments(tree.root_node(), contents.as_bytes(), &mut comments);
     for (start_row, text) in comments {
-        scan_text(&text, start_row, file, data)?;
+        scan_text(&text, start_row, file, data);
     }
     Ok(())
 }
@@ -190,9 +196,9 @@ const HTML_COMMENT_CLOSE: &str = "-->";
 /// comments count. Fenced code blocks are skipped entirely (a `<!--` inside a fence is
 /// literal code, not a comment), and prose outside a comment is never scanned — so the
 /// EXAMPLE 8.4 table cell that quotes the landmark token is a quotation, not a
-/// declaration. The comment state carries across lines; malformed slugs inside a comment
-/// still fail (§2.5), so `scan_text` does the per-fragment recording and validation.
-fn scan_markdown(contents: &str, file: &str, data: &mut AnchorData) -> Result<()> {
+/// declaration. The comment state carries across lines; `scan_text` does the
+/// per-fragment recording and payload validation.
+fn scan_markdown(contents: &str, file: &str, data: &mut AnchorData) {
     let mut fence: Option<(char, usize)> = None;
     let mut in_comment = false;
     for (row, line) in contents.lines().enumerate() {
@@ -211,9 +217,8 @@ fn scan_markdown(contents: &str, file: &str, data: &mut AnchorData) -> Result<()
             fence = Some((fence_char, open_len));
             continue;
         }
-        in_comment = scan_markdown_line(line, row, in_comment, file, data)?;
+        in_comment = scan_markdown_line(line, row, in_comment, file, data);
     }
-    Ok(())
 }
 
 /// Scan the portions of one markdown `line` that lie inside an HTML comment, returning
@@ -226,20 +231,20 @@ fn scan_markdown_line(
     mut in_comment: bool,
     file: &str,
     data: &mut AnchorData,
-) -> Result<bool> {
+) -> bool {
     let mut rest = line;
     loop {
         if in_comment {
             match rest.find(HTML_COMMENT_CLOSE) {
                 Some(close) => {
-                    scan_text(&rest[..close], row, file, data)?;
+                    scan_text(&rest[..close], row, file, data);
                     rest = &rest[close + HTML_COMMENT_CLOSE.len()..];
                     in_comment = false;
                 }
                 None => {
                     // Rest of the line is inside the comment; scan it and carry state on.
-                    scan_text(rest, row, file, data)?;
-                    return Ok(true);
+                    scan_text(rest, row, file, data);
+                    return true;
                 }
             }
         } else {
@@ -248,7 +253,7 @@ fn scan_markdown_line(
                     rest = &rest[open + HTML_COMMENT_OPEN.len()..];
                     in_comment = true;
                 }
-                None => return Ok(false), // rest is prose — skip it.
+                None => return false, // rest is prose — skip it.
             }
         }
     }
@@ -257,16 +262,24 @@ fn scan_markdown_line(
 /// Scan a text blob (a comment's text, or a whole parser-less file) line by line,
 /// recording every anchor token. `base_row` is the 0-based file row of the blob's
 /// first line, so a token's reported line is the real file position.
-fn scan_text(text: &str, base_row: usize, file: &str, data: &mut AnchorData) -> Result<()> {
+///
+/// **Silent non-match (§2.5).** A glyph whose payload is not well-formed is prose and
+/// is skipped — never an error, because the landmark glyph is an everyday annotation
+/// mark in CJK comments. Well-formed means:
+/// - landmark: the payload satisfies the slug lexeme, so `※ <something>:` is prose;
+/// - claim: the payload holds at least one `/`, the text after the LAST `/` is a slug,
+///   and the text before it is a non-empty normalizable node id — so a `⊨` opening an
+///   ordinary English sentence has no slash and is prose.
+///
+/// Only the `anchor:` FIELD keeps exit 2 on a malformed slug (§2.4, [`derive_slug`]);
+/// a typo'd landmark that a node file references fails referentially instead (§4.1,
+/// cardinality 0).
+fn scan_text(text: &str, base_row: usize, file: &str, data: &mut AnchorData) {
     for (offset, line) in text.lines().enumerate() {
         let line_no = base_row + offset + 1;
         for slug in token_values(line, LANDMARK_TOKEN) {
             if !is_valid_slug(&slug) {
-                return Err(SteleError::input(
-                    file,
-                    line_no,
-                    format!("malformed landmark slug {slug:?} (§2.5: {SLUG_LEXEME})"),
-                ));
+                continue; // prose, not a declaration (§2.5)
             }
             data.landmarks.entry(slug).or_default().push(Occurrence {
                 file: file.to_string(),
@@ -274,13 +287,8 @@ fn scan_text(text: &str, base_row: usize, file: &str, data: &mut AnchorData) -> 
             });
         }
         for addr in token_values(line, CLAIM_TOKEN) {
-            let tail = addr.rsplit('/').next().unwrap_or(&addr);
-            if !is_valid_slug(tail) {
-                return Err(SteleError::input(
-                    file,
-                    line_no,
-                    format!("malformed claim slug in address {addr:?} (§2.5: {SLUG_LEXEME})"),
-                ));
+            if !is_claim_address(&addr) {
+                continue; // prose, not a binding (§2.5)
             }
             data.claims.push(ClaimAnchor {
                 addr,
@@ -289,29 +297,23 @@ fn scan_text(text: &str, base_row: usize, file: &str, data: &mut AnchorData) -> 
             });
         }
     }
-    Ok(())
 }
 
-/// The §2.5 slug lexeme, quoted in error messages.
-const SLUG_LEXEME: &str = "[a-z0-9]+(-[a-z0-9]+)*";
-
-/// Every value following `token` on `line`: the token must be immediately followed
-/// by whitespace (so `stele:landmarks` never matches `stele:landmark`), then the
-/// value runs to the next whitespace or end-of-line (§2.5).
+/// Every payload following `token` on `line`. `token` is the glyph WITH its single
+/// trailing ASCII space (§2.5 token shape), so a glyph followed by any other byte —
+/// a second space included — never matches; the payload then runs to the next
+/// whitespace or end-of-line. Multi-byte glyphs make this a `&str` scan: `find`
+/// returns byte offsets that are always char boundaries, and slicing past
+/// `token.len()` (the glyph's UTF-8 length plus one) lands on the payload's first
+/// char.
 fn token_values(line: &str, token: &str) -> Vec<String> {
     let mut values = Vec::new();
     let mut from = 0;
     while let Some(rel) = line[from..].find(token) {
         let after = &line[from + rel + token.len()..];
-        if after.chars().next().is_some_and(char::is_whitespace) {
-            let value: String = after
-                .trim_start()
-                .chars()
-                .take_while(|c| !c.is_whitespace())
-                .collect();
-            if !value.is_empty() {
-                values.push(value);
-            }
+        let value: String = after.chars().take_while(|c| !c.is_whitespace()).collect();
+        if !value.is_empty() {
+            values.push(value);
         }
         from += rel + token.len();
     }
@@ -493,7 +495,7 @@ pub fn digest_for_claim(root: &Path, anchor: &str, resolved: &str) -> Result<Opt
 ///
 /// Binding (§4.5, EXAMPLE 8.4):
 /// - `<path>#<symbol>` → the resolved symbol's definition node.
-/// - `lm:<slug>` (a landmark/`stele:claim` comment) → the named definition the
+/// - a landmark anchor (a `※ <slug>` or `⊨ <node-id>/<slug>` comment) → the named definition the
 ///   comment IMMEDIATELY PRECEDES in source order within its enclosing scope,
 ///   skipping intervening comment/attribute/doc siblings. If it precedes none, the
 ///   bound region falls back to the strictly-enclosing named definition, then the
@@ -529,7 +531,7 @@ pub fn region_digest_for_claim(
 /// The §4.5 digest AND region name of a claim's bound definition computed against a
 /// caller-supplied file `contents` (a historical `git show <sha>:<file>` blob, for
 /// the `stele blame`/staling-commit walk, §5.1). `None` for a parser-less file, an
-/// unparseable blob, or an `lm:` anchor whose landmark token is absent from this
+/// unparseable blob, or a landmark anchor whose token is absent from this
 /// version (the region did not yet exist → the digest is treated as divergent).
 pub fn region_digest_of_source(anchor: &str, file: &str, contents: &str) -> Option<RegionDigest> {
     let lang = extension(Path::new(file))
@@ -548,8 +550,8 @@ pub fn region_digest_of_source(anchor: &str, file: &str, contents: &str) -> Opti
     )
 }
 
-/// Bind `anchor` to its digested region and return its digest + name (§4.5). For an
-/// `lm:` anchor, `lm_line` (1-based) locates the landmark comment when known (the
+/// Bind `anchor` to its digested region and return its digest + name (§4.5). For a
+/// landmark anchor, `lm_line` (1-based) locates the landmark comment when known (the
 /// working-tree path); when `None` the token is scanned for in `src` (the historical
 /// path), yielding `None` if it is absent. A `<path>#<symbol>` anchor binds to the
 /// symbol's definition, falling back to the whole file.
@@ -579,7 +581,7 @@ fn region_digest_bound(
     })
 }
 
-/// The 1-based line of the first `stele:landmark` <slug> token in `src`, or `None`
+/// The 1-based line of the first landmark token declaring `slug` in `src`, or `None`
 /// (§4.5 historical binding). A whole-file scan — the historical blob is not
 /// comment-parsed — which is why the working-tree path prefers the resolved line.
 fn landmark_line(src: &[u8], slug: &str) -> Option<usize> {
@@ -648,7 +650,7 @@ fn split_resolved(resolved: &str) -> (&str, usize) {
     }
 }
 
-/// Bind an `lm:` landmark comment at 1-based `line` to its digested region (§4.5):
+/// Bind a landmark comment at 1-based `line` to its digested region (§4.5):
 /// the next named definition among the comment's later siblings, else the
 /// strictly-enclosing named definition, else the whole file (`root`).
 fn bind_landmark<'a>(root: Node<'a>, src: &[u8], lang: Lang, line: usize) -> Node<'a> {
@@ -837,7 +839,6 @@ fn posix(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::ExitCode;
     use std::io::Write;
 
     /// Scan a single in-memory file of the given name, returning the anchor index.
@@ -856,8 +857,8 @@ mod tests {
 
     #[test]
     fn rust_token_in_comment_counts_but_in_string_does_not() {
-        let src = "// stele:landmark real-one\n\
-                   fn f() { let _ = \"stele:landmark fake-one\"; }\n";
+        let src = "// ※ real-one\n\
+                   fn f() { let _ = \"※ fake-one\"; }\n";
         let data = scan_one("src/lib.rs", src).unwrap();
         assert!(
             data.landmarks.contains_key("real-one"),
@@ -871,8 +872,8 @@ mod tests {
 
     #[test]
     fn python_token_in_comment_counts_but_in_string_does_not() {
-        let src = "# stele:landmark py-real\n\
-                   x = \"stele:landmark py-fake\"\n";
+        let src = "# ※ py-real\n\
+                   x = \"※ py-fake\"\n";
         let data = scan_one("app.py", src).unwrap();
         assert!(data.landmarks.contains_key("py-real"));
         assert!(!data.landmarks.contains_key("py-fake"));
@@ -881,9 +882,9 @@ mod tests {
     #[test]
     fn elixir_token_in_comment_counts_but_in_heredoc_does_not() {
         let src = "defmodule M do\n\
-                   \x20 # stele:landmark ex-real\n\
+                   \x20 # ※ ex-real\n\
                    \x20 @moduledoc \"\"\"\n\
-                   \x20 stele:landmark ex-fake\n\
+                   \x20 ※ ex-fake\n\
                    \x20 \"\"\"\n\
                    end\n";
         let data = scan_one("lib/m.ex", src).unwrap();
@@ -894,7 +895,7 @@ mod tests {
     #[test]
     fn parserless_markdown_falls_to_lexical_scan() {
         // No bundled parser for .md: every line counts, comment framing irrelevant.
-        let data = scan_one("NOTES.md", "text\n<!-- stele:landmark doc-mark -->\n").unwrap();
+        let data = scan_one("NOTES.md", "text\n<!-- ※ doc-mark -->\n").unwrap();
         let occ = &data.landmarks["doc-mark"];
         assert_eq!(occ.len(), 1);
         assert_eq!(occ[0].line, 2);
@@ -904,7 +905,7 @@ mod tests {
 
     #[test]
     fn markdown_html_comment_token_is_scanned() {
-        let data = scan_one("doc.md", "prose\n<!-- stele:landmark doc-mark -->\ntail\n").unwrap();
+        let data = scan_one("doc.md", "prose\n<!-- ※ doc-mark -->\ntail\n").unwrap();
         let occ = &data.landmarks["doc-mark"];
         assert_eq!(occ.len(), 1);
         assert_eq!(occ[0].line, 2);
@@ -912,8 +913,8 @@ mod tests {
 
     #[test]
     fn markdown_fenced_code_token_is_skipped() {
-        // A `stele:landmark` inside a fenced block is a quotation, not a declaration.
-        let src = "text\n```\n<!-- stele:landmark fenced-fake -->\nstele:landmark bare-fake\n```\n";
+        // A a landmark token inside a fenced block is a quotation, not a declaration.
+        let src = "text\n```\n<!-- ※ fenced-fake -->\n※ bare-fake\n```\n";
         let data = scan_one("doc.md", src).unwrap();
         assert!(data.landmarks.is_empty(), "fenced token wrongly counted");
     }
@@ -921,7 +922,7 @@ mod tests {
     #[test]
     fn markdown_prose_token_is_skipped() {
         // Prose outside any HTML comment — including inline backticks — is a quotation.
-        let src = "See `stele:landmark prose-fake` and stele:landmark bare-fake here.\n";
+        let src = "See `※ prose-fake` and ※ bare-fake here.\n";
         let data = scan_one("doc.md", src).unwrap();
         assert!(data.landmarks.is_empty(), "prose token wrongly counted");
     }
@@ -930,7 +931,7 @@ mod tests {
     fn markdown_example_217_table_cell_is_not_a_false_positive() {
         // The EXAMPLE.md:217-style quoted string in a prose table cell must NOT declare a
         // landmark (the pre-0.8 lexical-scan false positive this rule closes).
-        let src = "| 4 | `rg -n \"stele:landmark refund-cap\"` → jump to refund.ex:18 | code |\n";
+        let src = "| 4 | `rg -n \"※ refund-cap\"` → jump to refund.ex:18 | code |\n";
         let data = scan_one("EXAMPLE.md", src).unwrap();
         assert!(
             !data.landmarks.contains_key("refund-cap"),
@@ -941,27 +942,60 @@ mod tests {
     #[test]
     fn markdown_multiline_html_comment_scans_interior() {
         // A token on a continuation line of a multi-line HTML comment still counts.
-        let src = "text\n<!--\nstele:landmark multi-mark\n-->\n";
+        let src = "text\n<!--\n※ multi-mark\n-->\n";
         let data = scan_one("doc.md", src).unwrap();
         let occ = &data.landmarks["multi-mark"];
         assert_eq!(occ.len(), 1);
         assert_eq!(occ[0].line, 3);
     }
 
-    // ─── slug lexeme rejection (§2.5) ─────────────────────────────────────────
+    // ─── silent non-match (§2.5) ──────────────────────────────────────────────
 
     #[test]
-    fn malformed_landmark_slug_is_exit_2_at_file_line() {
-        let err = scan_one("src/lib.rs", "fn f() {}\n// stele:landmark Bad_Slug\n").unwrap_err();
-        assert_eq!(err.exit, ExitCode::Input);
-        assert_eq!(err.line, Some(2));
-        assert_eq!(err.file.as_deref(), Some(Path::new("src/lib.rs")));
+    fn malformed_landmark_slug_is_prose_not_an_error() {
+        // Pre-0.3.0 this was exit 2; §2.5 now makes a non-matching glyph silent.
+        let data = scan_one("src/lib.rs", "fn f() {}\n// ※ Bad_Slug\n").unwrap();
+        assert!(data.landmarks.is_empty(), "{:?}", data.landmarks);
     }
 
     #[test]
-    fn malformed_claim_tail_slug_is_exit_2() {
-        let err = scan_one("src/lib.rs", "// stele:claim node/Bad_Slug\n").unwrap_err();
-        assert_eq!(err.exit, ExitCode::Input);
+    fn malformed_claim_tail_slug_is_prose_not_an_error() {
+        let data = scan_one("src/lib.rs", "// ⊨ node/Bad_Slug\n").unwrap();
+        assert!(data.claims.is_empty());
+    }
+
+    #[test]
+    fn cjk_annotation_mark_and_glyph_prose_are_silent() {
+        // The landmark glyph is an everyday CJK annotation mark, and the claim glyph
+        // opens ordinary prose; neither declares anything (§2.5).
+        let src = "# ※ 注意: hot path\n\
+                   # ※ note: retry twice\n\
+                   # ⊨ is the models glyph\n\
+                   # ※注意\n\
+                   x = 1\n";
+        let data = scan_one("app.py", src).unwrap();
+        assert!(data.landmarks.is_empty(), "{:?}", data.landmarks);
+        assert!(data.claims.is_empty(), "{:?}", data.claims);
+    }
+
+    #[test]
+    fn glyph_needs_exactly_one_space_before_its_payload() {
+        // Two spaces is not the §2.5 token shape, and neither is a glued payload.
+        let data = scan_one("src/lib.rs", "// ※  two-spaces\n// ※glued\n").unwrap();
+        assert!(data.landmarks.is_empty(), "{:?}", data.landmarks);
+    }
+
+    #[test]
+    fn claim_payload_without_a_slash_is_prose() {
+        let data = scan_one("src/lib.rs", "// ⊨ is\n").unwrap();
+        assert!(data.claims.is_empty());
+    }
+
+    #[test]
+    fn claim_payload_with_a_node_id_and_slug_binds() {
+        let data = scan_one("src/lib.rs", "// ⊨ billing/refund-cap\n").unwrap();
+        assert_eq!(data.claims.len(), 1);
+        assert_eq!(data.claims[0].addr, "billing/refund-cap");
     }
 
     // ─── winner determinism (§3.2) ────────────────────────────────────────────

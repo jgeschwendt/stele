@@ -362,16 +362,17 @@ fn child_path(stub_bin: &Path) -> String {
 // ─── the grove-root (bare-root worktree) harness (§3.5) ──────────────────────────
 
 /// The seed Elixir module a [`GroveFixture`] commits: a landmarked `hello/0` def, so an
-/// overlay claim can anchor `lm:app-core` at a tracked code symbol (§4.5). Line 2 is the
+/// overlay claim can anchor `※ app-core` at a tracked code symbol (§4.5). Line 2 is the
 /// landmark and line 3 the def, both stable under [`GroveFixture::stale_app_ex`] so the
 /// anchor's `resolved` line never moves — only the digested body changes.
 const GROVE_APP_EX: &str =
-    "defmodule Acme.App do\n  # stele:landmark app-core\n  def hello do\n    :world\n  end\nend\n";
+    "defmodule Acme.App do\n  # ※ app-core\n  def hello do\n    :world\n  end\nend\n";
 
 /// The same module with `hello`'s body mutated (`:world` → `:changed`): line 2/3 unchanged,
 /// so `resolved` is stable and the rebuilt lock byte-matches, but the def's AST digest
 /// diverges — the §4.5 freshness signal a worktree at this commit sees.
-const GROVE_APP_EX_STALE: &str = "defmodule Acme.App do\n  # stele:landmark app-core\n  def hello do\n    :changed\n  end\nend\n";
+const GROVE_APP_EX_STALE: &str =
+    "defmodule Acme.App do\n  # ※ app-core\n  def hello do\n    :changed\n  end\nend\n";
 
 /// A bare-root worktree layout (SPEC §3.5 grove home). A bare repo lives at `root/.git`, so
 /// the git common dir is `root/.git` and its parent — the graph home — is `root/`, OUTSIDE

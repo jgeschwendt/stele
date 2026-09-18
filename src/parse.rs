@@ -185,7 +185,7 @@ fn assemble(rel_path: &Path, block: &SteleBlock, raw: RawBlock) -> Result<Node> 
         hazards,
         edges: Edges {
             depends: normalize_targets(rel_path, block, "depends", raw.edges.depends)?,
-            decided_by: normalize_targets(rel_path, block, "decided_by", raw.edges.decided_by)?,
+            decided_by: parse_decided_by(rel_path, block, raw.edges.decided_by)?,
             allow: raw
                 .edges
                 .allow
@@ -252,6 +252,24 @@ fn reject_duplicate_slugs(
     Ok(())
 }
 
+/// Validate a `decided_by` list (§2.6), preserving authored order and the authored
+/// bytes: each entry is the token `§ <NNNN>` — the glyph, one ASCII space, the ADR
+/// number as its filename zero-pads it. Unlike `depends`/`allow` these are NOT node
+/// ids and are never normalized: the lock stores what was authored and §4.1 resolves
+/// the number against the detected ADR directory. A malformed entry — the pre-0.3.0
+/// ADR-path form included — is a §5.3 input error (exit 2) at the block fence.
+fn parse_decided_by(
+    rel_path: &Path,
+    block: &SteleBlock,
+    targets: Vec<String>,
+) -> Result<Vec<String>> {
+    for target in &targets {
+        crate::model::decision_number(target)
+            .map_err(|message| SteleError::input(rel_path, block.fence_line, message))?;
+    }
+    Ok(targets)
+}
+
 /// Normalize a list of edge targets (§2.1), preserving order. Every edge target is
 /// compared against normalized node ids downstream (§4.2 depends/allow, §2.6 decided_by)
 /// and serialized into the lock, so it MUST be normalized at parse time — an unnormalized
@@ -296,11 +314,14 @@ fn resolve_id(rel_path: &Path, block: &SteleBlock, override_id: Option<&str>) ->
 
 // ─── generated-region markers (§3.1 item 2) ──────────────────────────────────
 
-/// The opening-marker prefix: `<!-- stele:begin` then the region name (and any free
-/// annotation) then `-->`.
-const REGION_BEGIN_PREFIX: &str = "<!-- stele:begin";
+/// The opening-marker prefix: `<!-- @stele`, then an OPTIONAL region name (and any
+/// free annotation) then `-->` (§3.1 item 2).
+const REGION_BEGIN_PREFIX: &str = "<!-- @stele";
+/// The region name an opening marker without one carries — `router`, the only name
+/// v1 emits (§3.1 item 2).
+const REGION_DEFAULT_NAME: &str = "router";
 /// The closing marker, matched exactly (after trimming) — no name, no annotation.
-const REGION_END_MARKER: &str = "<!-- stele:end -->";
+const REGION_END_MARKER: &str = "<!-- @end -->";
 /// The trailing `-->` every marker line closes with.
 const MARKER_CLOSE: &str = "-->";
 
@@ -354,7 +375,7 @@ pub fn find_region(rel_path: &Path, contents: &str) -> Result<Option<Region>> {
                 return Err(SteleError::input(
                     rel_path,
                     line_no,
-                    "a second stele:begin marker; exactly one generated region per file (§3.1)",
+                    "a second @stele marker; exactly one generated region per file (§3.1)",
                 ));
             }
             if line[consumed..].trim() == REGION_END_MARKER {
@@ -384,7 +405,7 @@ pub fn find_region(rel_path: &Path, contents: &str) -> Result<Option<Region>> {
                     return Err(SteleError::input(
                         rel_path,
                         line_no,
-                        "a stele:end marker with no matching stele:begin (§3.1)",
+                        "an @end marker with no matching @stele (§3.1)",
                     ));
                 }
             }
@@ -394,22 +415,33 @@ pub fn find_region(rel_path: &Path, contents: &str) -> Result<Option<Region>> {
         return Err(SteleError::input(
             rel_path,
             begin_line,
-            "a stele:begin marker with no matching stele:end (§3.1)",
+            "a @stele marker with no matching @end (§3.1)",
         ));
     }
     Ok(region)
 }
 
 /// If `line` is a begin marker, return `(region name, byte offset within `line` just
-/// past the marker's FIRST closing `-->`)`. The region name is the first whitespace
-/// token of the annotation, which ends at that first `-->`; any bytes after it are
-/// further content (§3.1 — the one-line empty form `…begin <name> --><!-- stele:end
-/// -->` carries its end marker there, so the closer must not be swallowed as
-/// annotation). `None` for any other line, the end marker included.
+/// past the marker's FIRST closing `-->`)`. The name is OPTIONAL (§3.1 item 2): it is
+/// the first whitespace token of the annotation, which ends at that first `-->`, and
+/// [`REGION_DEFAULT_NAME`] when there is none — so `<!-- @stele -->`, `<!-- @stele
+/// router -->` and `<!-- @stele router · generated · do not hand-edit -->` are
+/// equivalent. `@stele` must be followed by whitespace, so `@steleish` is not a
+/// marker. Bytes after the first `-->` are further content (the one-line empty form
+/// `<!-- @stele --><!-- @end -->` carries its end marker there, so the closer must
+/// not be swallowed as annotation). `None` for any other line, the end marker
+/// included.
 fn parse_begin_marker(line: &str) -> Option<(String, usize)> {
     let inner = line.strip_prefix(REGION_BEGIN_PREFIX)?;
+    if !inner.starts_with(char::is_whitespace) {
+        return None;
+    }
     let close = inner.find(MARKER_CLOSE)?;
-    let name = inner[..close].split_whitespace().next()?.to_string();
+    let name = inner[..close]
+        .split_whitespace()
+        .next()
+        .unwrap_or(REGION_DEFAULT_NAME)
+        .to_string();
     Some((name, REGION_BEGIN_PREFIX.len() + close + MARKER_CLOSE.len()))
 }
 
@@ -556,7 +588,7 @@ mod tests {
     fn derives_and_stores_claim_slugs_on_the_node() {
         let node = parse(
             "kind: component\n\
-             invariants:\n  - claim: cap enforced\n    anchor: lm:refund-cap\n\
+             invariants:\n  - claim: cap enforced\n    anchor: ※ refund-cap\n\
              hazards:\n  - claim: symbol bound\n    anchor: refund.ex#changeset\n",
         )
         .unwrap()
@@ -570,12 +602,12 @@ mod tests {
         // A landmark and a path#symbol anchor that derive the same slug collide.
         let err = parse(
             "kind: component\n\
-             invariants:\n  - claim: a\n    anchor: lm:changeset\n\
+             invariants:\n  - claim: a\n    anchor: ※ changeset\n\
              hazards:\n  - claim: b\n    anchor: refund.ex#changeset\n",
         )
         .unwrap_err();
         assert_eq!(err.exit, ExitCode::Input);
-        assert!(err.message.contains("lm:changeset"), "{}", err.message);
+        assert!(err.message.contains("※ changeset"), "{}", err.message);
         assert!(
             err.message.contains("refund.ex#changeset"),
             "{}",
@@ -589,14 +621,36 @@ mod tests {
         // never match the normalized node id it names — the F4 defect.
         let node = parse(
             "kind: component\nedges:\n  depends: [./apps/web, packages/shared/]\n  \
-             decided_by: [./adr/0007]\n  allow:\n    - edge: apps//worker\n      \
+             allow:\n    - edge: apps//worker\n      \
              reason: runtime DI\n",
         )
         .unwrap()
         .unwrap();
         assert_eq!(node.edges.depends, vec!["apps/web", "packages/shared"]);
-        assert_eq!(node.edges.decided_by, vec!["adr/0007"]);
         assert_eq!(node.edges.allow[0].edge, "apps/worker");
+    }
+
+    #[test]
+    fn decided_by_keeps_the_authored_decision_token_verbatim() {
+        // §2.6: `decided_by` entries are authored tokens, NOT node ids — never
+        // normalized, stored byte-for-byte, resolved against the ADR dir by §4.1.
+        let node = parse("kind: component\nedges:\n  decided_by: [§ 0007, § 12]\n")
+            .unwrap()
+            .unwrap();
+        assert_eq!(node.edges.decided_by, vec!["§ 0007", "§ 12"]);
+    }
+
+    #[test]
+    fn decided_by_in_the_old_path_form_is_exit_2_naming_the_glyph_form() {
+        let err = parse("kind: component\nedges:\n  decided_by: [adr/0007]\n").unwrap_err();
+        assert_eq!(err.exit, ExitCode::Input);
+        assert!(err.message.contains("§ <NNNN>"), "{}", err.message);
+    }
+
+    #[test]
+    fn decided_by_with_a_non_numeric_payload_is_exit_2() {
+        let err = parse("kind: component\nedges:\n  decided_by: [§ seven]\n").unwrap_err();
+        assert_eq!(err.exit, ExitCode::Input);
     }
 
     #[test]
@@ -616,11 +670,64 @@ mod tests {
         assert!(err.message.contains("edges.allow.edge"), "{}", err.message);
     }
 
+    // ─── generated-region markers (§3.1 item 2) ──────────────────────────────
+
+    fn region_name(contents: &str) -> Option<String> {
+        find_region(Path::new("AGENTS.md"), contents)
+            .unwrap()
+            .map(|r| r.name)
+    }
+
+    #[test]
+    fn bare_begin_marker_defaults_to_the_router_region() {
+        assert_eq!(
+            region_name("# n\n\n<!-- @stele -->\nbody\n<!-- @end -->\n").as_deref(),
+            Some("router")
+        );
+    }
+
+    #[test]
+    fn annotated_begin_marker_takes_its_first_token_as_the_name() {
+        assert_eq!(
+            region_name(
+                "<!-- @stele router · generated · do not hand-edit -->\nbody\n<!-- @end -->\n"
+            )
+            .as_deref(),
+            Some("router")
+        );
+    }
+
+    #[test]
+    fn one_line_empty_region_is_a_region_owning_no_bytes() {
+        let contents = "# n\n\n<!-- @stele --><!-- @end -->\n";
+        let region = find_region(Path::new("AGENTS.md"), contents)
+            .unwrap()
+            .expect("one-line region");
+        assert_eq!(region.name, "router");
+        assert_eq!(region.content_start, region.content_end);
+    }
+
+    #[test]
+    fn an_extended_at_stele_word_is_not_a_marker() {
+        // `@stele` must be followed by whitespace, so `@steleish` opens no region.
+        assert_eq!(region_name("<!-- @steleish -->\nbody\n"), None);
+    }
+
+    #[test]
+    fn the_pre_0_3_0_markers_are_not_a_region() {
+        // The grammar moved (§3.1); an old file simply carries no region, and `emit`
+        // reports that with the `@stele` form in its message.
+        assert_eq!(
+            region_name("<!-- stele:begin router -->\n<!-- stele:end -->\n"),
+            None
+        );
+    }
+
     #[test]
     fn malformed_derived_slug_is_exit_2() {
         let err = parse(
             "kind: component\n\
-             invariants:\n  - claim: a\n    anchor: lm:Bad_Slug\n",
+             invariants:\n  - claim: a\n    anchor: ※ Bad_Slug\n",
         )
         .unwrap_err();
         assert_eq!(err.exit, ExitCode::Input);

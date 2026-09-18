@@ -16,7 +16,7 @@ defmodule AcmeWorker.Dunning do
     run_batch(batch_id)
   end
 
-  # stele:landmark dunning-batch
+  # ※ dunning-batch
   def run_batch(batch_id) do
     batch_id
     |> load_overdue_invoices()

@@ -198,14 +198,14 @@ fn root_node() -> Node {
         invariants: vec![Claim::authored(
             ClaimKind::Invariant,
             "money is integer cents — never a float".to_string(),
-            "lm:money-type".to_string(),
+            "※ money-type".to_string(),
             Some("packages/shared/test/money.test.ts".to_string()),
             "money-type".to_string(),
         )],
         hazards: Vec::new(),
         edges: Edges {
             depends: Vec::new(),
-            decided_by: vec!["adr/0007".to_string()],
+            decided_by: vec!["§ 0007".to_string()],
             allow: Vec::new(),
         },
         budget: Some(900),
@@ -219,7 +219,7 @@ fn child_node() -> Node {
     let mut claim = Claim::authored(
         ClaimKind::Hazard,
         "webhook handler must not write inside the verification transaction".to_string(),
-        "lm:webhook-verify".to_string(),
+        "※ webhook-verify".to_string(),
         None,
         "webhook-verify".to_string(),
     );

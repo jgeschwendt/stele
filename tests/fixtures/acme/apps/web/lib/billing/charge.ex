@@ -38,7 +38,7 @@ defmodule AcmeWeb.Billing.Charge do
   end
 
   @doc "Creates a charge, collapsing retries by (account_id, idempotency_key)."
-  # stele:landmark billing-idempotency
+  # ※ billing-idempotency
   def create(account_id, %{idempotency_key: key} = attrs) do
     case fetch_existing(account_id, key) do
       {:ok, existing} ->
@@ -109,7 +109,7 @@ defmodule AcmeWeb.Billing.Charge do
   verification transaction is exactly the hazard this landmark guards, so
   callers keep the check and the write strictly separate.
   """
-  # stele:landmark webhook-verify
+  # ※ webhook-verify
   def verify_signature(payload, signature) do
     expected = Stripe.signature(payload, secret())
 

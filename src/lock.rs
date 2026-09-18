@@ -21,12 +21,22 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 
 /// The only lock format this engine reads or writes (§3.2). A committed lock with
-/// any other `version` is rejected (exit 2), never best-effort parsed.
+/// any other `version` is rejected (exit 2), never best-effort parsed. Version 2 is
+/// the glyph notation (§2.5); version 1 is the pre-0.3.0 `stele:` grammar, and there
+/// is no dual-read — its fix line is [`LEGACY_LOCK_FIX`].
 ///
-/// §4.4 folds the budget tokenizer's identity into this version: lock version 1 ⇔
+/// §4.4 folds the budget tokenizer's identity into this version: lock version 2 ⇔
 /// tiktoken-rs@0.12.0 cl100k approximation. A tokenizer swap changes token counts,
 /// so it MUST bump this version — the change stays visible and reviewable in the lock.
-pub const LOCK_VERSION: u32 = 1;
+pub const LOCK_VERSION: u32 = 2;
+
+/// The pre-0.3.0 lock version — the `stele:` grammar, which this engine does not
+/// parse (§3.2).
+pub const LEGACY_LOCK_VERSION: u32 = 1;
+
+/// The §5.3 fix line a version-1 lock's input error ends with: `migrate` rewrites the
+/// sources, `build` then rewrites the lock at version 2.
+pub const LEGACY_LOCK_FIX: &str = "run stele migrate, then stele build";
 
 /// Pretty-print indent width in spaces (§3.2 "2-space pretty-print").
 const INDENT_WIDTH: usize = 2;

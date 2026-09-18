@@ -1,7 +1,7 @@
 defmodule AcmeShared.Money do
   @moduledoc """
   Integer-cents money helpers shared across the acme monorepo. Mirrors the
-  TypeScript `Money` type in src/money.ts; adr/0007 mandates integer cents.
+  TypeScript `Money` type in src/money.ts; § 0007 mandates integer cents.
   """
 
   @enforce_keys [:cents]

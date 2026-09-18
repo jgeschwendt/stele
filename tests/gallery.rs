@@ -20,7 +20,7 @@ export type LegacyMoney = {
   readonly cents: number;
   readonly currency: string;
 };
-// stele:landmark money-type
+// ※ money-type
 export function legacyMoney(cents: number): LegacyMoney {
   return { cents, currency: \"usd\" };
 }
@@ -76,15 +76,15 @@ fn gallery_8_2_structural_reverse_vestigial() {
     assert!(out.contains("no import found"), "{out}");
 }
 
-// 8.3 Referential: (a) a renamed landmark comment leaves lm:refund-cap unresolved;
+// 8.3 Referential: (a) a renamed landmark comment leaves ※ refund-cap unresolved;
 // (b) a copy-paste refactor duplicates the money-type landmark (cardinality 2).
 #[test]
 fn gallery_8_3_referential() {
     let fixture = Fixture::acme();
     fixture.replace(
         "apps/web/lib/billing/refund.ex",
-        "stele:landmark refund-cap",
-        "stele:landmark refund-cap-v2",
+        "※ refund-cap",
+        "※ refund-cap-v2",
     );
     fixture.write("packages/shared/src/legacy/money.ts", LEGACY_MONEY_TS);
     fixture.commit("rename refund-cap landmark; duplicate money-type in a legacy copy");

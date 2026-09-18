@@ -17,15 +17,12 @@ fn exit_0_on_build_with_unborn_head() {
     let fixture = Fixture::bare();
     // A claim whose landmark anchor RESOLVES — so it would normally be stamped; on an
     // unborn HEAD it must stay verified:null (no commit to anchor to).
-    fixture.write(
-        "rules.py",
-        "# stele:landmark greenfield-rule\ndef f():\n    return 1\n",
-    );
+    fixture.write("rules.py", "# ※ greenfield-rule\ndef f():\n    return 1\n");
     fixture.write(
         "AGENTS.md",
         "# proj\n\n```stele\nkind: system\npurpose: greenfield probe\ninvariants:\n\
-         \x20 - claim: the rule holds\n    anchor: lm:greenfield-rule\n```\n\n\
-         <!-- stele:begin router -->\n<!-- stele:end -->\n",
+         \x20 - claim: the rule holds\n    anchor: ※ greenfield-rule\n```\n\n\
+         <!-- @stele -->\n<!-- @end -->\n",
     );
     // Stage (so `git ls-files` sees the node) but do NOT commit — HEAD is unborn.
     fixture.stage_all();

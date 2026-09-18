@@ -5,8 +5,8 @@
 //! protocol 2025-11-25). stdout carries ONLY protocol messages; stderr is free for
 //! logging. Eight read tools mirror the §5.1 read/query verbs one-for-one, named
 //! identically and un-prefixed — the server's own name `stele` supplies the namespace
-//! (`stele.root`, `stele.node`, …). The mutating verbs `build`/`init`/`emit` are NOT
-//! exposed (§5.2: they write source or the lock and belong to the shell/CI tier).
+//! (`stele.root`, `stele.node`, …). The mutating verbs `build`/`init`/`emit`/`migrate`
+//! are NOT exposed (§5.2: they write source or the lock and belong to the shell/CI tier).
 //!
 //! Every tool call reuses the CLI's own verb dispatch through [`crate::cli::serve_render`],
 //! so a tool's text content is byte-identical to `stele <verb>`'s stdout — one code path

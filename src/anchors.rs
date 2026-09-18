@@ -33,7 +33,7 @@ const STELE_DIR_PREFIX: &str = ".stele/";
 /// (`※注意`) never matches. Distinct glyphs that never collide, and neither is a
 /// prefix of the other, so each is scanned independently. The landmark token is
 /// exactly [`LANDMARK_ANCHOR_PREFIX`] — the `anchor:` field quotes it verbatim (§2.4).
-const CLAIM_TOKEN: &str = "⊨ ";
+pub(crate) const CLAIM_TOKEN: &str = "⊨ ";
 const LANDMARK_TOKEN: &str = LANDMARK_ANCHOR_PREFIX;
 /// The tree-sitter field naming a definition node's identifier across the bundled
 /// grammars (rust/python/js/ts all expose `name`); symbol resolution matches on it.
@@ -189,8 +189,8 @@ fn collect_comments(node: Node, src: &[u8], out: &mut Vec<(usize, String)>) {
 /// The HTML comment delimiters — in markdown the ONLY construct whose anchor tokens are
 /// declarations (§2.5 "language-native comments"). Tokens in a fenced code block or in
 /// prose (inline backticks included) are quotations and are skipped.
-const HTML_COMMENT_OPEN: &str = "<!--";
-const HTML_COMMENT_CLOSE: &str = "-->";
+pub(crate) const HTML_COMMENT_OPEN: &str = "<!--";
+pub(crate) const HTML_COMMENT_CLOSE: &str = "-->";
 
 /// Scan a markdown file for comment anchors (§2.5): only tokens inside `<!-- -->` HTML
 /// comments count. Fenced code blocks are skipped entirely (a `<!--` inside a fence is

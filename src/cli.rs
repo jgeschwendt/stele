@@ -17,6 +17,7 @@ use crate::assert::{self, Context, Finding};
 use crate::config::{self, AssertionClass};
 use crate::emit;
 use crate::extract;
+use crate::legacy;
 use crate::lock::{self, Lock, LockClaim, LockNode};
 use crate::model::{
     AdrEntry, DECISION_PREFIX, ExitCode, Graph, Node, NodeKind, PURPOSE_MAX_CHARS, Resolution,
@@ -314,6 +315,7 @@ fn dispatch(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
         Some("hazards") => hazards(ws, args),
         Some("init") => init(ws, args),
         Some("invariants") => invariants(ws, args),
+        Some("migrate") => migrate(ws, args),
         Some("node") => node(ws, args),
         Some("nodes") => nodes(ws, args),
         Some("root") => cmd_root(ws),
@@ -321,8 +323,8 @@ fn dispatch(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
         Some(other) => Err(SteleError::input_msg(format!("unknown command: {other:?}"))),
         None => Err(SteleError::input_msg(
             "usage: stele root | node <id> | unfold <id> | invariants | hazards | nodes | \
-             check | emit | blame | build | init | serve | --version   (add --json for the \
-             machine envelope; serve speaks MCP on stdio and takes no --json)",
+             check | emit | blame | build | init | migrate | serve | --version   (add --json \
+             for the machine envelope; serve speaks MCP on stdio and takes no --json)",
         )),
     }
 }
@@ -1787,8 +1789,10 @@ fn ensure_info_exclude(common: &Path) -> Result<()> {
 /// Write `name` under `dir` via a unique temp file + rename (§3.5/§5.3 atomicity): an
 /// interrupted or partial write never replaces the live file. The temp name carries the
 /// pid + a process-local counter so concurrent writers never collide, and it is cleaned up
-/// best-effort if the rename fails. Shared by the `info/exclude` install; the lock has its
-/// own [`write_lock_atomic`] (same discipline, its own create-dir step).
+/// best-effort if the rename fails. An existing target's permissions are carried onto the
+/// replacement (best-effort), so rewriting a source in place never strips an executable
+/// bit. Shared by the `info/exclude` install and `migrate`'s source rewrite; the lock has
+/// its own [`write_lock_atomic`] (same discipline, its own create-dir step).
 fn write_atomic(dir: &Path, name: &str, bytes: &str) -> Result<()> {
     static TEMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let seq = TEMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1796,6 +1800,9 @@ fn write_atomic(dir: &Path, name: &str, bytes: &str) -> Result<()> {
     let temp = dir.join(&temp_name);
     std::fs::write(&temp, bytes)
         .map_err(|e| SteleError::internal(format!("write {}: {e}", temp.display())))?;
+    if let Ok(existing) = std::fs::metadata(dir.join(name)) {
+        let _ = std::fs::set_permissions(&temp, existing.permissions());
+    }
     if let Err(e) = std::fs::rename(&temp, dir.join(name)) {
         let _ = std::fs::remove_file(&temp);
         return Err(SteleError::internal(format!(
@@ -2115,6 +2122,185 @@ fn git_add(root: &Path, paths: &[String]) {
         "stele init: {warning}\n  stage the scaffold yourself so stele build sees it: git add -- {}",
         paths.join(" ")
     );
+}
+
+// ─── `stele migrate` (§5.1) ──────────────────────────────────────────────────
+
+/// One file `migrate` rewrites: where its bytes live, how it is displayed in the report,
+/// and which notation slots it can carry ([`legacy::SourceKind`]).
+struct MigrateTarget {
+    display: String,
+    kind: legacy::SourceKind,
+    path: PathBuf,
+}
+
+/// `stele migrate` (§5.1/§5.3): rewrite the pre-0.3.0 `stele:` notation to the glyph
+/// notation (§2.5) IN PLACE, over `build`'s scan scope — VCS-tracked files,
+/// `.steleignore`-filtered, `.stele/` excluded, plus the overlay under
+/// `<home>/.stele/tree/` in undercover mode (§3.5). It reads and writes no lock: `stele
+/// build` follows it, and until it does the v1 lock keeps failing `check`/`emit` (§3.2).
+///
+/// Process contract (§5.3): exit `0` whether or not anything was rewritten (a no-op run
+/// is success — the rewrite is idempotent), `2` on an input error with NOTHING written
+/// (every source is read and rewritten in memory before the first byte lands), `3` on an
+/// IO failure; never `1` — `migrate` asserts nothing. A dirty work tree is a WARNING, not
+/// a refusal: the rewrite is meant to be reviewed as a diff.
+fn migrate(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
+    reject_extra_args(args, "stele migrate [--json]")?;
+    if ws.mode == Mode::Undercover {
+        // Self-heal (§3.5) like every other undercover verb: re-ensure the `info/exclude`
+        // block so the private graph stays out of `git status`. The managed block's own
+        // `# stele:begin undercover` fence is NOT notation (§2.5/§3.5) and migrate never
+        // touches it — it lives in the git common dir, outside every scan scope.
+        ensure_info_exclude(&ws.common)?;
+    }
+    warn_if_dirty(&ws.work);
+
+    // Pass 1 — read and rewrite every source in memory. A read or decode failure aborts
+    // here, before a single file has been replaced (§5.3: nothing written on an error).
+    let mut rewritten: Vec<(PathBuf, String, String)> = Vec::new();
+    for target in migrate_targets(ws)? {
+        let Some(contents) = read_migrate_source(&target)? else {
+            continue;
+        };
+        if let Some(migrated) = legacy::rewrite(target.kind, &contents) {
+            rewritten.push((target.path, target.display, migrated));
+        }
+    }
+
+    // Pass 2 — land them, each through the temp-file + rename discipline (§5.3), so an
+    // interrupted run never leaves a half-written source.
+    for (path, _, contents) in &rewritten {
+        write_source_atomic(path, contents)?;
+    }
+
+    let files: Vec<String> = rewritten
+        .into_iter()
+        .map(|(_, display, _)| display)
+        .collect();
+    let summary = if files.is_empty() {
+        "stele migrate: nothing to rewrite — already the glyph notation (0 file(s))".to_string()
+    } else {
+        let mut summary = format!("stele migrate: rewrote {} file(s)", files.len());
+        for display in &files {
+            summary.push_str("\n  ");
+            summary.push_str(display);
+        }
+        summary
+    };
+    Ok(CommandOutput::new(
+        json!({ "files": files.len(), "rewrote": files }),
+        Some(summary),
+    ))
+}
+
+/// Every file `migrate` reads, in scan order (§5.1 scope). Normal mode: the tracked,
+/// `.steleignore`-filtered roster minus `.stele/`, with each tracked `AGENTS.md` read as a
+/// node file. Undercover (§3.5): the same tracked roster for code/markdown comments — the
+/// work tree's own `AGENTS.md` files are the collaborators', never node sources, so they
+/// are read as plain markdown — plus every overlay `AGENTS.md` under `<home>/.stele/tree/`
+/// as a node file.
+fn migrate_targets(ws: &Workspace) -> Result<Vec<MigrateTarget>> {
+    let stele_prefix = format!("{LOCK_DIR}/");
+    let mut targets: Vec<MigrateTarget> = tracked_files(&ws.work)?
+        .into_iter()
+        .filter_map(|rel| {
+            let display = rel.to_string_lossy().replace('\\', "/");
+            if display == LOCK_DIR || display.starts_with(&stele_prefix) {
+                return None;
+            }
+            let kind = if ws.mode == Mode::Normal
+                && rel.file_name().is_some_and(|name| name == "AGENTS.md")
+            {
+                legacy::SourceKind::Node
+            } else if matches!(
+                rel.extension().map(|e| e.to_string_lossy().to_lowercase()),
+                Some(ref ext) if ext == "md" || ext == "markdown"
+            ) {
+                legacy::SourceKind::Markdown
+            } else {
+                legacy::SourceKind::Code
+            };
+            Some(MigrateTarget {
+                display,
+                kind,
+                path: ws.work.join(&rel),
+            })
+        })
+        .collect();
+
+    if ws.mode == Mode::Undercover {
+        let tree_root = ws.home.join(TREE_DIR);
+        let mut overlay = Vec::new();
+        walk_overlay_sources(&tree_root, &tree_root, &mut overlay)?;
+        overlay.sort_by(|a, b| a.rel.cmp(&b.rel));
+        targets.extend(overlay.into_iter().map(|source| MigrateTarget {
+            display: format!(
+                "{TREE_DIR}/{}",
+                source.rel.to_string_lossy().replace('\\', "/")
+            ),
+            kind: legacy::SourceKind::Node,
+            path: source.source,
+        }));
+    }
+    Ok(targets)
+}
+
+/// Read one migrate target. `Ok(None)` skips it: a tracked path missing from the work
+/// tree, or a binary file (the §2.4 scan skips non-UTF-8 bytes the same way). A node
+/// source that is not valid UTF-8 is a §5.3 input error instead — the same hard stop
+/// `build` gives it — and, running in pass 1, it aborts before anything is written.
+fn read_migrate_source(target: &MigrateTarget) -> Result<Option<String>> {
+    match std::fs::read(&target.path) {
+        Ok(bytes) => match String::from_utf8(bytes) {
+            Ok(text) => Ok(Some(text)),
+            Err(_) if target.kind == legacy::SourceKind::Node => Err(SteleError::input_msg(
+                format!("{}: node source is not valid UTF-8 (§3.1)", target.display),
+            )),
+            Err(_) => Ok(None),
+        },
+        Err(e) if crate::model::is_absent(&e) => Ok(None),
+        Err(e) => Err(SteleError::internal(format!(
+            "read {}: {e}",
+            target.display
+        ))),
+    }
+}
+
+/// Warn (stderr, non-fatal) when the work tree carries uncommitted changes (§5.1): the
+/// rewrite is meant to be reviewed as a diff, which a dirty tree makes harder. Purely
+/// diagnostic — a `git` that cannot be spawned simply produces no warning, and neither
+/// case changes the exit code.
+fn warn_if_dirty(root: &Path) {
+    let Ok(output) = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(root)
+        .output()
+    else {
+        return;
+    };
+    if output.status.success() && !output.stdout.is_empty() {
+        eprintln!(
+            "warning: the work tree has uncommitted changes — stele migrate rewrites sources in \
+             place and is meant to be reviewed as a diff (§5.1)"
+        );
+    }
+}
+
+/// Replace one source file atomically (§5.3), preserving its mode — a rewritten
+/// executable script must stay executable. Thin wrapper over [`write_atomic`] that splits
+/// the path into the directory + name it takes.
+fn write_source_atomic(path: &Path, contents: &str) -> Result<()> {
+    let dir = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    let name = path
+        .file_name()
+        .ok_or_else(|| SteleError::internal(format!("{} has no file name", path.display())))?
+        .to_string_lossy()
+        .into_owned();
+    write_atomic(dir, &name, contents)
 }
 
 // ─── the source pipeline (§5.1) ──────────────────────────────────────────────

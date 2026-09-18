@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 /// The fenced-block info-string language that marks the authored node block.
-const STELE_INFO: &str = "stele";
+pub(crate) const STELE_INFO: &str = "stele";
 /// CommonMark: a code fence is a run of at least this many fence characters.
 const MIN_FENCE_LEN: usize = 3;
 /// CommonMark: an opening fence may be indented at most this many spaces.
@@ -316,14 +316,14 @@ fn resolve_id(rel_path: &Path, block: &SteleBlock, override_id: Option<&str>) ->
 
 /// The opening-marker prefix: `<!-- @stele`, then an OPTIONAL region name (and any
 /// free annotation) then `-->` (§3.1 item 2).
-const REGION_BEGIN_PREFIX: &str = "<!-- @stele";
+pub(crate) const REGION_BEGIN_PREFIX: &str = "<!-- @stele";
 /// The region name an opening marker without one carries — `router`, the only name
 /// v1 emits (§3.1 item 2).
-const REGION_DEFAULT_NAME: &str = "router";
+pub(crate) const REGION_DEFAULT_NAME: &str = "router";
 /// The closing marker, matched exactly (after trimming) — no name, no annotation.
-const REGION_END_MARKER: &str = "<!-- @end -->";
+pub(crate) const REGION_END_MARKER: &str = "<!-- @end -->";
 /// The trailing `-->` every marker line closes with.
-const MARKER_CLOSE: &str = "-->";
+pub(crate) const MARKER_CLOSE: &str = "-->";
 
 /// A located generated region (§3.1 item 2): the single marker-fenced span `emit`
 /// owns. `content_start`/`content_end` bracket the engine-owned bytes strictly

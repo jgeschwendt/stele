@@ -1,6 +1,6 @@
 #!/bin/sh
 # Assemble a stele release ARTIFACT locally — the same tarball + checksum the CI
-# matrix (.github/workflows/release.yml) publishes, produced on disk so the artifact
+# matrix (.github/workflows/release.yaml) publishes, produced on disk so the artifact
 # can be built and smoke-tested (tests/install_smoke.sh) without CI or network.
 #
 # Under $DIST/<version>/:
@@ -33,7 +33,7 @@ esac
 TARGET="${arch}-${os}"
 
 # Version: the [package] version in Cargo.toml is the single source `stele --version`
-# also reports. CI stamps it from the tag before calling this script (release.yml).
+# also reports. CI stamps it from the tag before calling this script (release.yaml).
 VERSION=$(grep -m1 '^version = ' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
 
 echo "release: building stele ($VERSION, $TARGET)"

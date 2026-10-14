@@ -1,3 +1,7 @@
 [tools]
 lefthook = "1"
 rust = "stable"
+
+[tasks.figures]
+description = "Render docs/figures/*.png from the Claude Design canvas source"
+run = "docs/figures/export.sh"

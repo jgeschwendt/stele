@@ -37,11 +37,6 @@
   </div>
 </header>
 
-<div class="strip strip-accent">
-  <span class="strip-tag">docs</span>
-  <span class="strip-msg">this page mirrors <code class="code">README.md</code> and <code class="code">GUIDE.md</code> — the SPEC is the contract.</span>
-</div>
-
 <main class="docs-shell" data-container>
 
 <header class="stack">
@@ -52,6 +47,7 @@
     undeclared dependency means the code broke the signature, an unbacked declaration means the doc
     lied. The same graph answers agent queries and materializes standard-compliant AGENTS.md files,
     so every harness gets the full content with zero engine.</p>
+  <figure class="figure"><img src="figures/authored-vs-extracted.png" alt="Three authored sources — the file tree, comment anchors, typed blocks in AGENTS.md — build the declared graph.lock; the source files yield the extracted graph; stele check reconciles the two in both directions, flagging an undeclared dependency (the code broke the signature) or an unbacked declaration (the doc lied); the graph then answers agent queries and emits AGENTS.md." /><figcaption>Authored intent vs extracted truth: CI asserts the declared graph against the extracted one in both directions. Source: Claude Design canvas <a href="https://claude.ai/artifact/EgQ9s4REGVmpP5PZ7jVLbK">stele figures</a>, board authored-vs-extracted.</figcaption></figure>
   <p class="docs-flavor"><em>stele</em> /ˈstiːli/ — an inscribed standing stone that publicly declares
     the law. The territory is checked against it.</p>
   <div class="row">
@@ -63,6 +59,7 @@
     <a class="pill" href="#install">install</a>
     <a class="pill" href="#ladder">degradation ladder</a>
     <a class="pill" href="#adopt">adoption path</a>
+    <a class="pill" href="#notation">notation</a>
     <a class="pill" href="#assertions">assertion suite</a>
     <a class="pill" href="#query">query surface</a>
     <a class="pill" href="#undercover">undercover mode</a>
@@ -92,6 +89,7 @@ cargo install --git https://github.com/jgeschwendt/stele stele-cli</pre>
     <p class="docs-note">Files → CLI → MCP is a spec invariant, not an implementation detail. Each
       rung adds capability; none becomes a reading dependency.</p>
   </header>
+  <figure class="figure"><img src="figures/degradation-ladder.png" alt="Three rungs left to right: files, then CLI, then MCP, each adding capability; a line from the CLI and MCP rungs returns to the files rung, since every answer is derivable from the files." /><figcaption>The degradation ladder: files → CLI → MCP, and every rung's answer is derivable from the files. Source: Claude Design canvas <a href="https://claude.ai/artifact/EgQ9s4REGVmpP5PZ7jVLbK">stele figures</a>, board degradation-ladder.</figcaption></figure>
   <div class="rungs">
     <article class="card">
       <div class="card-head">
@@ -170,6 +168,40 @@ stele emit --check             <span class="snippet-note"># committed files vs w
 - run: curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash -s v0.3.0
 - run: ~/.local/bin/stele check
 - run: ~/.local/bin/stele emit --check</pre>
+</section>
+
+<section class="docs-section" id="notation" data-component="notation">
+  <header>
+    <h2 class="h2">Notation</h2>
+    <p class="docs-note">0.3.0's glyph notation: four glyphs plus an ASCII region marker, one
+      grammar. A glyph token is the glyph, one ASCII space, the payload — the same bytes in a
+      comment, in <code class="code">anchor:</code> and in <code class="code">decided_by:</code>, so a
+      node file quotes the code verbatim.</p>
+  </header>
+  <div class="table-wrap">
+    <table data-table>
+      <thead><tr><th>slot</th><th>token</th></tr></thead>
+      <tbody>
+        <tr><td class="table-mono">landmark</td><td><code class="code">// ※ refund-cap</code></td></tr>
+        <tr><td class="table-mono">claim</td><td><code class="code">// ⊨ billing/refund-cap</code></td></tr>
+        <tr><td class="table-mono">anchor:</td><td><code class="code">※ refund-cap</code></td></tr>
+        <tr><td class="table-mono">decided_by</td><td><code class="code">§ 0007</code> — resolves against the repo's ADR directory</td></tr>
+        <tr><td class="table-mono">region</td><td><code class="code">&lt;!-- @stele [name] --&gt;</code> … <code class="code">&lt;!-- @end --&gt;</code> — name defaults to <code class="code">router</code>; one per file, no nesting</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="stack claims" role="list">
+    <li><strong>a non-matching glyph is prose</strong> — <code class="code">※</code> is a common
+      annotation mark in CJK comments, so <code class="code">※ 注意</code> is silently ignored, never
+      an error; a typo in a landmark a node references still fails referentially.</li>
+    <li><strong><code class="code">✻</code> is reserved for human notes</strong>, and CLI addresses stay
+      ASCII: <code class="code">stele blame billing/refund-cap</code> — no glyph is ever typed into a
+      shell.</li>
+    <li><strong>upgrading from 0.2 is a hard cut</strong> — a version-1 lock fails every verb with
+      <code class="code">run stele migrate, then stele build</code>. <code class="code">stele migrate</code>
+      rewrites the old <code class="code">stele:</code> grammar in place over build's scan scope,
+      idempotently; there is no dual-read.</li>
+  </ul>
 </section>
 
 <section class="docs-section" id="assertions" data-component="assertions">
@@ -264,8 +296,7 @@ stele blame payments/idempotent-charges     <span class="snippet-note"># provena
       </tbody>
     </table>
   </div>
-  <p class="docs-foot">stele v0.3.0 · SPEC Draft 0.10 · this page mirrors README.md and GUIDE.md; the
-    SPEC is the contract.</p>
+  <p class="docs-foot">stele v0.3.0 · SPEC Draft 0.10 · SPEC.md and GUIDE.md are the contract.</p>
 </section>
 
 </main>

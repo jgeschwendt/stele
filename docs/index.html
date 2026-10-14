@@ -4,8 +4,8 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>stele — docs</title>
-<!-- ui.css is vendored byte-synced from jgeschwendt/ui (ui.css @ 4f1d9db) — sync, never edit here -->
-<link rel="stylesheet" href="ui.css" />
+<link rel="stylesheet" href="https://gigantic.dev/ui/ui.css" />
+<link rel="stylesheet" href="https://gigantic.dev/ui/docs.css" />
 <link rel="stylesheet" href="plan.css" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23476349'/%3E%3Cpath d='M5.5 12.25V6.5a2.5 2.5 0 0 1 5 0v5.75Z' fill='white'/%3E%3Crect x='3.75' y='12.25' width='8.5' height='1.5' rx='0.5' fill='white'/%3E%3C/svg%3E" />
 </head>
@@ -42,24 +42,24 @@
   <span class="strip-msg">this page mirrors <code class="code">README.md</code> and <code class="code">GUIDE.md</code> — the SPEC is the contract.</span>
 </div>
 
-<main class="plan-shell" data-container>
+<main class="docs-shell" data-container>
 
 <header class="stack">
   <p class="eyebrow">authored intent vs extracted truth</p>
-  <p class="lead plan-lead">stele compiles a typed knowledge graph from three authored sources — the
+  <p class="lead docs-lead">stele compiles a typed knowledge graph from three authored sources — the
     file tree, comment anchors, and typed blocks in AGENTS.md files — and reconciles it against a
     graph extracted from the code. CI asserts the two against each other in both directions: an
     undeclared dependency means the code broke the signature, an unbacked declaration means the doc
     lied. The same graph answers agent queries and materializes standard-compliant AGENTS.md files,
     so every harness gets the full content with zero engine.</p>
-  <p class="plan-flavor"><em>stele</em> /ˈstiːli/ — an inscribed standing stone that publicly declares
+  <p class="docs-flavor"><em>stele</em> /ˈstiːli/ — an inscribed standing stone that publicly declares
     the law. The territory is checked against it.</p>
   <div class="row">
     <span class="badge badge-accent">v0.3.0 · glyph notation</span>
     <span class="badge">SPEC Draft 0.10 — the contract</span>
     <span class="badge">self-hosting: this repo runs its own gate</span>
   </div>
-  <nav class="row plan-toc" aria-label="sections">
+  <nav class="row docs-toc" aria-label="sections">
     <a class="pill" href="#install">install</a>
     <a class="pill" href="#ladder">degradation ladder</a>
     <a class="pill" href="#adopt">adoption path</a>
@@ -70,10 +70,10 @@
   </nav>
 </header>
 
-<section class="plan-section" id="install" data-component="install">
+<section class="docs-section" id="install" data-component="install">
   <header>
     <h2 class="h2">Install</h2>
-    <p class="plan-note">One static executable. The installer resolves a release, verifies the
+    <p class="docs-note">One static executable. The installer resolves a release, verifies the
       sha256, and drops the binary in <code class="code">~/.local/bin</code>.</p>
   </header>
   <pre class="snippet">curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash</pre>
@@ -86,10 +86,10 @@ curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/inst
 cargo install --git https://github.com/jgeschwendt/stele stele-cli</pre>
 </section>
 
-<section class="plan-section" id="ladder" data-component="ladder">
+<section class="docs-section" id="ladder" data-component="ladder">
   <header>
     <h2 class="h2">The degradation ladder</h2>
-    <p class="plan-note">Files → CLI → MCP is a spec invariant, not an implementation detail. Each
+    <p class="docs-note">Files → CLI → MCP is a spec invariant, not an implementation detail. Each
       rung adds capability; none becomes a reading dependency.</p>
   </header>
   <div class="rungs">
@@ -123,10 +123,10 @@ cargo install --git https://github.com/jgeschwendt/stele stele-cli</pre>
   </div>
 </section>
 
-<section class="plan-section" id="adopt" data-component="adopt">
+<section class="docs-section" id="adopt" data-component="adopt">
   <header>
     <h2 class="h2">Adoption path</h2>
-    <p class="plan-note">Bare repo to CI-enforced graph. The long form is
+    <p class="docs-note">Bare repo to CI-enforced graph. The long form is
       <code class="code">GUIDE.md</code>; every rule behind it is in the SPEC.</p>
   </header>
   <ol class="steps">
@@ -172,10 +172,10 @@ stele emit --check             <span class="snippet-note"># committed files vs w
 - run: ~/.local/bin/stele emit --check</pre>
 </section>
 
-<section class="plan-section" id="assertions" data-component="assertions">
+<section class="docs-section" id="assertions" data-component="assertions">
   <header>
     <h2 class="h2">The assertion suite</h2>
-    <p class="plan-note">Six classes over lock vs. code. <code class="code">stele check</code> exits
+    <p class="docs-note">Six classes over lock vs. code. <code class="code">stele check</code> exits
       nonzero with findings; <code class="code">--only &lt;class&gt;</code> narrows it,
       <code class="code">--run-commands</code> actually executes documented commands,
       <code class="code">--freeze</code> accepts the current structure as the baseline, and
@@ -194,15 +194,15 @@ stele emit --check             <span class="snippet-note"># committed files vs w
       </tbody>
     </table>
   </div>
-  <p class="plan-note plan-note-after"><code class="code">stele emit --check</code> is the
+  <p class="docs-note plan-note-after"><code class="code">stele emit --check</code> is the
     seventh gate in practice: it fails when committed AGENTS.md files diverge from what the lock
     would render.</p>
 </section>
 
-<section class="plan-section" id="query" data-component="query">
+<section class="docs-section" id="query" data-component="query">
   <header>
     <h2 class="h2">Query surface</h2>
-    <p class="plan-note">Plain subcommands and flags — no query grammar. The cross-cutting queries
+    <p class="docs-note">Plain subcommands and flags — no query grammar. The cross-cutting queries
       are the capability nested files cannot provide at any size: the transpose of the whole graph,
       materialized from one lock.</p>
   </header>
@@ -212,15 +212,15 @@ stele invariants --touching src/charge.rs   <span class="snippet-note"># claims 
 stele hazards                               <span class="snippet-note"># every active hazard</span>
 stele nodes --kind container                <span class="snippet-note"># the graph by kind</span>
 stele blame payments/idempotent-charges     <span class="snippet-note"># provenance of one claim</span></pre>
-  <p class="plan-note plan-note-after">For MCP-capable harnesses,
+  <p class="docs-note plan-note-after">For MCP-capable harnesses,
     <code class="code">stele serve</code> exposes the same read verbs as tools:</p>
   <pre class="snippet">{ "mcpServers": { "stele": { "command": "stele", "args": ["serve"] } } }</pre>
 </section>
 
-<section class="plan-section" id="undercover" data-component="undercover">
+<section class="docs-section" id="undercover" data-component="undercover">
   <header>
     <h2 class="h2">Undercover mode</h2>
-    <p class="plan-note">v0.2.0's headline. When you're the only stele user on a shared repo — a
+    <p class="docs-note">v0.2.0's headline. When you're the only stele user on a shared repo — a
       work, upstream, or open-source checkout whose collaborators must never see a stele artifact —
       run the graph privately.</p>
   </header>
@@ -246,10 +246,10 @@ stele blame payments/idempotent-charges     <span class="snippet-note"># provena
   </ul>
 </section>
 
-<section class="plan-section" id="artifacts" data-component="artifacts">
+<section class="docs-section" id="artifacts" data-component="artifacts">
   <header>
     <h2 class="h2">Artifacts</h2>
-    <p class="plan-note">The repository carries the whole design; this page is a summary of the first
+    <p class="docs-note">The repository carries the whole design; this page is a summary of the first
       two.</p>
   </header>
   <div class="table-wrap">
@@ -264,7 +264,7 @@ stele blame payments/idempotent-charges     <span class="snippet-note"># provena
       </tbody>
     </table>
   </div>
-  <p class="plan-foot">stele v0.3.0 · SPEC Draft 0.10 · this page mirrors README.md and GUIDE.md; the
+  <p class="docs-foot">stele v0.3.0 · SPEC Draft 0.10 · this page mirrors README.md and GUIDE.md; the
     SPEC is the contract.</p>
 </section>
 

@@ -5,25 +5,3 @@
 .plan-note-after {
   margin-top: 1.25rem;
 }
-
-.rungs {
-  display: grid;
-  gap: 0.75rem;
-  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
-  margin-top: 1rem;
-}
-
-.rungs .card-body {
-  color: var(--ui-fg-muted);
-  font-size: 0.875rem;
-}
-
-.rungs .card-head {
-  gap: 0.5rem;
-}
-
-.rung-step {
-  color: var(--ui-fg-faint);
-  font-family: var(--ui-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 0.75rem;
-}

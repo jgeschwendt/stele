@@ -90,35 +90,6 @@ cargo install --git https://github.com/jgeschwendt/stele stele-cli</pre>
       rung adds capability; none becomes a reading dependency.</p>
   </header>
   <figure class="figure"><img src="figures/degradation-ladder.png" alt="Three rungs left to right: files, then CLI, then MCP, each adding capability; a line from the CLI and MCP rungs returns to the files rung, since every answer is derivable from the files." /><figcaption>The degradation ladder: files → CLI → MCP, and every rung's answer is derivable from the files. Source: Claude Design canvas <a href="https://claude.ai/artifact/EgQ9s4REGVmpP5PZ7jVLbK">stele figures</a>, board degradation-ladder.</figcaption></figure>
-  <div class="rungs">
-    <article class="card">
-      <div class="card-head">
-        <span class="rung-step">rung 1</span>
-        <strong>files</strong>
-      </div>
-      <div class="card-body">Emitted AGENTS.md files are complete, standard-compliant markdown.
-        Every harness that reads AGENTS.md gets the whole graph content with zero tooling
-        installed.</div>
-    </article>
-    <article class="card">
-      <div class="card-head">
-        <span class="rung-step">rung 2</span>
-        <strong>CLI</strong>
-      </div>
-      <div class="card-body">The <code class="code">stele</code> binary adds verification and lazy
-        navigation: query verbs read the committed lock, and <code class="code">check</code> enforces
-        the graph against the code in CI.</div>
-    </article>
-    <article class="card">
-      <div class="card-head">
-        <span class="rung-step">rung 3</span>
-        <strong>MCP</strong>
-      </div>
-      <div class="card-body"><code class="code">stele serve</code> speaks JSON-RPC 2.0 over stdio and
-        exposes the read verbs as tools. Never required — every tool has a CLI equivalent, every CLI
-        answer is derivable from the files.</div>
-    </article>
-  </div>
 </section>
 
 <section class="docs-section" id="adopt" data-component="adopt">

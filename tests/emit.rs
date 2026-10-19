@@ -253,6 +253,21 @@ fn emit_never_overwrites_a_teams_claude_file() {
     );
 }
 
+// A symlink at a shim path, even a dangling one a repo planted, counts as an existing
+// shim: emit never follows it to create a file outside the tree.
+#[cfg(unix)]
+#[test]
+fn emit_never_writes_a_shim_through_a_symlink() {
+    let fixture = built();
+    let outside = tempfile::tempdir().unwrap();
+    fixture.delete_file("CLAUDE.md");
+    for (link, target) in [("CLAUDE.md", "a"), ("apps/worker/CLAUDE.md", "b")] {
+        std::os::unix::fs::symlink(outside.path().join(target), fixture.path(link)).unwrap();
+    }
+    assert_eq!(fixture.run(&["emit"]).code, 0);
+    assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+}
+
 /// Every NESTED node's directory in acme — the root (`AGENTS.md`) is covered by the
 /// root-shim tests above.
 const ACME_NESTED_DIRS: [&str; 5] = [

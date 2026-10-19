@@ -212,6 +212,34 @@ fn committed_dangling_symlink_with_source_ext_does_not_abort() {
     );
 }
 
+// `init` never writes through a tracked symlink: an AGENTS.md linking out of the tree
+// (a block with no region, or prose only) is left as is, its target byte-identical.
+#[cfg(unix)]
+#[test]
+fn init_never_writes_through_a_symlinked_agents_file() {
+    let fixture = Fixture::bare();
+    let outside = tempfile::tempdir().unwrap();
+    let block = "# x\n\n```stele\nkind: system\n```\n";
+    std::fs::write(outside.path().join("root.md"), block).unwrap();
+    std::fs::write(outside.path().join("lib.md"), "# lib\n").unwrap();
+    std::fs::create_dir(fixture.path("lib")).unwrap();
+    for (link, target) in [("AGENTS.md", "root.md"), ("lib/AGENTS.md", "lib.md")] {
+        std::os::unix::fs::symlink(outside.path().join(target), fixture.path(link)).unwrap();
+    }
+    fixture.commit("AGENTS.md files linking out of the tree");
+
+    let init = fixture.run(&["init"]);
+    assert_eq!(init.code, 0, "{}", init.combined());
+    assert_eq!(
+        std::fs::read_to_string(outside.path().join("root.md")).unwrap(),
+        block
+    );
+    assert_eq!(
+        std::fs::read_to_string(outside.path().join("lib.md")).unwrap(),
+        "# lib\n"
+    );
+}
+
 // ─── a stele verb outside a git repo is a clean input error (§5.3) ────────────
 
 // Outside a work tree `git ls-files` prints "fatal: not a git repository" and exits

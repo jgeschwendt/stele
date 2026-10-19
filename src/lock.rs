@@ -27,8 +27,8 @@ use std::collections::BTreeMap;
 /// notation, §2.5) carries no `source`, so `build` re-locks it; version 1 is the pre-0.3.0
 /// `stele:` grammar, and there is no dual-read — its fix line is [`LEGACY_LOCK_FIX`].
 ///
-/// §4.4 folds the budget tokenizer's identity into this version: lock version 3 ⇔
-/// tiktoken-rs@0.12.0 cl100k approximation. A tokenizer swap changes token counts,
+/// §4.4 folds the budget tokenizer's identity into this version: lock versions 2 and 3
+/// both mean tiktoken-rs@0.12.0 cl100k approximation. A tokenizer swap changes token counts,
 /// so it MUST bump this version — the change stays visible and reviewable in the lock.
 pub const LOCK_VERSION: u32 = 3;
 
@@ -93,7 +93,8 @@ pub struct LockNode {
     pub id: String,
     pub kind: String,
     pub purpose: Option<String>,
-    /// The declaring AGENTS.md, home-relative POSIX (`AGENTS.md` for the repo root) —
+    /// The declaring AGENTS.md, tree-relative POSIX (`AGENTS.md` for the repo root; in
+    /// undercover mode relative to the `.stele/tree` overlay, which emit re-joins) —
     /// the node's file and territory, which an `id:` override (§2.1) decouples from `id`.
     pub source: String,
 }
@@ -345,7 +346,7 @@ pub fn read_version(text: &str) -> Result<u32> {
 
 /// Strict-parse a committed lock (a stray field is an input error, exit 2). The
 /// caller checks `version` first via [`read_version`]; this validates the shape, and that
-/// every node id and `source` is already §2.1-normalized — emit joins sources into write
+/// every node id and `source` is already §2.1-normalized and each `source` is an AGENTS.md — emit joins sources into write
 /// paths, so a `..` or absolute one would escape the repo.
 pub fn parse_lock(text: &str) -> Result<Lock> {
     let lock: Lock = serde_json::from_str(text)
@@ -354,9 +355,10 @@ pub fn parse_lock(text: &str) -> Result<Lock> {
         [id.as_str(), &n.source]
             .iter()
             .any(|p| normalize_id(p).as_deref() != Ok(p))
+            || !(n.source == "AGENTS.md" || n.source.ends_with("/AGENTS.md"))
     }) {
         Some((id, _)) => Err(SteleError::input_msg(format!(
-            "malformed lock: node {id:?} id or source is not normalized (§2.1)"
+            "malformed lock: node {id:?} id or source is not normalized, or source is not an AGENTS.md (§2.1)"
         ))),
         None => Ok(lock),
     }

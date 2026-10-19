@@ -1084,16 +1084,17 @@ fn check_file(root: &Path, dir: &str, name: &str, expected: &str, divergent: &mu
 
 /// Reject a committed lock this engine cannot read (§3.2/§5.3). A version-1 lock is
 /// the pre-0.3.0 `stele:` grammar, so its fix line names `migrate` before `build`
-/// (there is no dual-read); any other unknown version keeps the plain rebuild hint.
+/// (there is no dual-read); a newer version needs a newer engine (a rebuild would
+/// downgrade it); any other older version keeps the plain rebuild hint.
 fn require_lock_version(on_disk: &str) -> Result<()> {
     let version = lock::read_version(on_disk)?;
     if version == lock::LOCK_VERSION {
         return Ok(());
     }
-    let fix = if version == lock::LEGACY_LOCK_VERSION {
-        lock::LEGACY_LOCK_FIX
-    } else {
-        RUN_BUILD_HINT
+    let fix = match version {
+        lock::LEGACY_LOCK_VERSION => lock::LEGACY_LOCK_FIX,
+        v if v > lock::LOCK_VERSION => "upgrade stele to an engine that reads it",
+        _ => RUN_BUILD_HINT,
     };
     Err(SteleError::input_msg(format!(
         "committed lock is version {version}; this engine writes version {}. {fix}",

@@ -109,20 +109,38 @@ fn exit_2_on_build_with_a_stray_arg_and_leaves_the_lock_untouched() {
     );
 }
 
-// Two nodes normalizing to the same id → exit 2 (§2.1). A second AGENTS.md explicitly
-// declares the apps/web id already held by apps/web/AGENTS.md.
+// Two nodes normalizing to the same id → exit 2 (§2.1): a second AGENTS.md explicitly
+// declares the apps/web id. Likewise an override renaming the root, or claiming `/` for a
+// nested node; `id: ./` on the root is a no-op.
 #[test]
 fn exit_2_on_duplicate_node_id() {
-    let fixture = Fixture::acme();
-    fixture.replace(
-        "packages/shared/AGENTS.md",
-        "kind: container\n",
-        "kind: container\nid: apps/web\n",
-    );
-    fixture.commit("collide packages/shared onto the apps/web id");
-
-    let build = fixture.run(&["build"]);
-    assert_eq!(build.code, 2, "{}", build.combined());
+    for (file, id, code, says) in [
+        ("packages/shared/AGENTS.md", "apps/web", 2, "duplicate"),
+        ("AGENTS.md", "acme", 2, "the root node's id is always `/`"),
+        (
+            "packages/shared/AGENTS.md",
+            "./",
+            2,
+            "`/` is reserved for the root node",
+        ),
+        ("AGENTS.md", "./", 0, ""),
+    ] {
+        let fixture = Fixture::acme();
+        let kind = if file == "AGENTS.md" {
+            "system"
+        } else {
+            "container"
+        };
+        fixture.replace(
+            file,
+            &format!("kind: {kind}\n"),
+            &format!("kind: {kind}\nid: {id}\n"),
+        );
+        fixture.commit("override an id");
+        let build = fixture.run(&["build"]);
+        assert_eq!(build.code, code, "{file} {id}: {}", build.combined());
+        assert!(build.combined().contains(says), "{}", build.combined());
+    }
 }
 
 // Two `stele` blocks in one file → exit 2 (§3.1 item 1).

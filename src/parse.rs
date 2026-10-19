@@ -8,8 +8,8 @@
 //! rebased onto the block's start line so errors report the real file position.
 
 use crate::model::{
-    Claim, ClaimKind, Edges, Node, NodeKind, PURPOSE_MAX_CHARS, Result, SteleError, derive_slug,
-    normalize_id,
+    Claim, ClaimKind, Edges, Node, NodeKind, PURPOSE_MAX_CHARS, Result, SYSTEM_ID, SteleError,
+    derive_slug, normalize_id,
 };
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -300,16 +300,22 @@ fn normalize_target(rel_path: &Path, block: &SteleBlock, field: &str, raw: &str)
 }
 
 /// The node id (§2.1): an explicit `id:` override normalized, else the declaring
-/// directory (the AGENTS.md's parent), with the repo root mapping to `/`.
+/// directory (the AGENTS.md's parent), with the repo root mapping to `/`. The id is `/`
+/// if and only if the source is the root AGENTS.md — an override can neither rename the
+/// root nor claim `/` (exit 2).
 fn resolve_id(rel_path: &Path, block: &SteleBlock, override_id: Option<&str>) -> Result<String> {
-    let raw = match override_id {
-        Some(id) => id.to_string(),
-        None => match rel_path.parent() {
-            Some(dir) if !dir.as_os_str().is_empty() => dir.to_string_lossy().into_owned(),
-            _ => "/".to_string(),
-        },
-    };
-    normalize_id(&raw).map_err(|message| SteleError::input(rel_path, block.fence_line, message))
+    let dir = rel_path
+        .parent()
+        .map(Path::to_string_lossy)
+        .unwrap_or_default();
+    let id = normalize_id(override_id.unwrap_or(if dir.is_empty() { SYSTEM_ID } else { &dir }))
+        .map_err(|message| SteleError::input(rel_path, block.fence_line, message))?;
+    match (dir.is_empty(), id == SYSTEM_ID) {
+        (true, false) => Err("the root node's id is always `/`"),
+        (false, true) => Err("`/` is reserved for the root node"),
+        _ => Ok(id),
+    }
+    .map_err(|message| SteleError::input(rel_path, block.fence_line, format!("id: {message}")))
 }
 
 // ─── generated-region markers (§3.1 item 2) ──────────────────────────────────

@@ -176,6 +176,8 @@ fn emit_rejects_a_lock_node_id_that_escapes_the_repo() {
     for (from, to) in [
         ("apps/worker", "../worker"),
         ("apps/worker/AGENTS.md", "/abs/AGENTS.md"),
+        ("apps/worker/AGENTS.md", "/"),
+        ("apps/worker/AGENTS.md", "README.md"),
     ] {
         let fixture = built();
         let lock = fixture.read(".stele/graph.lock");
@@ -184,9 +186,15 @@ fn emit_rejects_a_lock_node_id_that_escapes_the_repo() {
             &lock.replace(&format!("\"{from}\""), &format!("\"{to}\"")),
         );
         let emit = fixture.run(&["emit"]);
+        let node = if from.ends_with(".md") {
+            "apps/worker"
+        } else {
+            to
+        };
         assert_eq!(emit.code, 2, "{}", emit.combined());
         assert!(
-            emit.combined().contains("id or source is not normalized"),
+            emit.combined()
+                .contains(&format!("malformed lock: node {node:?}")),
             "{}",
             emit.combined()
         );

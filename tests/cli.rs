@@ -149,6 +149,34 @@ fn invariants_touching_surfaces_ancestor_exposure() {
     );
 }
 
+// §2.1 `id:` override: the lock keeps the declaring file, so emit writes that file (and its
+// shim and router row) and `--touching` attributes by directory, never by id.
+#[test]
+fn id_override_routes_by_the_declaring_file() {
+    let fixture = Fixture::acme();
+    fixture.write(
+        "docs/AGENTS.md",
+        "```stele\nkind: container\nid: documentation\npurpose: docs\ninvariants:\n  - claim: docs stay current\n    anchor: ※ docs-current\n```\n\n<!-- @stele -->\n<!-- @end -->\n",
+    );
+    fixture.commit("declare an id-override node");
+    for verb in [&["build"][..], &["emit"], &["emit", "--check"]] {
+        let run = fixture.run(verb);
+        assert_eq!(run.code, 0, "{verb:?}: {}", run.combined());
+    }
+    assert_eq!(fixture.read("docs/CLAUDE.md"), "@AGENTS.md\n");
+    assert!(
+        fixture
+            .read("AGENTS.md")
+            .contains("or read `docs/AGENTS.md`")
+    );
+    let inv = fixture.run(&["invariants", "--touching", "docs/x.md"]);
+    assert!(
+        inv.stdout.contains("documentation · docs-current"),
+        "{}",
+        inv.combined()
+    );
+}
+
 // Probe 6 — `stele hazards --node <id>` reports just that node's hazards (no upward
 // exposure, the §4.2 contrast to invariants).
 #[test]

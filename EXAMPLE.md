@@ -182,10 +182,11 @@ packages/shared is the only constructor.
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "nodes": {
     "apps/web/lib/billing": {
       "kind": "component",
+      "source": "apps/web/lib/billing/AGENTS.md",
       "declared": {
         "depends": ["apps/web/lib/store", "packages/shared"],
         "decided_by": ["adr/0007"],

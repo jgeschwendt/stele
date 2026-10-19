@@ -21,7 +21,7 @@ use crate::legacy;
 use crate::lock::{self, Lock, LockClaim, LockNode};
 use crate::model::{
     AdrEntry, DECISION_PREFIX, ExitCode, Graph, Node, NodeKind, PURPOSE_MAX_CHARS, Resolution,
-    Result, SYSTEM_ID, SteleError, Verified, normalize_id,
+    Result, SYSTEM_ID, SteleError, Verified, dir_contains, normalize_id,
 };
 use crate::parse;
 use crate::steleignore::Steleignore;
@@ -733,8 +733,8 @@ fn emit_write(ws: &Workspace, lock: &Lock, claude_rules: bool) -> Result<Command
     let rules = claude_rules
         .then(|| render_claude_rules(lock))
         .transpose()?;
-    for (id, node) in &lock.nodes {
-        let path = node_agents_path(ws, id);
+    for node in lock.nodes.values() {
+        let path = node_agents_path(ws, node);
         let contents = read_node_agents(root, &path)?;
         let region = require_region(&path, &contents)?;
         let rendered = emit::render_region(lock, node);
@@ -803,8 +803,8 @@ fn region_lead(head: &str, rendered: &str) -> &'static str {
 fn emit_check(ws: &Workspace, lock: &Lock, claude_rules: bool) -> Result<CommandOutput> {
     let root = &ws.home;
     let mut divergent: Vec<String> = Vec::new();
-    for (id, node) in &lock.nodes {
-        let path = node_agents_path(ws, id);
+    for node in lock.nodes.values() {
+        let path = node_agents_path(ws, node);
         let contents = read_node_agents(root, &path)?;
         let region = require_region(&path, &contents)?;
         if contents[region.content_start..region.content_end] != *emit::render_region(lock, node) {
@@ -855,21 +855,15 @@ fn emit_check(ws: &Workspace, lock: &Lock, claude_rules: bool) -> Result<Command
     })
 }
 
-/// The AGENTS.md path for a node id (§2.1 default id ⇔ declaring directory), mode-aware
-/// (§3.5). Normal mode returns the home-relative source path — the repo root's node at
-/// `AGENTS.md`, every other at `<id>/AGENTS.md` (today's value; `emit` joins it onto
-/// `ws.home == "."`). Undercover mode returns the absolute overlay path
-/// `<home>/.stele/tree/{AGENTS.md | <id>/AGENTS.md}`; `emit`'s later `ws.home`-join is a
-/// no-op on an absolute path, so normal-mode output stays byte-identical.
-fn node_agents_path(ws: &Workspace, id: &str) -> PathBuf {
-    let rel: PathBuf = if id == crate::model::SYSTEM_ID {
-        PathBuf::from("AGENTS.md")
-    } else {
-        PathBuf::from(format!("{id}/AGENTS.md"))
-    };
+/// A node's AGENTS.md path — the lock's recorded `source` (never derived from the id, which
+/// an `id:` override decouples, §2.1), mode-aware (§3.5). Normal mode returns the
+/// home-relative source path (`emit` joins it onto `ws.home == "."`). Undercover mode
+/// returns the absolute overlay path `<home>/.stele/tree/<source>`; `emit`'s later
+/// `ws.home`-join is a no-op on an absolute path.
+fn node_agents_path(ws: &Workspace, node: &LockNode) -> PathBuf {
     match ws.mode {
-        Mode::Normal => rel,
-        Mode::Undercover => ws.home.join(TREE_DIR).join(rel),
+        Mode::Normal => PathBuf::from(&node.source),
+        Mode::Undercover => ws.home.join(TREE_DIR).join(&node.source),
     }
 }
 
@@ -955,19 +949,13 @@ fn ensure_shim(ws: &Workspace, lock: &Lock) -> Result<()> {
 }
 
 /// Ensure a `CLAUDE.md` = `@AGENTS.md` shim beside every NESTED node's AGENTS.md (§3.3),
-/// normal mode only. The system node is skipped — its directory is the graph home, already
-/// covered by the root shim in [`ensure_shim`]. Only-if-absent, exactly like the root shim:
-/// a directory that already carries a `CLAUDE.md` keeps the team's file byte-for-byte, and
+/// normal mode only. The root node's shim is the one [`ensure_shim`] just wrote, so the
+/// only-if-absent guard skips it. Only-if-absent, exactly like the root shim: a directory
+/// that already carries a `CLAUDE.md` keeps the team's file byte-for-byte, and
 /// `emit --check` never diffs these.
 fn ensure_nested_shims(ws: &Workspace, lock: &Lock) -> Result<()> {
-    for id in lock.nodes.keys() {
-        if id == crate::model::SYSTEM_ID {
-            continue;
-        }
-        let Some(dir) = node_agents_path(ws, id).parent().map(Path::to_path_buf) else {
-            continue;
-        };
-        let path = ws.home.join(dir).join(CLAUDE_SHIM);
+    for node in lock.nodes.values() {
+        let path = ws.home.join(&node.source).with_file_name(CLAUDE_SHIM);
         if path.symlink_metadata().is_ok() {
             continue;
         }
@@ -1413,42 +1401,25 @@ fn collect_claims(lock: &Lock, kind: &str, scope: Option<&[String]>) -> Vec<Clai
 }
 
 /// The node ids whose invariants a `--touching <path>` query surfaces (§4.2 upward
-/// exposure): the node owning `path` plus every ancestor node (the system root `/`
-/// included). Empty when no node owns the path.
+/// exposure): the node whose declaring directory (its lock `source`'s parent, never its
+/// id) is the deepest to enclose `path`, plus every node enclosing that one (the repo
+/// root included). Empty when no node owns the path.
 fn owning_chain(lock: &Lock, path: &str) -> Vec<String> {
     let path = normalize_id(path).unwrap_or_else(|_| path.to_string());
+    let path = if path == SYSTEM_ID { "" } else { &path };
     let Some(owner) = lock
         .nodes
-        .keys()
-        .filter(|id| id_contains(id, &path))
-        .max_by_key(|id| id_depth(id))
+        .values()
+        .filter(|n| dir_contains(n.dir(), path))
+        .max_by_key(|n| n.dir().len())
     else {
         return Vec::new();
     };
     lock.nodes
-        .keys()
-        .filter(|id| id_contains(id, owner))
-        .cloned()
+        .values()
+        .filter(|n| dir_contains(n.dir(), owner.dir()))
+        .map(|n| n.id.clone())
         .collect()
-}
-
-/// Whether node id `container` covers `path` by territory nesting: the system id `/`
-/// covers everything; otherwise `path` equals or is nested under `container`.
-fn id_contains(container: &str, path: &str) -> bool {
-    if container == SYSTEM_ID {
-        return true;
-    }
-    path == container || path.starts_with(&format!("{container}/"))
-}
-
-/// A node id's nesting depth (the system root is shallowest at 0), for deepest-owner
-/// selection.
-fn id_depth(id: &str) -> usize {
-    if id == SYSTEM_ID {
-        0
-    } else {
-        id.split('/').count()
-    }
 }
 
 /// The `--json` `data` for a claim query: the rows as `{node, claim, text, anchor}`.

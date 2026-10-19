@@ -15,27 +15,29 @@
 //! controls as `\u00xx`; every other character, non-ASCII included, is raw.
 
 use crate::model::{
-    AdrEntry, AnchorData, Claim, Graph, Node, Result, SteleError, Territory, Verified, normalize_id,
+    AdrEntry, AnchorData, Claim, Graph, Node, Result, SteleError, Territory, Verified,
+    declaring_dir, normalize_id,
 };
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
 /// The only lock format this engine reads or writes (§3.2). A committed lock with
-/// any other `version` is rejected (exit 2), never best-effort parsed. Version 2 is
-/// the glyph notation (§2.5); version 1 is the pre-0.3.0 `stele:` grammar, and there
-/// is no dual-read — its fix line is [`LEGACY_LOCK_FIX`].
+/// any other `version` is rejected (exit 2), never best-effort parsed. Version 3 adds
+/// each node's declaring `source` file (§2.1 `id:` overrides); version 2 (the glyph
+/// notation, §2.5) carries no `source`, so `build` re-locks it; version 1 is the pre-0.3.0
+/// `stele:` grammar, and there is no dual-read — its fix line is [`LEGACY_LOCK_FIX`].
 ///
-/// §4.4 folds the budget tokenizer's identity into this version: lock version 2 ⇔
+/// §4.4 folds the budget tokenizer's identity into this version: lock version 3 ⇔
 /// tiktoken-rs@0.12.0 cl100k approximation. A tokenizer swap changes token counts,
 /// so it MUST bump this version — the change stays visible and reviewable in the lock.
-pub const LOCK_VERSION: u32 = 2;
+pub const LOCK_VERSION: u32 = 3;
 
 /// The pre-0.3.0 lock version — the `stele:` grammar, which this engine does not
 /// parse (§3.2).
 pub const LEGACY_LOCK_VERSION: u32 = 1;
 
 /// The §5.3 fix line a version-1 lock's input error ends with: `migrate` rewrites the
-/// sources, `build` then rewrites the lock at version 2.
+/// sources, `build` then rewrites the lock at version 3.
 pub const LEGACY_LOCK_FIX: &str = "run stele migrate, then stele build";
 
 /// Pretty-print indent width in spaces (§3.2 "2-space pretty-print").
@@ -91,6 +93,16 @@ pub struct LockNode {
     pub id: String,
     pub kind: String,
     pub purpose: Option<String>,
+    /// The declaring AGENTS.md, home-relative POSIX (`AGENTS.md` for the repo root) —
+    /// the node's file and territory, which an `id:` override (§2.1) decouples from `id`.
+    pub source: String,
+}
+
+impl LockNode {
+    /// The declaring directory (§4.2): `source`'s parent, `""` for the repo root.
+    pub fn dir(&self) -> &str {
+        self.source.rsplit_once('/').map_or("", |(dir, _)| dir)
+    }
 }
 
 /// Authored edges (§2.2/§2.3): `depends`/`decided_by`/`allow` keep authored order.
@@ -158,7 +170,8 @@ impl Lock {
     /// straight from the graph. `verified` is whatever the graph carries — `null`
     /// here, since only `build` stamps it (§4.5) after calling this.
     pub fn from_graph(graph: &Graph) -> Self {
-        let contains = compute_contains(&graph.nodes);
+        let territory = graph.territory();
+        let contains = compute_contains(&graph.nodes, &territory);
         let mut nodes = BTreeMap::new();
         for node in &graph.nodes {
             let node_contains = contains.get(&node.id).cloned().unwrap_or_default();
@@ -166,7 +179,7 @@ impl Lock {
         }
         Self {
             adrs: build_adrs(&graph.adrs),
-            landmarks: build_landmarks(&graph.anchors, &graph.territory()),
+            landmarks: build_landmarks(&graph.anchors, &territory),
             nodes,
             version: LOCK_VERSION,
         }
@@ -227,6 +240,7 @@ impl LockNode {
             id: node.id.clone(),
             kind: node.kind.as_str().to_string(),
             purpose: node.purpose.clone(),
+            source: node.source.to_string_lossy().replace('\\', "/"),
         }
     }
 }
@@ -246,13 +260,19 @@ impl LockClaim {
 }
 
 /// The containment tree (§3.2 `contains[]`): each node's directly-nested child
-/// node ids, sorted. A node's parent is the DEEPEST other node that is an id
-/// ancestor of it (the system node `/` is the ancestor of every other node), so
-/// `apps/web/lib/billing` is contained by `apps/web`, never also by `/`.
-fn compute_contains(nodes: &[Node]) -> BTreeMap<String, Vec<String>> {
+/// node ids, sorted. A node's parent is the territory owner (§4.2) of its declaring
+/// directory's parent — the DEEPEST other node whose directory encloses it — so
+/// `apps/web/lib/billing` is contained by `apps/web`, never also by `/`. Directories,
+/// not ids: an `id:` override (§2.1) never moves a node in the tree.
+fn compute_contains(nodes: &[Node], territory: &Territory) -> BTreeMap<String, Vec<String>> {
     let mut contains: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for child in nodes {
-        if let Some(parent) = nearest_parent(nodes, &child.id) {
+        let dir = declaring_dir(&child.source);
+        if dir.is_empty() {
+            continue;
+        }
+        let parent_dir = dir.rsplit_once('/').map_or("", |(parent, _)| parent);
+        if let Some(parent) = territory.owner(parent_dir) {
             contains
                 .entry(parent.to_string())
                 .or_default()
@@ -263,33 +283,6 @@ fn compute_contains(nodes: &[Node]) -> BTreeMap<String, Vec<String>> {
         children.sort();
     }
     contains
-}
-
-/// The deepest node whose id is an ancestor of `child_id`, or `None` for the
-/// system node (which has no parent).
-fn nearest_parent<'a>(nodes: &'a [Node], child_id: &str) -> Option<&'a str> {
-    if child_id == crate::model::SYSTEM_ID {
-        return None;
-    }
-    nodes
-        .iter()
-        .filter(|n| n.id != child_id && is_id_ancestor(&n.id, child_id))
-        // `/` ranks below every real id, so it never wins a length tie with a one-char id.
-        .max_by_key(|n| (n.id != crate::model::SYSTEM_ID, n.id.len()))
-        .map(|n| n.id.as_str())
-}
-
-/// Whether node id `ancestor` contains node id `descendant` by path nesting. The
-/// system id `/` is an ancestor of every other node; otherwise `descendant` must
-/// begin with `ancestor` followed by a `/` (so `apps/web` contains `apps/web/x`
-/// but not `apps/website`).
-fn is_id_ancestor(ancestor: &str, descendant: &str) -> bool {
-    if ancestor == crate::model::SYSTEM_ID {
-        return true;
-    }
-    descendant
-        .strip_prefix(ancestor)
-        .is_some_and(|rest| rest.starts_with('/'))
 }
 
 /// The lock's `landmarks{}` (§3.2): each slug's single winner — the
@@ -352,18 +345,18 @@ pub fn read_version(text: &str) -> Result<u32> {
 
 /// Strict-parse a committed lock (a stray field is an input error, exit 2). The
 /// caller checks `version` first via [`read_version`]; this validates the shape, and that
-/// every node id is already §2.1-normalized — emit joins ids into write paths, so a `..`
-/// or absolute id would escape the repo.
+/// every node id and `source` is already §2.1-normalized — emit joins sources into write
+/// paths, so a `..` or absolute one would escape the repo.
 pub fn parse_lock(text: &str) -> Result<Lock> {
     let lock: Lock = serde_json::from_str(text)
         .map_err(|e| SteleError::input_msg(format!("malformed lock: {e}")))?;
-    match lock
-        .nodes
-        .keys()
-        .find(|id| normalize_id(id).as_deref() != Ok(id))
-    {
-        Some(id) => Err(SteleError::input_msg(format!(
-            "malformed lock: node id {id:?} is not normalized (§2.1)"
+    match lock.nodes.iter().find(|(id, n)| {
+        [id.as_str(), &n.source]
+            .iter()
+            .any(|p| normalize_id(p).as_deref() != Ok(p))
+    }) {
+        Some((id, _)) => Err(SteleError::input_msg(format!(
+            "malformed lock: node {id:?} id or source is not normalized (§2.1)"
         ))),
         None => Ok(lock),
     }
@@ -473,6 +466,7 @@ fn node_to_json(node: &LockNode) -> Json {
         ("id".to_string(), Json::Str(node.id.clone())),
         ("kind".to_string(), Json::Str(node.kind.clone())),
         ("purpose".to_string(), opt_str(&node.purpose)),
+        ("source".to_string(), Json::Str(node.source.clone())),
     ])
 }
 

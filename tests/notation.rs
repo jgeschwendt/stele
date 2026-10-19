@@ -211,28 +211,32 @@ fn pre_0_3_0_region_markers_are_exit_2_naming_the_new_form() {
     assert!(out.contains("@stele"), "{out}");
 }
 
-// ─── §3.2 the version-1 lock ─────────────────────────────────────────────────
+// ─── §3.2 superseded lock versions ───────────────────────────────────────────
 
+// Version 1 (the `stele:` grammar) needs `migrate` first; version 2 lacks the node
+// `source` paths (§2.1 `id:` overrides), so a rebuild alone re-locks it.
 #[test]
-fn version_1_lock_is_exit_2_pointing_at_migrate() {
+fn superseded_lock_versions_are_exit_2_naming_their_fix() {
     let fixture = Fixture::acme();
     assert_eq!(fixture.run(&["build"]).code, 0);
     let lock = fixture.read(".stele/graph.lock");
-    fixture.write(
-        ".stele/graph.lock",
-        &lock.replacen("\"version\": 2", "\"version\": 1", 1),
-    );
-    fixture.commit("downgrade the lock to the pre-0.3.0 version");
-
-    for verb in [&["check"][..], &["emit"][..], &["emit", "--check"][..]] {
-        let run = fixture.run(verb);
-        let out = run.combined();
-        assert_eq!(run.code, 2, "{verb:?}: {out}");
-        assert!(out.contains("version 1"), "{verb:?}: {out}");
-        assert!(
-            out.trim_end()
-                .ends_with("run stele migrate, then stele build"),
-            "{verb:?}: {out}"
+    for (version, fix) in [
+        (1, "run stele migrate, then stele build"),
+        (2, ". run stele build"),
+    ] {
+        fixture.write(
+            ".stele/graph.lock",
+            &lock.replacen("\"version\": 3", &format!("\"version\": {version}"), 1),
         );
+        for verb in [&["check"][..], &["emit"][..], &["emit", "--check"][..]] {
+            let run = fixture.run(verb);
+            let out = run.combined();
+            assert_eq!(run.code, 2, "{verb:?}: {out}");
+            assert!(
+                out.contains(&format!("version {version}")),
+                "{verb:?}: {out}"
+            );
+            assert!(out.trim_end().ends_with(fix), "{verb:?}: {out}");
+        }
     }
 }

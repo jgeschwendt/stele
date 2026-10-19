@@ -27,7 +27,7 @@ use crate::parse;
 use crate::steleignore::Steleignore;
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -694,10 +694,11 @@ fn emit(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
 
     // All emit targets live at the graph home (§3.5): node regions, the transpose indexes,
     // the shim, and any `.claude/rules/*.md` all render under `home`.
+    let claude_rules = args.contains(&EMIT_CLAUDE_RULES_FLAG);
     if args.contains(&EMIT_CHECK_FLAG) {
-        return emit_check(ws, &lock);
+        return emit_check(ws, &lock, claude_rules);
     }
-    emit_write(ws, &lock, args.contains(&EMIT_CLAUDE_RULES_FLAG))
+    emit_write(ws, &lock, claude_rules)
 }
 
 /// Render every region in place, write both transpose indexes, ensure the CLAUDE.md
@@ -763,10 +764,11 @@ fn region_lead(head: &str, rendered: &str) -> &'static str {
     }
 }
 
-/// Render to memory and byte-diff against on-disk regions and index files (§3.1); any
-/// divergence is an assertion failure (exit 1) naming each divergent file. Missing
-/// regions and malformed markers remain input errors (exit 2), same as `emit`.
-fn emit_check(ws: &Workspace, lock: &Lock) -> Result<CommandOutput> {
+/// Render to memory and byte-diff against on-disk regions and index files (§3.1) — and,
+/// when `claude_rules`, the `.claude/rules/*.md` projection, a stale marker-stamped file
+/// included; any divergence is an assertion failure (exit 1) naming each divergent file.
+/// Missing regions and malformed markers remain input errors (exit 2), same as `emit`.
+fn emit_check(ws: &Workspace, lock: &Lock, claude_rules: bool) -> Result<CommandOutput> {
     let root = &ws.home;
     let mut divergent: Vec<String> = Vec::new();
     for (id, node) in &lock.nodes {
@@ -777,18 +779,31 @@ fn emit_check(ws: &Workspace, lock: &Lock) -> Result<CommandOutput> {
             divergent.push(path.display().to_string());
         }
     }
-    check_index(
+    check_file(
         root,
+        INDEX_DIR,
         INVARIANTS_INDEX,
         &emit::render_invariants_index(lock),
         &mut divergent,
     );
-    check_index(
+    check_file(
         root,
+        INDEX_DIR,
         HAZARDS_INDEX,
         &emit::render_hazards_index(lock),
         &mut divergent,
     );
+    if claude_rules {
+        let rules = render_claude_rules(lock)?;
+        for (name, (_, content)) in &rules {
+            check_file(root, CLAUDE_RULES_DIR, name, content, &mut divergent);
+        }
+        divergent.extend(
+            stale_claude_rules(root, &rules)
+                .iter()
+                .map(|name| format!("{CLAUDE_RULES_DIR}/{name}")),
+        );
+    }
 
     if divergent.is_empty() {
         return Ok(CommandOutput::new(
@@ -961,22 +976,56 @@ fn shim_import_path(work: &Path, home: &Path) -> PathBuf {
     rel
 }
 
-/// Render one `.claude/rules/<slug>.md` per node that declares claims (§3.3, opt-in).
-/// Each write is gated on the stele marker: a target that is absent or already opens with
-/// [`emit::CLAUDE_RULE_MARKER`] is (re)generated; a foreign file (a hand-authored rule
-/// with no marker) is NEVER clobbered — it is an exit-2 input error naming the file.
+/// Render one `.claude/rules/<slug>.md` per node that declares claims (§3.3, opt-in), then
+/// remove every marker-stamped file no node renders any more. Each write is gated on the
+/// stele marker: a target that is absent or already opens with [`emit::CLAUDE_RULE_MARKER`]
+/// is (re)generated; a foreign file (a hand-authored rule with no marker) is NEVER clobbered
+/// nor pruned — clobbering it is an exit-2 input error naming the file.
 fn write_claude_rules(root: &Path, lock: &Lock) -> Result<()> {
-    for (id, node) in &lock.nodes {
-        if node.claims.is_empty() {
-            continue;
-        }
-        write_claude_rule_file(
-            root,
-            &format!("{}.md", emit::rule_slug(id)),
-            &emit::render_claude_rule(id, node),
-        )?;
+    let rules = render_claude_rules(lock)?;
+    for (name, (_, content)) in &rules {
+        write_claude_rule_file(root, name, content)?;
+    }
+    for name in stale_claude_rules(root, &rules) {
+        std::fs::remove_file(root.join(CLAUDE_RULES_DIR).join(&name))
+            .map_err(|e| SteleError::internal(format!("remove {CLAUDE_RULES_DIR}/{name}: {e}")))?;
     }
     Ok(())
+}
+
+/// The `.claude/rules/` projection (§3.3): filename → (node id, content) for every node that
+/// declares claims. [`emit::rule_slug`] flattens `/`, so two ids can share a filename (`a/b`
+/// and `a-b`; `root` and the system node) — an exit-2 input error naming both, never a
+/// silent overwrite.
+fn render_claude_rules(lock: &Lock) -> Result<BTreeMap<String, (&str, String)>> {
+    let mut rules = BTreeMap::new();
+    for (id, node) in lock.nodes.iter().filter(|(_, n)| !n.claims.is_empty()) {
+        let name = format!("{}.md", emit::rule_slug(id));
+        let rule = (id.as_str(), emit::render_claude_rule(id, node));
+        if let Some((other, _)) = rules.insert(name.clone(), rule) {
+            return Err(SteleError::input_msg(format!(
+                "node ids `{other}` and `{id}` both map to {CLAUDE_RULES_DIR}/{name}; rename one"
+            )));
+        }
+    }
+    Ok(rules)
+}
+
+/// The marker-stamped `.claude/rules/` files (sorted) the projection no longer renders —
+/// a node removed or left claim-free. Foreign files are never stale.
+fn stale_claude_rules(root: &Path, rules: &BTreeMap<String, (&str, String)>) -> BTreeSet<String> {
+    let dir = root.join(CLAUDE_RULES_DIR);
+    std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|name| {
+            !rules.contains_key(name)
+                && std::fs::read_to_string(dir.join(name))
+                    .is_ok_and(|s| s.starts_with(emit::CLAUDE_RULE_MARKER))
+        })
+        .collect()
 }
 
 /// Write one generated `.claude/rules/<name>` (§3.3), guarding a hand-authored file. When
@@ -998,12 +1047,12 @@ fn write_claude_rule_file(root: &Path, name: &str, content: &str) -> Result<()> 
     write_under_root(root, CLAUDE_RULES_DIR, name, content)
 }
 
-/// Byte-diff one on-disk index file against its freshly-rendered content; a missing or
+/// Byte-diff one on-disk generated file against its freshly-rendered content; a missing or
 /// divergent file is recorded for the `emit --check` failure list.
-fn check_index(root: &Path, name: &str, expected: &str, divergent: &mut Vec<String>) {
-    let path = root.join(INDEX_DIR).join(name);
+fn check_file(root: &Path, dir: &str, name: &str, expected: &str, divergent: &mut Vec<String>) {
+    let path = root.join(dir).join(name);
     if std::fs::read_to_string(&path).ok().as_deref() != Some(expected) {
-        divergent.push(format!("{INDEX_DIR}/{name}"));
+        divergent.push(format!("{dir}/{name}"));
     }
 }
 

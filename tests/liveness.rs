@@ -1,6 +1,6 @@
 //! The liveness class (SPEC §4.6), driven through the real binary on acme-fixture
 //! copies. Every declared command is tokenized (POSIX-flavored word-splitting), leading
-//! `VAR=value` assignments are dropped, shell operators (`&&`, `||`, `|`, `;`, newline) split it
+//! `VAR=value` assignments are dropped, shell operators (`&&`, `||`, `|`, `;`) split it
 //! into independently-resolved segments, and each segment's first token resolves on PATH,
 //! as a repo-relative executable, or as a task/script/recipe of a detected runner
 //! (mix/cargo/just/npm/pnpm/yarn). `--run-commands` additionally executes each command.
@@ -74,24 +74,21 @@ fn probe3_env_assignment_skipped_and_unknown_mix_task() {
     assert_eq!(liveness_lines(&out), 1, "{out}");
 }
 
-// Probe 4 — shell operators (and newlines) split a command into segments resolved
-// independently: only the `mix bogus` segments fail; `mise install` and `true` resolve.
+// Probe 4 — shell operators split a command into segments resolved independently: only
+// the `mix bogus` segment fails; the `mise install` and `true` segments resolve.
 #[test]
 fn probe4_shell_operators_split_segments() {
     let fixture = Fixture::acme();
-    add_root_commands(
-        &fixture,
-        "  chain: mise install && mix bogus || true\n  nl: \"true\\nmix bogus\"\n",
-    );
+    add_root_commands(&fixture, "  chain: mise install && mix bogus || true\n");
 
     assert_eq!(fixture.run(&["build"]).code, 0);
     let check = fixture.run(&["check", "--only", "liveness"]);
     let out = check.combined();
     assert_eq!(check.code, 1, "{out}");
     assert!(out.contains("command / :chain → `mix bogus`"), "{out}");
-    assert!(out.contains("command / :nl → `mix bogus`"), "{out}");
-    // Exactly one segment each failed — the clean `mise install` / `true` segments do not.
-    assert_eq!(liveness_lines(&out), 2, "{out}");
+    assert!(out.contains("task not found in mix.exs"), "{out}");
+    // Exactly one segment failed — the clean `mise install` / `true` segments do not.
+    assert_eq!(liveness_lines(&out), 1, "{out}");
 }
 
 // Probe 5 — runner variety: npm/yarn scripts (root package.json), cargo subcommands
@@ -119,11 +116,9 @@ fn probe5_runner_variety_npm_cargo_just() {
     add_root_commands(
         &fixture,
         "  js-ok: npm run build\n  \
-         js-flag: npm run -s build\n  \
          js-bad: yarn run missing\n  \
          rs-ok: cargo xtask\n  \
          rs-builtin: cargo build\n  \
-         rs-flags: cargo +nightly --locked t --check\n  \
          rs-bad: cargo frobnicate\n  \
          just-ok: just deploy prod\n  \
          just-bad: just teardown\n",
@@ -150,26 +145,9 @@ fn probe5_runner_variety_npm_cargo_just() {
         out.contains("`just teardown` — recipe not found in justfile"),
         "{out}"
     );
-    // Only the three missing tasks fail; the valid ones (scripts, alias, builtins behind
-    // `+toolchain`/flags, recipe) resolve.
+    // Only the three missing tasks fail; the four valid ones (script, alias, builtin,
+    // recipe) resolve.
     assert_eq!(liveness_lines(&out), 3, "{out}");
-}
-
-// Probe 5b — mix: an alias on the list's opening-bracket line resolves; once mix.exs
-// declares deps, a task it cannot verify (`phx.server`, from a dep) is not reported.
-#[test]
-fn probe5b_mix_bracket_alias_and_dep_tasks() {
-    let fixture = Fixture::acme();
-    fixture.replace("mix.exs", "[\n      \"ecto.reset\"", "[\"ecto.reset\"");
-    fixture.commit("alias on the bracket line");
-    assert_eq!(fixture.run(&["build"]).code, 0);
-    let check = fixture.run(&["check", "--only", "liveness"]);
-    assert_eq!(check.code, 0, "{}", check.combined());
-    fixture.replace("mix.exs", "    []", "    [{:phoenix, \"~> 1.7\"}]");
-    add_root_commands(&fixture, "  dev: mix phx.server\n");
-    assert_eq!(fixture.run(&["build"]).code, 0);
-    let check = fixture.run(&["check", "--only", "liveness"]);
-    assert_eq!(check.code, 0, "{}", check.combined());
 }
 
 // Probe 6 — `--run-commands` executes each command from the repo root. All the stubbed

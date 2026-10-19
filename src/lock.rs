@@ -16,7 +16,7 @@
 
 use crate::model::{
     AdrEntry, AnchorData, Claim, Graph, Node, Result, SteleError, Territory, Verified,
-    declaring_dir, normalize_id,
+    declaring_dir, node_id, normalize_id,
 };
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -345,20 +345,20 @@ pub fn read_version(text: &str) -> Result<u32> {
 }
 
 /// Strict-parse a committed lock (a stray field is an input error, exit 2). The
-/// caller checks `version` first via [`read_version`]; this validates the shape, and that
-/// every node id and `source` is already §2.1-normalized and each `source` is an AGENTS.md — emit joins sources into write
-/// paths, so a `..` or absolute one would escape the repo.
+/// caller checks `version` first via [`read_version`]; this validates the shape, that
+/// every node id is a §2.1 id lexeme (emit renders ids raw), and that every `source` is
+/// §2.1-normalized and an AGENTS.md — emit joins sources into write paths, so a `..` or
+/// absolute one would escape the repo.
 pub fn parse_lock(text: &str) -> Result<Lock> {
     let lock: Lock = serde_json::from_str(text)
         .map_err(|e| SteleError::input_msg(format!("malformed lock: {e}")))?;
     match lock.nodes.iter().find(|(id, n)| {
-        [id.as_str(), &n.source]
-            .iter()
-            .any(|p| normalize_id(p).as_deref() != Ok(p))
+        node_id(id).as_ref() != Ok(id)
+            || normalize_id(&n.source).as_ref() != Ok(&n.source)
             || !(n.source == "AGENTS.md" || n.source.ends_with("/AGENTS.md"))
     }) {
         Some((id, _)) => Err(SteleError::input_msg(format!(
-            "malformed lock: node {id:?} id or source is not normalized, or source is not an AGENTS.md (§2.1)"
+            "malformed lock: node {id:?} id is not an id lexeme, or its source is not a normalized AGENTS.md (§2.1)"
         ))),
         None => Ok(lock),
     }

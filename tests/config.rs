@@ -78,6 +78,19 @@ fn unknown_key_is_input_error_naming_the_key() {
     assert!(err.message.contains("bogus_key"), "{}", err.message);
 }
 
+// Two `[freshness.node]` keys normalizing to one id → input error (exit 2) naming both
+// (§2.1 duplicate ids), never a silent last-wins merge.
+#[test]
+fn colliding_freshness_node_keys_are_input_error_naming_both() {
+    let err = load_str_err("[freshness.node.\"./apps/web\"]\n[freshness.node.\"apps/web\"]\n");
+    assert_eq!(err.exit, ExitCode::Input);
+    assert!(
+        err.message.contains("\"./apps/web\" and \"apps/web\""),
+        "{}",
+        err.message
+    );
+}
+
 // An unknown `check.disable` class → input error (exit 2) naming the bad value (§3.4:
 // the list is drawn from the six assertion classes).
 #[test]

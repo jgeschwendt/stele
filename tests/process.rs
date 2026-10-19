@@ -186,6 +186,28 @@ fn exit_2_on_unknown_lock_version() {
     assert_eq!(check.code, 2, "{}", check.combined());
 }
 
+// A hand-edited lock id outside the id lexeme (a `|`) → exit 2, never rendered raw by
+// emit (§2.1, §3.2 strict parse).
+#[test]
+fn exit_2_on_lock_id_outside_the_lexeme() {
+    let fixture = Fixture::acme();
+    assert_eq!(fixture.run(&["build"]).code, 0);
+    let lock = fixture.read(".stele/graph.lock");
+    fixture.write(
+        ".stele/graph.lock",
+        &lock.replace("\"apps/web\": {", "\"apps/w|eb\": {"),
+    );
+    fixture.commit("hand-edit a lock id");
+
+    let check = fixture.run(&["check"]);
+    assert_eq!(check.code, 2, "{}", check.combined());
+    assert!(
+        check.combined().contains("apps/w|eb"),
+        "{}",
+        check.combined()
+    );
+}
+
 // A read command with no committed lock → exit 2 + "run stele build" (§5.3). `build` is
 // the only writer of the lock; check/emit/query refuse without one.
 #[test]

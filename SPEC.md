@@ -165,7 +165,7 @@ v1 does not specify how the lock is surfaced in PR review; teams may `.gitattrib
 
 ### 3.4 Configuration
 
-Check-time settings live in `.stele/config.toml` (committed; absent → all defaults, which is why EXAMPLE ships none). It is NOT an input to `build`/the lock (it tunes `check`/`emit`, not the graph). Keys, all optional: `exhaustiveness.depth` (int, default 1), `exhaustiveness.exclude` (glob list, default `["node_modules","_build","deps","target"]`), `budget.claude_root` (int tokens, default 2000), `budget.codex_cap` (int bytes, default 32768), `freshness.churn_threshold` (int) and `freshness.enforced_leash` (int) with per-node overrides under `[freshness.node."<id>"]`, and `check.disable` (list of assertion-class names — the "independently toggleable" knob; `--only <class>` remains the run-exactly-one flag). Unknown keys → exit 2.
+Check-time settings live in `.stele/config.toml` (committed; absent → all defaults, which is why EXAMPLE ships none). It is NOT an input to `build`/the lock (it tunes `check`/`emit`, not the graph). Keys, all optional: `exhaustiveness.depth` (int, default 1), `exhaustiveness.exclude` (glob list, default `["node_modules","_build","deps","target"]`), `budget.claude_root` (int tokens, default 2000), `budget.codex_cap` (int bytes, default 32768), `freshness.churn_threshold` (int) and `freshness.enforced_leash` (int) with per-node overrides under `[freshness.node."<id>"]`, and `check.disable` (list of assertion-class names — the "independently toggleable" knob; `--only <class>` remains the run-exactly-one flag). Unknown keys → exit 2, as are two `[freshness.node]` keys normalizing to one id (§2.1).
 
 ### 3.5 Undercover mode
 

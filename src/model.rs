@@ -548,13 +548,15 @@ fn unrenderable(c: char) -> bool {
 /// `[a-z0-9]+(-[a-z0-9]+)*`, and the anchor is one line (no line break or control character
 /// past the landmark prefix); a malformed slug or anchor is a §5.3 input error (exit 2).
 pub fn derive_slug(anchor: &str) -> std::result::Result<String, String> {
-    let bare = anchor
-        .strip_prefix(LANDMARK_ANCHOR_PREFIX)
-        .unwrap_or(anchor);
-    if let Some(c) = bare.chars().find(|&c| unrenderable(c)) {
+    let landmark = anchor.strip_prefix(LANDMARK_ANCHOR_PREFIX);
+    if let Some(c) = landmark
+        .unwrap_or(anchor)
+        .chars()
+        .find(|&c| unrenderable(c))
+    {
         return Err(format!("anchor must not contain {c:?}: {anchor:?} (§2.4)"));
     }
-    let slug = match anchor.strip_prefix(LANDMARK_ANCHOR_PREFIX) {
+    let slug = match landmark {
         Some(rest) => rest.to_string(),
         None => {
             // `<path>#<symbol>` — the symbol is the tail past the last `#`.

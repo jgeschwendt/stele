@@ -271,10 +271,10 @@ fn parse_decided_by(
 }
 
 /// Normalize a list of edge targets (§2.1), preserving order. Every edge target is
-/// compared against normalized node ids downstream (§4.2 depends/allow, §2.6 decided_by)
-/// and serialized into the lock, so it MUST be normalized at parse time — an unnormalized
-/// `./apps/web` or `apps/web/` would never match the node id `apps/web` (§2.1: normalize
-/// before ANY comparison).
+/// compared against normalized node ids downstream (§4.2 depends/allow) and serialized
+/// into the lock, so it MUST be normalized at parse time — an unnormalized `./apps/web`
+/// or `apps/web/` would never match the node id `apps/web` (§2.1: normalize before ANY
+/// comparison).
 fn normalize_targets(
     rel_path: &Path,
     block: &SteleBlock,
@@ -287,8 +287,9 @@ fn normalize_targets(
         .collect()
 }
 
-/// Normalize one edge target (§2.1), mapping a `..`-segment or OS-absolute rejection to
-/// a §5.3 input error (exit 2) naming the offending `edges.<field>`.
+/// Normalize one edge target to a §2.1 id lexeme ([`node_id`]), mapping a `..`-segment,
+/// OS-absolute, or out-of-lexeme rejection to a §5.3 input error (exit 2) naming the
+/// offending `edges.<field>`.
 fn normalize_target(rel_path: &Path, block: &SteleBlock, field: &str, raw: &str) -> Result<String> {
     node_id(raw).map_err(|message| {
         SteleError::input(

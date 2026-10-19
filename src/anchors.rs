@@ -691,7 +691,7 @@ fn find_comment_at_row(root: Node, row: usize) -> Option<Node> {
         if comment && (node.start_position().row..=node.end_position().row).contains(&row) {
             found.get_or_insert(node);
         }
-        !comment
+        !comment && found.is_none()
     });
     found
 }

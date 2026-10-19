@@ -87,8 +87,9 @@ pub struct Freshness {
     pub churn_threshold: Option<u32>,
     pub enforced_leash: Option<u32>,
     /// Per-node overrides keyed by node id, normalized at load like every id (§2.1) so
-    /// `./apps/web/` matches `apps/web`; ids are arbitrary and never rejected (one
-    /// [`normalize_id`] refuses is kept verbatim and simply matches no node).
+    /// `./apps/web/` matches `apps/web`; two keys normalizing to one id are an input
+    /// error, otherwise ids are never rejected (one [`normalize_id`] refuses is kept
+    /// verbatim and simply matches no node).
     pub node: BTreeMap<String, NodeFreshness>,
 }
 
@@ -114,9 +115,9 @@ pub enum AssertionClass {
 }
 
 /// Load `.stele/config.toml` (SPEC §3.4), normalizing the `[freshness.node]` keys. An
-/// absent file yields all defaults; an
-/// unknown key or unknown disable-class is an input error (exit 2); a genuine IO
-/// failure is an internal error (exit 3). `build` never calls this.
+/// absent file yields all defaults; an unknown key, an unknown disable-class, or two
+/// node keys normalizing to one id is an input error (exit 2); a genuine IO failure is
+/// an internal error (exit 3). `build` never calls this.
 pub fn load(root: &Path) -> Result<Config> {
     let path = root.join(CONFIG_PATH);
     let text = match std::fs::read_to_string(&path) {
@@ -126,9 +127,15 @@ pub fn load(root: &Path) -> Result<Config> {
     };
     let mut config: Config =
         toml::from_str(&text).map_err(|e| SteleError::input_msg(format!("{CONFIG_PATH}: {e}")))?;
-    config.freshness.node = std::mem::take(&mut config.freshness.node)
-        .into_iter()
-        .map(|(id, node)| (normalize_id(&id).unwrap_or(id), node))
-        .collect();
+    let mut keys = BTreeMap::new();
+    for (raw, node) in std::mem::take(&mut config.freshness.node) {
+        let id = normalize_id(&raw).unwrap_or_else(|_| raw.clone());
+        if let Some(prev) = keys.insert(id.clone(), raw.clone()) {
+            return Err(SteleError::input_msg(format!(
+                "{CONFIG_PATH}: [freshness.node] keys {prev:?} and {raw:?} both normalize to {id:?} (§2.1)"
+            )));
+        }
+        config.freshness.node.insert(id, node);
+    }
     Ok(config)
 }

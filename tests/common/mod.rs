@@ -186,10 +186,15 @@ impl Fixture {
     /// child `PATH` is forced through `stub-bin` (§4.6) so liveness PATH resolution is
     /// host-independent — identical on a dev box and a bare CI host.
     pub fn run(&self, args: &[&str]) -> RunResult {
+        self.run_in("", args)
+    }
+
+    /// [`Self::run`] with the cwd at the fixture-relative directory `rel`.
+    pub fn run_in(&self, rel: &str, args: &[&str]) -> RunResult {
         let output = isolate_git(
             Command::new(BIN)
                 .args(args)
-                .current_dir(&self.root)
+                .current_dir(self.root.join(rel))
                 .env("PATH", self.child_path()),
         )
         .output()

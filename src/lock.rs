@@ -15,7 +15,7 @@
 //! controls as `\u00xx`; every other character, non-ASCII included, is raw.
 
 use crate::model::{
-    AdrEntry, AnchorData, Claim, Graph, Node, Result, SteleError, Territory, Verified,
+    AdrEntry, AnchorData, Claim, Graph, Node, Result, SteleError, Territory, Verified, normalize_id,
 };
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -351,9 +351,22 @@ pub fn read_version(text: &str) -> Result<u32> {
 }
 
 /// Strict-parse a committed lock (a stray field is an input error, exit 2). The
-/// caller checks `version` first via [`read_version`]; this validates the shape.
+/// caller checks `version` first via [`read_version`]; this validates the shape, and that
+/// every node id is already §2.1-normalized — emit joins ids into write paths, so a `..`
+/// or absolute id would escape the repo.
 pub fn parse_lock(text: &str) -> Result<Lock> {
-    serde_json::from_str(text).map_err(|e| SteleError::input_msg(format!("malformed lock: {e}")))
+    let lock: Lock = serde_json::from_str(text)
+        .map_err(|e| SteleError::input_msg(format!("malformed lock: {e}")))?;
+    match lock
+        .nodes
+        .keys()
+        .find(|id| normalize_id(id).as_deref() != Ok(id))
+    {
+        Some(id) => Err(SteleError::input_msg(format!(
+            "malformed lock: node id {id:?} is not normalized (§2.1)"
+        ))),
+        None => Ok(lock),
+    }
 }
 
 // ─── canonical serialization (the byte contract, §3.2) ────────────────────────

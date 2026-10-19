@@ -101,10 +101,10 @@ impl CommandOutput {
 // ─── workspace resolution (§3.5) ─────────────────────────────────────────────
 //
 // Every verb runs against a resolved [`Workspace`], not a bare root path: `work` is the
-// invoking work tree (all git spawns and source/code scanning run here) and `home` is
+// invoking work-tree top level (all git spawns and source/code scanning run here) and `home` is
 // the graph home where the engine's artifacts live — the lock, `.stele/index/`, node
-// sources (§3.2/§3.5). In normal mode the two are the SAME verbatim path (today's
-// `Path::new(".")`), so every join is byte-identical and no §2–§7 behavior moves.
+// sources (§3.2/§3.5). In normal mode the two are the SAME path (`Path::new(".")` when
+// invoked at the top level), so every join is byte-identical and no §2–§7 behavior moves.
 // Undercover mode (§3.5) drives them apart: `home` becomes the parent of the git common
 // dir, outside the tracked tree. Phase 2 lands the split with [`Mode::Normal`] the only
 // reachable mode — nothing writes a marker yet, so [`resolve_workspace`] reaches
@@ -175,38 +175,34 @@ fn git_common_dir(work: &Path) -> Option<PathBuf> {
     absolute.canonicalize().ok()
 }
 
-/// The canonicalized top-level of the work tree containing `work` (`git rev-parse
-/// --show-toplevel`), or `None` on any failure (non-repo cwd, git will not spawn,
-/// uncanonicalizable path). Distinct from [`git_common_dir`]'s home: the undercover shim
-/// (§3.5) belongs at the invoking WORK-TREE ROOT, not at `work` (which is the cwd — a subdir
-/// invocation would otherwise land `CLAUDE.local.md` deep in the tree, where the root-anchored
-/// `/CLAUDE.local.md` exclude entry never matches). In a linked worktree this is that
-/// worktree's own root — the correct shim location.
-fn git_toplevel(work: &Path) -> Option<PathBuf> {
+/// The top level of the work tree containing `cwd` (`git rev-parse --show-cdup` joined onto
+/// it), or `cwd` verbatim at the top level or on any git failure. Every verb runs from here
+/// (§3.5): a subdirectory invocation must neither scan a cwd-relative subtree nor write a
+/// partial lock (or the undercover `CLAUDE.local.md` shim) beside the cwd. In a linked
+/// worktree this is that worktree's own root.
+fn work_tree_root(cwd: &Path) -> PathBuf {
     let output = Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .current_dir(work)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
+        .args(["rev-parse", "--show-cdup"])
+        .current_dir(cwd)
+        .output();
+    match output {
+        Ok(out) if out.status.success() && !out.stdout.trim_ascii().is_empty() => {
+            cwd.join(String::from_utf8_lossy(out.stdout.trim_ascii()).as_ref())
+        }
+        _ => cwd.to_path_buf(),
     }
-    let raw = String::from_utf8_lossy(&output.stdout);
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    Path::new(trimmed).canonicalize().ok()
 }
 
-/// Resolve the [`Workspace`] for `work` once at dispatch entry (§3.5). The graph home is
-/// the canonicalized parent of the git common dir; when `<home>/.stele/undercover` exists
-/// the result is [`Mode::Undercover`] rooted there. On ANY failure to locate the home
-/// (non-repo cwd, no parent) OR an absent marker the result is [`Mode::Normal`] with
-/// `home == work == work` verbatim — the exact value threaded before the split, so every
-/// downstream join stays byte-identical. NEVER errors: a non-repo cwd falls through to the
-/// verbs' own exit-2 paths (`git ls-files` reports "not a git repository").
-pub fn resolve_workspace(work: &Path) -> Workspace {
+/// Resolve the [`Workspace`] for the cwd once at dispatch entry (§3.5). `work` is the
+/// work-tree top level ([`work_tree_root`]); the graph home is the canonicalized parent of
+/// the git common dir; when `<home>/.stele/undercover` exists the result is
+/// [`Mode::Undercover`] rooted there. On ANY failure to locate the home (non-repo cwd, no
+/// parent) OR an absent marker the result is [`Mode::Normal`] with `home == work` — at the
+/// top level the cwd verbatim, so every downstream join stays byte-identical. NEVER errors:
+/// a non-repo cwd falls through to the verbs' own exit-2 paths (`git ls-files` reports "not
+/// a git repository").
+pub fn resolve_workspace(cwd: &Path) -> Workspace {
+    let work = &work_tree_root(cwd);
     let normal = || Workspace {
         common: work.to_path_buf(),
         home: work.to_path_buf(),
@@ -258,7 +254,7 @@ pub fn run(args: &[String]) -> i32 {
         .filter(|a| *a != JSON_FLAG)
         .collect();
     // Resolve the home/work split once (§3.5), after the serve/--version short-circuits;
-    // in normal mode this is `home == work == Path::new(".")` verbatim (byte-identical).
+    // `work` is the work-tree top level, whatever the cwd; in normal mode `home == work`.
     let workspace = resolve_workspace(Path::new("."));
     let command = rest.first().copied().unwrap_or("");
 
@@ -719,8 +715,7 @@ fn emit_write(ws: &Workspace, lock: &Lock, claude_rules: bool) -> Result<Command
             &contents[region.content_end..]
         );
         if updated != contents {
-            std::fs::write(root.join(&path), &updated)
-                .map_err(|e| SteleError::internal(format!("write {}: {e}", path.display())))?;
+            write_source_atomic(&root.join(&path), &updated)?;
         }
     }
 
@@ -906,17 +901,13 @@ fn ensure_shim(ws: &Workspace, lock: &Lock) -> Result<()> {
             ensure_nested_shims(ws, lock)
         }
         Mode::Undercover => {
-            // The shim belongs at the invoking WORK-TREE ROOT (§3.5), not at `ws.work` (the cwd):
-            // from a subdir, `ws.work` is that subdir, and a `CLAUDE.local.md` written there is not
-            // matched by the root-anchored `/CLAUDE.local.md` exclude entry — so it would leak into
-            // `git status`. Resolve the top-level via git; fall back to `ws.work` only if git will
-            // not answer (already inside a resolved undercover invocation, so this is near-total).
-            let root = git_toplevel(&ws.work).unwrap_or_else(|| ws.work.clone());
-            let path = root.join(CLAUDE_LOCAL_SHIM);
+            // The shim belongs at the invoking work-tree root (`ws.work`, §3.5), where the
+            // root-anchored `/CLAUDE.local.md` exclude entry matches.
+            let path = ws.work.join(CLAUDE_LOCAL_SHIM);
             if path.exists() {
                 return Ok(());
             }
-            let import = shim_import_path(&root, &ws.home);
+            let import = shim_import_path(&ws.work, &ws.home);
             let content = format!("@{}\n", import.to_string_lossy().replace('\\', "/"));
             std::fs::write(&path, content)
                 .map_err(|e| SteleError::internal(format!("write {CLAUDE_LOCAL_SHIM}: {e}")))
@@ -1840,7 +1831,7 @@ fn ensure_info_exclude(common: &Path) -> Result<()> {
 /// pid + a process-local counter so concurrent writers never collide, and it is cleaned up
 /// best-effort if the rename fails. An existing target's permissions are carried onto the
 /// replacement (best-effort), so rewriting a source in place never strips an executable
-/// bit. Shared by the `info/exclude` install and `migrate`'s source rewrite; the lock has
+/// bit. Shared by the `info/exclude` install and `migrate`'s/`emit`'s source rewrites; the lock has
 /// its own [`write_lock_atomic`] (same discipline, its own create-dir step).
 fn write_atomic(dir: &Path, name: &str, bytes: &str) -> Result<()> {
     static TEMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

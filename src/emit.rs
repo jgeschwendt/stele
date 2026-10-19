@@ -65,7 +65,14 @@ fn render_root(lock: &Lock, root: &LockNode) -> String {
     let hazards = collect_hazards(lock);
     let hazard_body: Vec<String> = hazards
         .iter()
-        .map(|h| format!("- {HAZARD_GLYPH} `{}`: {} (→ {})", h.node, h.text, h.anchor))
+        .map(|h| {
+            format!(
+                "- {HAZARD_GLYPH} `{}`: {} (→ {})",
+                h.node,
+                flat(&h.text),
+                h.anchor
+            )
+        })
         .collect();
     let hazards_block = section(&format!("Hazards ({} active)", hazards.len()), &hazard_body);
 
@@ -152,7 +159,9 @@ pub fn render_claude_rule(id: &str, node: &LockNode) -> String {
     for claim in &node.claims {
         out.push_str(&format!(
             "- [{}] {} (`{}`)\n",
-            claim.kind, claim.text, claim.anchor
+            claim.kind,
+            flat(&claim.text),
+            claim.anchor
         ));
     }
     out
@@ -169,6 +178,18 @@ pub fn rule_slug(id: &str) -> String {
 }
 
 // ─── rendering helpers ───────────────────────────────────────────────────────
+
+/// Node text for a one-line context (§3.1): every whitespace run, newlines included, is one
+/// space. Each generated line opens with engine bytes, so no authored text can start a line
+/// the region scanner reads as a marker or a fence.
+pub fn flat(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Node text for a markdown table cell: [`flat`], with `|` escaped.
+fn cell(text: &str) -> String {
+    flat(text).replace('|', "\\|")
+}
 
 /// One `## Heading` section: the heading, a blank line, then each body line — no
 /// leading or trailing blank line (the caller joins sections with a blank line).
@@ -259,7 +280,7 @@ fn router_table(rows: &[Row]) -> Vec<String> {
         cells.push([
             id.clone(),
             kind.clone(),
-            purpose.clone(),
+            cell(purpose),
             format!("`stele unfold {id}` · or read `{source}`"),
         ]);
     }
@@ -325,7 +346,7 @@ fn render_claims_index(lock: &Lock, title: &str, kind: &str) -> String {
 
     let mut out = format!("# {title}\n\n| claim | node | anchor |\n| --- | --- | --- |\n");
     for (node, _slug, text, anchor) in &rows {
-        out.push_str(&format!("| {text} | {node} | {anchor} |\n"));
+        out.push_str(&format!("| {} | {node} | {anchor} |\n", cell(text)));
     }
     out
 }

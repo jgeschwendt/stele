@@ -1,0 +1,14 @@
+amends "package://github.com/jdx/hk/releases/download/v2.5.0/hk@2.5.0#/Config.pkl"
+// `hk install --mise` wires this once for every checkout (worktrees share one hooks dir).
+hooks {
+  // One chained command: the graph gate needs the build, so order is load-bearing.
+  // The unset scrubs the repo-locating env git exports into hooks — inherited, it points
+  // the test fixtures' git (and any child git) at this repo instead of their sandboxes.
+  ["pre-push"] {
+    steps {
+      ["gate"] {
+        check = "unset $(git rev-parse --local-env-vars); cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo build && ./target/debug/stele check && ./target/debug/stele emit --check"
+      }
+    }
+  }
+}

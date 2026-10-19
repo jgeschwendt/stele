@@ -168,6 +168,42 @@ fn emit_rejects_a_node_with_no_region_pointing_at_init() {
     assert!(emit.combined().contains("init"), "{}", emit.combined());
 }
 
+// A lock node id that fails §2.1 normalization is a malformed lock (exit 2, naming the id):
+// emit joins ids into write paths, so `..` or an absolute id would escape the repo.
+#[test]
+fn emit_rejects_a_lock_node_id_that_escapes_the_repo() {
+    for id in ["../worker", "/abs/worker"] {
+        let fixture = built();
+        let lock = fixture.read(".stele/graph.lock");
+        fixture.write(
+            ".stele/graph.lock",
+            &lock.replace("\"apps/worker\"", &format!("\"{id}\"")),
+        );
+        let emit = fixture.run(&["emit"]);
+        assert_eq!(emit.code, 2, "{}", emit.combined());
+        assert!(
+            emit.combined()
+                .contains(&format!("malformed lock: node id {id:?}")),
+            "{}",
+            emit.combined()
+        );
+    }
+}
+
+// emit replaces a node file (temp + rename), never truncating it in place: an interrupted
+// write must not destroy authored prose (§5.1). A new inode is the observable.
+#[cfg(unix)]
+#[test]
+fn emit_replaces_a_node_file_atomically() {
+    use std::os::unix::fs::MetadataExt;
+    let fixture = built();
+    fixture.replace("AGENTS.md", "## Hazards (2 active)", "## Hazards (WRONG)");
+    let ino = || std::fs::metadata(fixture.path("AGENTS.md")).unwrap().ino();
+    let before = ino();
+    assert_eq!(fixture.run(&["emit"]).code, 0);
+    assert_ne!(ino(), before);
+}
+
 // ─── transpose indexes (§6.1) ────────────────────────────────────────────────
 
 #[test]

@@ -262,6 +262,25 @@ fn undercover_flag_rejected_on_other_verbs() {
     }
 }
 
+// Every verb runs from the work-tree top level (§3.5), whatever the cwd: from a subdirectory
+// `build`/`check` act on the root lock, never a partial graph rooted at the cwd.
+#[test]
+fn verbs_run_from_the_work_tree_top_level() {
+    let fixture = built();
+    let lock = fixture.read(".stele/graph.lock");
+    for verb in ["build", "check"] {
+        let sub = fixture.run_in("apps/web", &[verb]);
+        assert_eq!(
+            sub.code,
+            fixture.run(&[verb]).code,
+            "{verb}: {}",
+            sub.combined()
+        );
+    }
+    assert_eq!(fixture.read(".stele/graph.lock"), lock);
+    assert!(!fixture.path("apps/web/.stele").exists());
+}
+
 // Probe 11 — `stele --version` prints `stele <CARGO_PKG_VERSION>` to stdout and exits 0
 // WITHOUT a lock or git repo (scripts/install.sh calls it to confirm the landed binary
 // runs). The bare `Fixture` is a git repo with no lock; the flag must short-circuit

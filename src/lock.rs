@@ -274,7 +274,8 @@ fn nearest_parent<'a>(nodes: &'a [Node], child_id: &str) -> Option<&'a str> {
     nodes
         .iter()
         .filter(|n| n.id != child_id && is_id_ancestor(&n.id, child_id))
-        .max_by_key(|n| n.id.len())
+        // `/` ranks below every real id, so it never wins a length tie with a one-char id.
+        .max_by_key(|n| (n.id != crate::model::SYSTEM_ID, n.id.len()))
         .map(|n| n.id.as_str())
 }
 

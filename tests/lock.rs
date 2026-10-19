@@ -127,6 +127,23 @@ fn acme_lock_derives_the_containment_tree() {
     assert!(lock.nodes["apps/web/lib/billing"].contains.is_empty());
 }
 
+// A one-char id ties the system id `/` on length; the real ancestor still wins, so
+// `A/b` nests under `A` whatever the tracked-file order.
+#[test]
+fn one_char_parent_outranks_the_system_node() {
+    let fixture = Fixture::bare();
+    for (path, kind) in [("", "system"), ("A/", "container"), ("A/b/", "component")] {
+        fixture.write(
+            &format!("{path}AGENTS.md"),
+            &format!("```stele\nkind: {kind}\n```\n"),
+        );
+    }
+    fixture.commit("init");
+    assert_eq!(fixture.run(&["build"]).code, 0);
+    let lock = lock::parse_lock(&fixture.read(LOCK_PATH)).unwrap();
+    assert_eq!(lock.nodes["A"].contains, vec!["A/b"]);
+}
+
 // build stamps a non-null structural digest (§4.5) on a resolved claim in a
 // parseable language: acme's billing/refund-cap binds `changeset/2` in refund.ex
 // (elixir), so its `verified.digest` is a 64-hex sha256, never null.

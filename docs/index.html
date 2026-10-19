@@ -249,6 +249,20 @@ stele blame payments/idempotent-charges     <span class="snippet-note"># provena
   </ul>
 </section>
 
+<section class="docs-section" id="plan" data-component="plan">
+  <header>
+    <h2 class="h2">Next</h2>
+    <p class="docs-note">What the next shift does first. <code class="code">shift brief</code> reads this list, and a landing that changes it edits it here.</p>
+  </header>
+  <ul class="stack" role="list" id="next">
+    <li>An explicit <code class="code">id:</code> override makes <code class="code">emit</code> exit 3 and <code class="code">invariants --touching</code> return nothing. The fix waits on proposal <code class="code">id-override-source-path</code>.</li>
+    <li>Extractors: imports from Python packages outside the repo root, a Rust crate whose <code class="code">src/</code> another node owns, nested Elixir <code class="code">defmodule</code>, and dynamic TS <code class="code">import()</code>.</li>
+    <li>Emit rendering: multi-line purpose or claim text, or a fence line inside a region, can break the <code class="code">@stele</code>/<code class="code">@end</code> markers.</li>
+    <li><code class="code">--run-commands</code> has no timeout, so a background child holding the pipe hangs <code class="code">check</code>. This needs a SPEC knob first.</li>
+    <li>Small items: freshness config keys are not normalized; <code class="code">freeze.json</code> resolves against the work tree, not the home; budgets wrap at i64; AST recursion has no depth bound; sparse-checkout paths read as absent; <code class="code">emit</code> accepts unknown flags.</li>
+  </ul>
+</section>
+
 <section class="docs-section" id="artifacts" data-component="artifacts">
   <header>
     <h2 class="h2">Artifacts</h2>

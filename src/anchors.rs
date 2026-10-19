@@ -19,8 +19,8 @@
 //! landmark by documenting itself.
 
 use crate::model::{
-    AnchorData, ClaimAnchor, LANDMARK_ANCHOR_PREFIX, Occurrence, Result, SteleError, is_absent,
-    is_claim_address, is_valid_slug,
+    AnchorData, ClaimAnchor, LANDMARK_ANCHOR_PREFIX, Occurrence, Result, SteleError,
+    is_claim_address, is_valid_slug, read_text,
 };
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -138,7 +138,7 @@ pub fn scan(root: &Path, tracked: &[PathBuf]) -> Result<AnchorData> {
         if file.starts_with(STELE_DIR_PREFIX) {
             continue;
         }
-        let Some(contents) = read_optional_text(&root.join(rel), &file)? else {
+        let Some(contents) = read_text(&root.join(rel), &file)? else {
             continue;
         };
         match extension(rel).as_deref() {
@@ -353,7 +353,7 @@ pub fn resolve_symbol(root: &Path, rel_path: &str, symbol: &str) -> Result<Symbo
     };
     // A binary blob (not valid UTF-8) cannot resolve a symbol; the anchor simply
     // does not bind (§2.4), same as a missing file — never a hard read failure.
-    let Some(contents) = read_optional_text(&root.join(path), rel_path)? else {
+    let Some(contents) = read_text(&root.join(path), rel_path)? else {
         return Ok(SymbolResolution::Unresolved);
     };
     let mut parser = Parser::new();
@@ -409,7 +409,7 @@ fn resolve_markdown_heading(
     rel_path: &str,
     symbol: &str,
 ) -> Result<SymbolResolution> {
-    let Some(contents) = read_optional_text(&root.join(path), rel_path)? else {
+    let Some(contents) = read_text(&root.join(path), rel_path)? else {
         return Ok(SymbolResolution::Unresolved);
     };
     let mut lines = Vec::new();
@@ -523,7 +523,7 @@ pub fn region_digest_for_claim(
     };
     // A binary blob (not valid UTF-8) has no parse-able region; fall to the §4.5
     // churn path (`None`), the same treatment a parser-less file gets above.
-    let Some(contents) = read_optional_text(&root.join(path), file)? else {
+    let Some(contents) = read_text(&root.join(path), file)? else {
         return Ok(None);
     };
     let mut parser = Parser::new();
@@ -820,21 +820,6 @@ fn parse(parser: &mut Parser, lang: Lang, contents: &str, file: &str) -> Result<
     parser
         .parse(contents, None)
         .ok_or_else(|| SteleError::internal(format!("tree-sitter failed to parse {file}")))
-}
-
-/// Read a scanned file as UTF-8, distinguishing the three outcomes a scan cares
-/// about: `Ok(Some)` valid text, `Ok(None)` the file is absent (deleted-without-staging
-/// or a dangling symlink — [`is_absent`]) OR not valid UTF-8, a binary blob (PNG, font,
-/// icon) the scan skips rather than aborting on (§2.4), `Err` a genuine IO failure (§5.3
-/// internal, exit 3). Node sources (AGENTS.md) are read elsewhere and never routed
-/// through here: an invalid-UTF-8 node source is a hard input error naming the file,
-/// never a silent skip.
-fn read_optional_text(path: &Path, file: &str) -> Result<Option<String>> {
-    match std::fs::read(path) {
-        Ok(bytes) => Ok(String::from_utf8(bytes).ok()),
-        Err(e) if is_absent(&e) => Ok(None),
-        Err(e) => Err(SteleError::internal(format!("read {file}: {e}"))),
-    }
 }
 
 /// A path's lowercased extension without the dot, or `None` when it has none.

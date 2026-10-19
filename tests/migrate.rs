@@ -429,6 +429,42 @@ fn a_dirty_work_tree_warns_but_still_migrates() {
     );
 }
 
+// ─── non-regular tracked paths ────────────────────────────────────────────────
+
+// `git ls-files` lists symlinks and gitlinks as plain entries. A symlink to a file is
+// left a symlink (rewriting it would replace the link with a copy of its target); a
+// directory — a symlink to one or a submodule checkout — reads EISDIR and is skipped,
+// never an exit 3, by `migrate` and by `build`'s scan and extractors alike.
+#[cfg(unix)]
+#[test]
+fn symlinks_and_gitlinks_are_skipped_never_rewritten_or_fatal() {
+    let fixture = Fixture::bare();
+    fixture.write("AGENTS.md", "# root\n\n```stele\nkind: system\n```\n");
+    fixture.write("real.md", &format!("<!-- {LANDMARK} foo -->\n"));
+    fixture.write("v2/a.md", "hi\n");
+    std::os::unix::fs::symlink("real.md", fixture.path("link.md")).unwrap();
+    std::os::unix::fs::symlink("v2", fixture.path("current")).unwrap();
+    fixture.git(&["init", "-q", "vendor/chart.js"]);
+    let sub = [
+        "-C",
+        "vendor/chart.js",
+        "-c",
+        "user.email=a@b",
+        "-c",
+        "user.name=t",
+    ];
+    fixture.git(&[&sub[..], &["commit", "-q", "--allow-empty", "-m", "s"]].concat());
+    fixture.commit("a file link, a dir link and a gitlink");
+
+    let migrate = fixture.run(&["migrate"]);
+    assert_eq!(migrate.code, 0, "{}", migrate.combined());
+    assert!(fixture.path("link.md").is_symlink());
+    assert_eq!(fixture.read("real.md"), "<!-- ※ foo -->\n");
+    fixture.commit("migrated");
+    let build = fixture.run(&["build"]);
+    assert_eq!(build.code, 0, "{}", build.combined());
+}
+
 // ─── §5.3: bad flags, and the clean-repo success ─────────────────────────────
 
 #[test]

@@ -302,7 +302,7 @@ impl Fixture {
         self.write(rel, &rejoin(&lines, &source));
     }
 
-    fn git(&self, args: &[&str]) {
+    pub fn git(&self, args: &[&str]) {
         let output = isolate_git(Command::new("git").args(args).current_dir(&self.root))
             .output()
             .expect("spawn git");

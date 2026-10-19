@@ -885,8 +885,10 @@ fn write_under_root(root: &Path, dir: &str, name: &str, content: &str) -> Result
 /// WORK-tree root, a single relative `@`-import of the overlay root node (§3.5) — exactly one
 /// materialized file, so no nested shims (nothing is ever written under `.stele/tree/`).
 /// All are only-if-absent — an existing shim is the operator's (or team's) and is never
-/// overwritten, even when it differs. This is ensure-on-write only; `emit --check` does NOT
-/// diff any shim (a shim is not a generated region — see [`emit_check`]).
+/// overwritten, even when it differs; a symlink there, even dangling, counts as existing,
+/// so a repo-planted link never steers the write outside the tree. This is ensure-on-write
+/// only; `emit --check` does NOT diff any shim (a shim is not a generated region — see
+/// [`emit_check`]).
 fn ensure_shim(ws: &Workspace, lock: &Lock) -> Result<()> {
     if !lock.nodes.contains_key(crate::model::SYSTEM_ID) {
         return Ok(());
@@ -894,7 +896,7 @@ fn ensure_shim(ws: &Workspace, lock: &Lock) -> Result<()> {
     match ws.mode {
         Mode::Normal => {
             let path = ws.home.join(CLAUDE_SHIM);
-            if !path.exists() {
+            if path.symlink_metadata().is_err() {
                 std::fs::write(&path, CLAUDE_SHIM_CONTENT)
                     .map_err(|e| SteleError::internal(format!("write {CLAUDE_SHIM}: {e}")))?;
             }
@@ -904,7 +906,7 @@ fn ensure_shim(ws: &Workspace, lock: &Lock) -> Result<()> {
             // The shim belongs at the invoking work-tree root (`ws.work`, §3.5), where the
             // root-anchored `/CLAUDE.local.md` exclude entry matches.
             let path = ws.work.join(CLAUDE_LOCAL_SHIM);
-            if path.exists() {
+            if path.symlink_metadata().is_ok() {
                 return Ok(());
             }
             let import = shim_import_path(&ws.work, &ws.home);
@@ -929,7 +931,7 @@ fn ensure_nested_shims(ws: &Workspace, lock: &Lock) -> Result<()> {
             continue;
         };
         let path = ws.home.join(dir).join(CLAUDE_SHIM);
-        if path.exists() {
+        if path.symlink_metadata().is_ok() {
             continue;
         }
         std::fs::write(&path, CLAUDE_SHIM_CONTENT)
@@ -1927,10 +1929,10 @@ fn git_check_ignore(root: &Path, path: &str) -> Result<bool> {
 
 /// Append an empty generated region to an already-authored AGENTS.md that carries a
 /// stele block but no region (§3.1). A non-AGENTS.md file, a blockless file (nothing to
-/// route), or a file that already has a region is left byte-identical. Records the path
-/// for staging so the next `stele build` sees the change.
+/// route), a symlink (never written through), or a file that already has a region is left
+/// byte-identical. Records the path for staging so the next `stele build` sees the change.
 fn ensure_region_for_block(root: &Path, rel: &Path, written: &mut Vec<String>) -> Result<()> {
-    if rel.file_name().is_none_or(|name| name != "AGENTS.md") {
+    if rel.file_name().is_none_or(|name| name != "AGENTS.md") || root.join(rel).is_symlink() {
         return Ok(());
     }
     let contents = std::fs::read_to_string(root.join(rel))
@@ -2015,7 +2017,8 @@ fn proposable_top_dirs(
 /// Scaffold one proposed node's AGENTS.md (§7). No file → write the heading + skeleton
 /// block + empty region. Prose-only file → prepend the skeleton (after any leading `#`
 /// heading), preserve every existing byte, and append an empty region if the file has
-/// none. Records the written path for staging.
+/// none. A symlink is never written through and is left as is. Records the written path
+/// for staging.
 fn scaffold_node(
     root: &Path,
     rel_path: &str,
@@ -2023,6 +2026,9 @@ fn scaffold_node(
     written: &mut Vec<String>,
 ) -> Result<()> {
     let full = root.join(rel_path);
+    if full.is_symlink() {
+        return Ok(());
+    }
     let contents = match std::fs::read_to_string(&full) {
         Ok(existing) => prepend_skeleton(rel_path, &existing, kind)?,
         Err(e) if e.kind() == ErrorKind::NotFound => new_skeleton_file(rel_path, root, kind),
@@ -2246,7 +2252,10 @@ fn migrate_targets(ws: &Workspace) -> Result<Vec<MigrateTarget>> {
         .into_iter()
         .filter_map(|rel| {
             let display = rel.to_string_lossy().replace('\\', "/");
-            if display == LOCK_DIR || display.starts_with(&stele_prefix) {
+            let path = ws.work.join(&rel);
+            // A tracked symlink is left untouched: the rename in `write_atomic` would replace
+            // the link itself with a copy of its (possibly out-of-repo) target.
+            if display == LOCK_DIR || display.starts_with(&stele_prefix) || path.is_symlink() {
                 return None;
             }
             let kind = if ws.mode == Mode::Normal
@@ -2264,7 +2273,7 @@ fn migrate_targets(ws: &Workspace) -> Result<Vec<MigrateTarget>> {
             Some(MigrateTarget {
                 display,
                 kind,
-                path: ws.work.join(&rel),
+                path,
             })
         })
         .collect();
@@ -2286,24 +2295,21 @@ fn migrate_targets(ws: &Workspace) -> Result<Vec<MigrateTarget>> {
     Ok(targets)
 }
 
-/// Read one migrate target. `Ok(None)` skips it: a tracked path missing from the work
-/// tree, or a binary file (the §2.4 scan skips non-UTF-8 bytes the same way). A node
-/// source that is not valid UTF-8 is a §5.3 input error instead — the same hard stop
+/// Read one migrate target. `Ok(None)` skips it: a tracked path with nothing to read
+/// ([`crate::model::read_tracked`]), or a binary file (the §2.4 scan skips non-UTF-8 bytes
+/// the same way). A node source that is not valid UTF-8 is a §5.3 input error instead — the same hard stop
 /// `build` gives it — and, running in pass 1, it aborts before anything is written.
 fn read_migrate_source(target: &MigrateTarget) -> Result<Option<String>> {
-    match std::fs::read(&target.path) {
-        Ok(bytes) => match String::from_utf8(bytes) {
-            Ok(text) => Ok(Some(text)),
-            Err(_) if target.kind == legacy::SourceKind::Node => Err(SteleError::input_msg(
-                format!("{}: node source is not valid UTF-8 (§3.1)", target.display),
-            )),
-            Err(_) => Ok(None),
-        },
-        Err(e) if crate::model::is_absent(&e) => Ok(None),
-        Err(e) => Err(SteleError::internal(format!(
-            "read {}: {e}",
+    let Some(bytes) = crate::model::read_tracked(&target.path, &target.display)? else {
+        return Ok(None);
+    };
+    match String::from_utf8(bytes) {
+        Ok(text) => Ok(Some(text)),
+        Err(_) if target.kind == legacy::SourceKind::Node => Err(SteleError::input_msg(format!(
+            "{}: node source is not valid UTF-8 (§3.1)",
             target.display
         ))),
+        Err(_) => Ok(None),
     }
 }
 

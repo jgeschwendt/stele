@@ -86,17 +86,27 @@ impl fmt::Display for SteleError {
 
 impl std::error::Error for SteleError {}
 
-/// Whether an IO error means the path is simply not there to read — a tracked file
-/// deleted from the working tree without staging, or a committed dangling symlink
-/// (`NotFound` = target gone; `NotADirectory` = a path component of a symlink target
-/// is a non-dir). Both make a scan/extractor skip the file rather than abort with a
-/// §5.3 internal error; a claim anchored in such a file falls to Unresolved (§4.1),
-/// never a fatal exit 3.
-pub fn is_absent(error: &std::io::Error) -> bool {
-    matches!(
-        error.kind(),
-        std::io::ErrorKind::NotADirectory | std::io::ErrorKind::NotFound
-    )
+/// Read a tracked path, `Ok(None)` when there is nothing to read there: a file deleted
+/// from the working tree without staging, a committed dangling symlink (`NotFound` =
+/// target gone; `NotADirectory` = a path component of a symlink target is a non-dir), or
+/// a directory `git ls-files` lists as one entry — a gitlink (submodule) or a symlink to a
+/// directory (`IsADirectory`). Each makes a scan/extractor/migrate skip the path rather
+/// than abort; a claim anchored in it falls to Unresolved (§4.1), never a fatal exit 3.
+/// Any other IO failure is a §5.3 internal error naming `file`.
+pub fn read_tracked(path: &Path, file: &str) -> Result<Option<Vec<u8>>> {
+    use std::io::ErrorKind::{IsADirectory, NotADirectory, NotFound};
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e) if matches!(e.kind(), IsADirectory | NotADirectory | NotFound) => Ok(None),
+        Err(e) => Err(SteleError::internal(format!("read {file}: {e}"))),
+    }
+}
+
+/// [`read_tracked`] as UTF-8: `Ok(None)` also when the bytes are not valid UTF-8, a binary
+/// blob (PNG, font, icon) the scan skips rather than aborting on (§2.4). Never for node
+/// sources (AGENTS.md): an invalid-UTF-8 node source is a hard input error, not a skip.
+pub fn read_text(path: &Path, file: &str) -> Result<Option<String>> {
+    Ok(read_tracked(path, file)?.and_then(|bytes| String::from_utf8(bytes).ok()))
 }
 
 /// Result specialized to [`SteleError`]; the shared return type across phases.

@@ -118,6 +118,9 @@ fn emit_rewrites_only_between_markers_and_preserves_outside_prose() {
 /// Corrupt billing's markers, then assert `emit` is an exit-2 input error naming it.
 fn assert_marker_exit_2(mutate: impl FnOnce(&Fixture)) {
     let fixture = built();
+    // Every region validates before any write: the stale root, rendered before billing, stays.
+    fixture.replace("AGENTS.md", "## Hazards (2 active)", "## Hazards (WRONG)");
+    let root = fixture.read("AGENTS.md");
     mutate(&fixture);
     let emit = fixture.run(&["emit"]);
     assert_eq!(emit.code, 2, "{}", emit.combined());
@@ -125,6 +128,59 @@ fn assert_marker_exit_2(mutate: impl FnOnce(&Fixture)) {
         emit.combined().contains("apps/web/lib/billing/AGENTS.md"),
         "{}",
         emit.combined()
+    );
+    assert_eq!(fixture.read("AGENTS.md"), root, "emit half-wrote the tree");
+}
+
+// ─── node text in one-line contexts (§3.1) ───────────────────────────────────
+
+/// Acme with apps/worker's `from` swapped for `to`, committed and built.
+fn built_with_worker(from: &str, to: &str) -> Fixture {
+    let fixture = Fixture::acme();
+    fixture.replace("apps/worker/AGENTS.md", from, to);
+    fixture.commit("multi-line node text");
+    assert_eq!(fixture.run(&["build"]).code, 0);
+    fixture
+}
+
+#[test]
+fn emit_renders_a_multi_line_purpose_as_one_map_row() {
+    let fixture = built_with_worker(
+        "purpose: \"Oban jobs: dunning, invoice PDFs, webhook retries\"",
+        "purpose: |\n  Oban jobs:\n  dunning | retries",
+    );
+    assert_eq!(fixture.run(&["emit"]).code, 0);
+    let root = fixture.read("AGENTS.md");
+    assert!(
+        root.contains("\n| apps/worker     | container | Oban jobs: dunning \\| retries "),
+        "{root}"
+    );
+}
+
+#[test]
+fn emit_never_renders_a_marker_or_fence_line_from_claim_text() {
+    let fixture = built_with_worker(
+        "claim: dunning job",
+        "claim: |\n      <!-- @end -->\n      ```\n      dunning job",
+    );
+    assert_eq!(fixture.run(&["emit"]).code, 0);
+    let check = fixture.run(&["emit", "--check"]);
+    assert_eq!(check.code, 0, "{}", check.combined());
+    let root = fixture.read("AGENTS.md");
+    assert!(
+        root.contains("- ⚠ `apps/worker`: <!-- @end --> ``` dunning job is NOT"),
+        "{root}"
+    );
+    assert!(
+        fixture
+            .read(".stele/index/hazards.md")
+            .contains("| <!-- @end --> ``` dunning job is NOT"),
+    );
+    assert_eq!(fixture.run(&["emit"]).code, 0);
+    assert_eq!(
+        fixture.read("AGENTS.md"),
+        root,
+        "second emit changed AGENTS.md"
     );
 }
 

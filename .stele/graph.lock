@@ -20,7 +20,7 @@
           "text": "every [Cn] citation must stay licensed by research/claims.md's status for that claim — never state a `reported` claim as settled fact",
           "verified": {
             "digest": null,
-            "sha": "6f811566319ffa1300eb65aecc7c2269d7e68893"
+            "sha": "7daf9e2a633ff6a9dad5778fd4ef24d0a1dfa263"
           }
         },
         {
@@ -32,7 +32,7 @@
           "text": "SPEC.md outranks everything here — code and examples conform to it; changing behavior means revising the spec (and its decision log) first",
           "verified": {
             "digest": null,
-            "sha": "6f811566319ffa1300eb65aecc7c2269d7e68893"
+            "sha": "7daf9e2a633ff6a9dad5778fd4ef24d0a1dfa263"
           }
         }
       ],

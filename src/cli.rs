@@ -733,6 +733,8 @@ fn emit_write(ws: &Workspace, lock: &Lock, claude_rules: bool) -> Result<Command
     let rules = claude_rules
         .then(|| render_claude_rules(lock))
         .transpose()?;
+    // Every region renders and validates before the first write: no half-written tree.
+    let mut writes = Vec::new();
     for node in lock.nodes.values() {
         let path = node_agents_path(ws, node);
         let contents = read_node_agents(root, &path)?;
@@ -752,8 +754,11 @@ fn emit_write(ws: &Workspace, lock: &Lock, claude_rules: bool) -> Result<Command
                     "node AGENTS.md links outside the work tree; refusing to write through it",
                 )
             })?;
-            write_source_atomic(&root.join(target), &updated)?;
+            writes.push((root.join(target), updated));
         }
+    }
+    for (target, updated) in &writes {
+        write_source_atomic(target, updated)?;
     }
 
     write_under_root(
@@ -1229,7 +1234,7 @@ fn nodes(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
             "{} · {} · {}\n",
             n.id,
             n.kind,
-            n.purpose.as_deref().unwrap_or("")
+            emit::flat(n.purpose.as_deref().unwrap_or(""))
         ));
     }
     Ok(CommandOutput::new(data, Some(text)))
@@ -1369,7 +1374,7 @@ fn render_unfold(node: &LockNode, depth: u32, hops: &[(u32, &LockNode)]) -> Stri
             "  ".repeat(*d as usize),
             nb.id,
             nb.kind,
-            nb.purpose.as_deref().unwrap_or("")
+            emit::flat(nb.purpose.as_deref().unwrap_or(""))
         ));
     }
     out
@@ -1447,7 +1452,10 @@ fn render_claim_rows(title: &str, rows: &[ClaimRow]) -> String {
     for row in rows {
         out.push_str(&format!(
             "  {} · {} — {} (→ {})\n",
-            row.node, row.slug, row.text, row.anchor
+            row.node,
+            row.slug,
+            emit::flat(&row.text),
+            row.anchor
         ));
     }
     out
@@ -1457,7 +1465,7 @@ fn render_claim_rows(title: &str, rows: &[ClaimRow]) -> String {
 /// region body (hazards banner, router, index pointers, engine lines).
 fn render_root_text(lock: &Lock, system: &LockNode) -> String {
     let mut out = String::new();
-    out.push_str(system.purpose.as_deref().unwrap_or(""));
+    out.push_str(&emit::flat(system.purpose.as_deref().unwrap_or("")));
     out.push('\n');
     out.push('\n');
     out.push_str(&render_commands_section(&system.commands));
@@ -1509,7 +1517,7 @@ fn root_json(lock: &Lock, system: &LockNode) -> Value {
 fn render_node(node: &LockNode) -> String {
     let mut out = format!("{} ({})\n", node.id, node.kind);
     if let Some(purpose) = &node.purpose {
-        out.push_str(&format!("purpose: {purpose}\n"));
+        out.push_str(&format!("purpose: {}\n", emit::flat(purpose)));
     }
     if !node.commands.is_empty() {
         out.push_str("commands:\n");
@@ -1560,7 +1568,10 @@ fn render_claim_group(out: &mut String, node: &LockNode, kind: &str, heading: &s
             .unwrap_or_default();
         out.push_str(&format!(
             "  - [{}] {} ({}{})\n",
-            claim.id, claim.text, claim.anchor, resolved
+            claim.id,
+            emit::flat(&claim.text),
+            claim.anchor,
+            resolved
         ));
     }
 }

@@ -142,6 +142,19 @@ fn landmark_binds_only_the_immediately_following_definition() {
     );
 }
 
+/// A landmark on a continuation line of a block comment binds as one on its first
+/// line: the next definition, so an edit to a later sibling is invisible.
+#[test]
+fn block_comment_landmark_binds_the_following_definition() {
+    const SRC: &str =
+        "/*\n * ※ note\n */\nfn guard() -> u32 {\n    1\n}\n\nfn other() -> u32 {\n    2\n}\n";
+    let sibling = SRC.replace("    2", "    3");
+    assert_eq!(
+        rust_landmark_digest(SRC, 2),
+        rust_landmark_digest(&sibling, 2)
+    );
+}
+
 /// (d) A landmark preceding NO definition in its scope falls back to its strictly-
 /// enclosing named node, then the whole file (§4.5). Two tiers:
 ///

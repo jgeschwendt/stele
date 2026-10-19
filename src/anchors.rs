@@ -402,6 +402,7 @@ const MAX_HEADING_LEVEL: usize = 6;
 /// immediately followed by a `-` (so `c1` binds `## C1: …` but not `## C10: …`).
 /// Cardinality discipline is identical to tree-sitter resolution — exactly 1 → resolved,
 /// 0 → unresolved, ≥2 → ambiguous. A missing file is unresolved (the anchor cannot bind).
+/// Lines inside fenced code blocks are never headings.
 fn resolve_markdown_heading(
     root: &Path,
     path: &Path,
@@ -412,8 +413,18 @@ fn resolve_markdown_heading(
         return Ok(SymbolResolution::Unresolved);
     };
     let mut lines = Vec::new();
+    let mut fence: Option<(char, usize)> = None;
     for (index, line) in contents.lines().enumerate() {
-        if let Some(text) = atx_heading_text(line) {
+        // A `#` line inside a fenced block is code, not a heading (CommonMark).
+        let outside = fence.is_none();
+        fence = match fence {
+            Some((c, n)) => (!crate::parse::is_close_fence(line, c, n)).then_some((c, n)),
+            None => crate::parse::open_fence(line).map(|(c, n, _)| (c, n)),
+        };
+        if outside
+            && fence.is_none()
+            && let Some(text) = atx_heading_text(line)
+        {
             let slug = heading_slug(text);
             if slug == symbol
                 || slug
@@ -663,13 +674,14 @@ fn bind_landmark<'a>(root: Node<'a>, src: &[u8], lang: Lang, line: usize) -> Nod
     enclosing_definition(comment, src, lang).unwrap_or(root)
 }
 
-/// The comment node beginning on 0-based `row` (the landmark occurrence's line),
-/// or `None`. Comment nodes are leaves, so the search only descends non-comments.
+/// The comment node spanning 0-based `row` (the landmark occurrence's line, which may
+/// be a block comment's continuation line), or `None`. Comment nodes are leaves, so the
+/// search only descends non-comments.
 fn find_comment_at_row(node: Node, row: usize) -> Option<Node> {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.kind().contains("comment") {
-            if child.start_position().row == row {
+            if (child.start_position().row..=child.end_position().row).contains(&row) {
                 return Some(child);
             }
         } else if let Some(found) = find_comment_at_row(child, row) {
@@ -1123,6 +1135,20 @@ mod tests {
         assert_eq!(
             resolve_symbol(dir.path(), "dup.md", "setup").unwrap(),
             SymbolResolution::Ambiguous,
+        );
+    }
+
+    #[test]
+    fn markdown_heading_inside_a_fence_is_code_not_a_heading() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("g.md"),
+            "## Setup\n```sh\n# setup db\n```\n",
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_symbol(dir.path(), "g.md", "setup").unwrap(),
+            SymbolResolution::Resolved(1),
         );
     }
 }

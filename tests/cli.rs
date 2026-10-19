@@ -281,6 +281,25 @@ fn verbs_run_from_the_work_tree_top_level() {
     assert!(!fixture.path("apps/web/.stele").exists());
 }
 
+// A path argument keeps its cwd-relative meaning under top-level rooting (§3.5): it is
+// rebased onto the cwd's prefix, `..` included.
+#[test]
+fn touching_paths_resolve_against_the_cwd() {
+    let fixture = built();
+    for (dir, path) in [
+        ("apps/web/lib", "billing"),
+        ("apps/web/lib/store", "../billing/x.ex"),
+    ] {
+        let out = fixture
+            .run_in(dir, &["invariants", "--touching", path])
+            .stdout;
+        assert!(
+            out.contains("apps/web/lib/billing · refund-cap"),
+            "{dir}: {out}"
+        );
+    }
+}
+
 // Probe 11 — `stele --version` prints `stele <CARGO_PKG_VERSION>` to stdout and exits 0
 // WITHOUT a lock or git repo (scripts/install.sh calls it to confirm the landed binary
 // runs). The bare `Fixture` is a git repo with no lock; the flag must short-circuit

@@ -3,7 +3,9 @@ name: Release
 # stele release: on a v* tag, create the GitHub release on THIS (public) repo, then
 # build a per-platform matrix producing one artifact per platform —
 # stele-<arch>-<os>.tar.gz (a single stripped `stele` binary) + a .sha256 sidecar.
-# Stable tags (no -suffix) publish as latest; -canary.N / -rc.N publish as prereleases.
+# The release is created as a draft and published only after every platform uploads, so
+# the stable channel never resolves to a release missing an asset. Stable tags (no
+# -suffix) publish as latest; -canary.N / -rc.N publish as prereleases.
 # No downloads repo, no App token, no self-update: the artifact is one static executable
 # published on jgeschwendt/stele itself, so the default GITHUB_TOKEN suffices.
 on:
@@ -12,11 +14,11 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to build (must already exist or be created here)"
+        description: "Existing release tag to (re)build — the source is checked out at this tag"
         required: true
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 permissions:
@@ -27,14 +29,14 @@ jobs:
   create-release:
     runs-on: ubuntu-latest
     steps:
-      - name: Create release (idempotent)
+      - name: Create draft release (idempotent)
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
           # A pre-release suffix (v0.1.0-canary.1, v0.1.0-rc.1) publishes as a
           # prerelease; a bare semver (v0.1.0) publishes as the latest stable release.
-          args=(--repo "$GITHUB_REPOSITORY" --title "$TAG" --notes "stele $TAG")
+          args=(--repo "$GITHUB_REPOSITORY" --draft --title "$TAG" --notes "stele $TAG")
           if [[ "$TAG" == *-* ]]; then args+=(--prerelease); fi
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
             || gh release create "$TAG" "${args[@]}"
@@ -65,6 +67,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
@@ -72,8 +76,9 @@ jobs:
       # binary reports the exact release version via `stele --version` (release.sh reads
       # this same value).
       - name: Stamp version from tag
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
           VSN="${TAG#v}"
           sed -i.bak -E "s/^version = \"[^\"]+\"/version = \"${VSN}\"/" Cargo.toml && rm -f Cargo.toml.bak
           grep -m1 '^version = ' Cargo.toml
@@ -84,9 +89,20 @@ jobs:
       - name: Upload artifact to the release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
           VSN="${TAG#v}"
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
             "dist/${VSN}/stele-${{ matrix.platform }}.tar.gz" \
             "dist/${VSN}/stele-${{ matrix.platform }}.tar.gz.sha256"
+
+  # Publish only once every platform's upload succeeded; a failed build leaves the draft.
+  publish-release:
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false

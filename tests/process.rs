@@ -191,3 +191,25 @@ fn assertion_failure_is_exit_1_not_2() {
     let out = check.combined();
     assert_eq!(check.code, 1, "{out}");
 }
+
+// A reader that closes early (`stele root | head -1`) is EPIPE on stdout, not a §5.3
+// internal error: the process ends by SIGPIPE like any Unix filter — no exit 3, no panic
+// text. The read end is dropped before spawn, so the first write fails deterministically.
+#[test]
+fn epipe_on_stdout_ends_by_sigpipe_quietly() {
+    use std::os::unix::process::ExitStatusExt;
+    let fixture = Fixture::acme();
+    assert_eq!(fixture.run(&["build"]).code, 0);
+    let (reader, writer) = std::io::pipe().expect("pipe");
+    drop(reader);
+    let out = common::isolate_git(
+        std::process::Command::new(common::BIN)
+            .arg("root")
+            .current_dir(&fixture.root),
+    )
+    .stdout(writer)
+    .output()
+    .expect("spawn stele binary");
+    assert_eq!(out.status.signal(), Some(13), "{out:?}");
+    assert!(out.stderr.is_empty(), "{out:?}");
+}

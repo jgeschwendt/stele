@@ -14,7 +14,7 @@ set -eu
 install_dir="${STELE_INSTALL_DIR:-$HOME/.local/bin}"
 bin="$install_dir/stele"
 
-if [ -e "$bin" ]; then
+if [ -e "$bin" ] || [ -L "$bin" ]; then # -L: a dangling symlink fails -e
   rm -f "$bin"
   echo "stele: removed $bin"
 else

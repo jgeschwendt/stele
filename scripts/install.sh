@@ -70,15 +70,17 @@ else
   # prerelease tag suffix (v<semver>-canary.N); stable is the latest release.
   if [ -z "$version" ]; then
     if [ "$channel" = "stable" ]; then
+      # No stable release redirects to /releases, not /tag/ — print only a /tag/ match.
+      # `|| true`: a failed curl/grep must reach the die below, not exit silently (set -e).
       tag=$(curl -fsSI -H "Accept-Encoding: identity" \
         "https://github.com/${repo}/releases/latest" |
-        grep -i '^location:' | sed -E 's|.*/tag/([^[:space:]]+).*|\1|')
+        sed -nE 's|^[Ll]ocation:.*/tag/([^[:space:]]+).*|\1|p' || true)
       [ -n "$tag" ] || die "could not resolve the latest stable release"
     else
       tag=$(fetch_text "https://api.github.com/repos/${repo}/releases" |
         grep -oE '"tag_name": "v[^"]+-'"${channel}"'\.[0-9]+"' |
         sed -E 's/.*"(v[^"]+)".*/\1/' |
-        sort -t. -k1,1V -k2,2V -k3,3V -k4,4n | tail -1)
+        sort -t. -k1,1V -k2,2V -k3,3V -k4,4n | tail -1 || true)
       [ -n "$tag" ] || die "no ${channel} releases found on ${repo}"
     fi
   else

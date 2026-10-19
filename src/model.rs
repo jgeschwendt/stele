@@ -445,7 +445,7 @@ impl Territory {
     fn from_nodes(nodes: &[Node]) -> Self {
         let mut dirs = BTreeMap::new();
         for node in nodes {
-            dirs.insert(declaring_dir(node), node.id.clone());
+            dirs.insert(declaring_dir(&node.source), node.id.clone());
         }
         Self { dirs }
     }
@@ -467,8 +467,8 @@ impl Territory {
 
 /// A node's declaring directory (§4.2): the repo-root-relative parent of its source
 /// AGENTS.md, `""` for the repo root.
-fn declaring_dir(node: &Node) -> String {
-    match node.source.parent() {
+pub fn declaring_dir(source: &Path) -> String {
+    match source.parent() {
         Some(dir) if !dir.as_os_str().is_empty() => dir.to_string_lossy().replace('\\', "/"),
         _ => String::new(),
     }
@@ -477,7 +477,7 @@ fn declaring_dir(node: &Node) -> String {
 /// Whether territory directory `dir` (`""` = root) contains repo-relative `file`
 /// (equal, or a path-segment ancestor — `apps/web` contains `apps/web/x` but not
 /// `apps/website`).
-fn dir_contains(dir: &str, file: &str) -> bool {
+pub fn dir_contains(dir: &str, file: &str) -> bool {
     dir.is_empty() || file == dir || file.strip_prefix(dir).is_some_and(|r| r.starts_with('/'))
 }
 

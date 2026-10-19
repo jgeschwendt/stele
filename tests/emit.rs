@@ -168,22 +168,25 @@ fn emit_rejects_a_node_with_no_region_pointing_at_init() {
     assert!(emit.combined().contains("init"), "{}", emit.combined());
 }
 
-// A lock node id that fails §2.1 normalization is a malformed lock (exit 2, naming the id):
-// emit joins ids into write paths, so `..` or an absolute id would escape the repo.
+// A lock node id or source that fails §2.1 normalization is a malformed lock (exit 2,
+// naming the node): emit joins sources into write paths, so `..` or an absolute one would
+// escape the repo.
 #[test]
 fn emit_rejects_a_lock_node_id_that_escapes_the_repo() {
-    for id in ["../worker", "/abs/worker"] {
+    for (from, to) in [
+        ("apps/worker", "../worker"),
+        ("apps/worker/AGENTS.md", "/abs/AGENTS.md"),
+    ] {
         let fixture = built();
         let lock = fixture.read(".stele/graph.lock");
         fixture.write(
             ".stele/graph.lock",
-            &lock.replace("\"apps/worker\"", &format!("\"{id}\"")),
+            &lock.replace(&format!("\"{from}\""), &format!("\"{to}\"")),
         );
         let emit = fixture.run(&["emit"]);
         assert_eq!(emit.code, 2, "{}", emit.combined());
         assert!(
-            emit.combined()
-                .contains(&format!("malformed lock: node id {id:?}")),
+            emit.combined().contains("id or source is not normalized"),
             "{}",
             emit.combined()
         );

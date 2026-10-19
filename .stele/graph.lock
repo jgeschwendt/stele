@@ -20,7 +20,7 @@
           "text": "every [Cn] citation must stay licensed by research/claims.md's status for that claim — never state a `reported` claim as settled fact",
           "verified": {
             "digest": null,
-            "sha": "80fd753b5e5dac1748d2e58f8b5c2eb30daa9469"
+            "sha": "323bfab7dbd0c5ce78121ebc6b8d079464b791f1"
           }
         },
         {
@@ -32,7 +32,7 @@
           "text": "SPEC.md outranks everything here — code and examples conform to it; changing behavior means revising the spec (and its decision log) first",
           "verified": {
             "digest": null,
-            "sha": "80fd753b5e5dac1748d2e58f8b5c2eb30daa9469"
+            "sha": "323bfab7dbd0c5ce78121ebc6b8d079464b791f1"
           }
         }
       ],
@@ -57,7 +57,8 @@
       },
       "id": "/",
       "kind": "system",
-      "purpose": "stele — typed agent-doc graph reconciled against extracted code truth. SPEC.md is the contract; the Rust engine implements it and self-hosts on this repo."
+      "purpose": "stele — typed agent-doc graph reconciled against extracted code truth. SPEC.md is the contract; the Rust engine implements it and self-hosts on this repo.",
+      "source": "AGENTS.md"
     },
     "research": {
       "budget": null,
@@ -74,7 +75,8 @@
       },
       "id": "research",
       "kind": "container",
-      "purpose": "Evidence base for SPEC's [Cn] citations. claims.md is the ledger every citation stays licensed by (status per claim); report.md the synthesis, findings/ the primary-source notes."
+      "purpose": "Evidence base for SPEC's [Cn] citations. claims.md is the ledger every citation stays licensed by (status per claim); report.md the synthesis, findings/ the primary-source notes.",
+      "source": "research/AGENTS.md"
     },
     "scripts": {
       "budget": null,
@@ -91,7 +93,8 @@
       },
       "id": "scripts",
       "kind": "container",
-      "purpose": "Distribution scripts. install.sh/uninstall.sh land or remove the single stele binary; release.sh assembles the per-platform tarball + sha256 the release workflow publishes on a v* tag."
+      "purpose": "Distribution scripts. install.sh/uninstall.sh land or remove the single stele binary; release.sh assembles the per-platform tarball + sha256 the release workflow publishes on a v* tag.",
+      "source": "scripts/AGENTS.md"
     },
     "src": {
       "budget": null,
@@ -108,7 +111,8 @@
       },
       "id": "src",
       "kind": "container",
-      "purpose": "The stele engine. cli.rs is the command pipeline; model.rs the typed graph, anchors.rs the §2.5 scanner, assert.rs the six §4 checks, extract.rs the extractors, legacy.rs the migrate rewrite."
+      "purpose": "The stele engine. cli.rs is the command pipeline; model.rs the typed graph, anchors.rs the §2.5 scanner, assert.rs the six §4 checks, extract.rs the extractors, legacy.rs the migrate rewrite.",
+      "source": "src/AGENTS.md"
     },
     "tests": {
       "budget": null,
@@ -125,8 +129,9 @@
       },
       "id": "tests",
       "kind": "container",
-      "purpose": "Integration + unit suite and the CI oracle. common/mod.rs is the git-repo harness; gallery.rs mirrors EXAMPLE §8's failure gallery. fixtures/ (steleignored) is the acme worked example."
+      "purpose": "Integration + unit suite and the CI oracle. common/mod.rs is the git-repo harness; gallery.rs mirrors EXAMPLE §8's failure gallery. fixtures/ (steleignored) is the acme worked example.",
+      "source": "tests/AGENTS.md"
     }
   },
-  "version": 2
+  "version": 3
 }

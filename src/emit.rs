@@ -212,8 +212,8 @@ fn collect_hazards(lock: &Lock) -> Vec<HazardRow> {
 }
 
 /// The root Map's first-hop rows (§6 item 4): the root's child nodes plus its
-/// depended nodes, id-sorted and de-duplicated, each as `(id, kind, purpose)`.
-fn first_hop_rows(lock: &Lock, root: &LockNode) -> Vec<(String, String, String)> {
+/// depended nodes, id-sorted and de-duplicated, each as a [`Row`].
+fn first_hop_rows(lock: &Lock, root: &LockNode) -> Vec<Row> {
     let mut ids: Vec<String> = root.contains.clone();
     ids.extend(root.declared.depends.clone());
     ids.sort();
@@ -221,22 +221,26 @@ fn first_hop_rows(lock: &Lock, root: &LockNode) -> Vec<(String, String, String)>
     ids.iter().filter_map(|id| node_row(lock, id)).collect()
 }
 
-/// A component's child-router rows: its `contains[]` child nodes as `(id, kind,
-/// purpose)`, in the lock's (sorted) `contains` order.
-fn child_rows(lock: &Lock, node: &LockNode) -> Vec<(String, String, String)> {
+/// A component's child-router rows: its `contains[]` child nodes as [`Row`]s,
+/// in the lock's (sorted) `contains` order.
+fn child_rows(lock: &Lock, node: &LockNode) -> Vec<Row> {
     node.contains
         .iter()
         .filter_map(|id| node_row(lock, id))
         .collect()
 }
 
-/// `(id, kind, purpose)` for a node id present in the lock, else `None`.
-fn node_row(lock: &Lock, id: &str) -> Option<(String, String, String)> {
+/// A router row: `(id, kind, purpose, source)`.
+type Row = (String, String, String, String);
+
+/// `(id, kind, purpose, source)` for a node id present in the lock, else `None`.
+fn node_row(lock: &Lock, id: &str) -> Option<Row> {
     lock.nodes.get(id).map(|n| {
         (
             id.to_string(),
             n.kind.clone(),
             n.purpose.clone().unwrap_or_default(),
+            n.source.clone(),
         )
     })
 }
@@ -248,15 +252,15 @@ const ROUTER_HEADERS: [&str; ROUTER_COLUMNS] = ["node", "kind", "purpose", "unfo
 
 /// A router table (§6 item 4) as markdown rows: header, separator, then one row per
 /// node. Every column is padded to its widest cell (the fixture's scheme). The
-/// `unfold` cell is the `stele unfold`/read-AGENTS.md pointer for the node id.
-fn router_table(rows: &[(String, String, String)]) -> Vec<String> {
+/// `unfold` cell is the `stele unfold` pointer for the node id, or its declaring file.
+fn router_table(rows: &[Row]) -> Vec<String> {
     let mut cells: Vec<[String; ROUTER_COLUMNS]> = vec![ROUTER_HEADERS.map(str::to_string)];
-    for (id, kind, purpose) in rows {
+    for (id, kind, purpose, source) in rows {
         cells.push([
             id.clone(),
             kind.clone(),
             purpose.clone(),
-            format!("`stele unfold {id}` · or read `{id}/AGENTS.md`"),
+            format!("`stele unfold {id}` · or read `{source}`"),
         ]);
     }
 

@@ -15,15 +15,17 @@ Pin a version with `… | bash -s v0.3.0`; prereleases with `… | channel=canar
 A repo whose lock is `version` 1 fails every verb until it is migrated (SPEC §3.2, no dual-read) —
 
 ```
-committed lock is version 1; this engine writes version 2. run stele migrate, then stele build
+committed lock is version 1; this engine writes version 3. run stele migrate, then stele build
 ```
+
+A 0.3.x `version` 2 lock needs only `stele build`.
 
 One pass, once per repo:
 
 ```sh
 stele migrate   # rewrites the old notation in place, over build's scan scope; idempotent
 git diff        # review it — migrate warns on a dirty tree rather than refusing
-stele build     # re-locks at version 2
+stele build     # re-locks at version 3
 stele emit      # re-renders the regions with the new markers
 ```
 

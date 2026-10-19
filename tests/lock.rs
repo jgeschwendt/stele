@@ -81,7 +81,7 @@ fn canonical_bytes_obey_the_escaping_contract() {
 // The on-disk acme lock sorts every object's keys by Unicode scalar value
 // (§3.2): top-level adrs < landmarks < nodes < version, and the first node
 // object's fields budget < claims < commands < contains < declared < extracted
-// < id < kind < purpose.
+// < id < kind < purpose < source.
 #[test]
 fn acme_lock_has_canonical_key_order() {
     let fixture = Fixture::acme();
@@ -104,6 +104,7 @@ fn acme_lock_has_canonical_key_order() {
             "\"id\"",
             "\"kind\"",
             "\"purpose\"",
+            "\"source\"",
         ],
     );
 }

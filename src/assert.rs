@@ -236,6 +236,9 @@ pub struct Context<'a> {
     pub committed: &'a Lock,
     pub config: &'a Config,
     pub graph: &'a Graph,
+    /// The graph home (§3.5) holding the engine's artifacts — here the `--freeze`
+    /// baseline. Equal to [`Self::root`] in normal mode.
+    pub home: &'a Path,
     pub root: &'a Path,
     /// `check --run-commands` (§4.6): additionally EXECUTE each declared command from
     /// the repo root (the off-by-default bonfires tier). Resolution runs regardless.
@@ -509,7 +512,7 @@ struct StructuralViolation {
 /// ones baselined in `.stele/freeze.json` (a NEW violation still surfaces; a baselined
 /// one that no longer occurs is simply unused).
 fn structural(ctx: &Context) -> Result<Vec<Finding>> {
-    let baseline = read_freeze_baseline(ctx.root)?;
+    let baseline = read_freeze_baseline(ctx.home)?;
     Ok(structural_violations(ctx)
         .into_iter()
         .filter(|violation| !baseline.contains(&violation.key))
@@ -633,8 +636,8 @@ struct FreezeEntry {
 
 /// Read the committed baseline (§4.2). An absent file is an empty baseline; malformed
 /// content is an input error (exit 2); a genuine IO failure is internal (exit 3).
-fn read_freeze_baseline(root: &Path) -> Result<BTreeSet<FreezeKey>> {
-    let text = match std::fs::read_to_string(root.join(FREEZE_DIR).join(FREEZE_FILE)) {
+fn read_freeze_baseline(home: &Path) -> Result<BTreeSet<FreezeKey>> {
+    let text = match std::fs::read_to_string(home.join(FREEZE_DIR).join(FREEZE_FILE)) {
         Ok(text) => text,
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(BTreeSet::new()),
         Err(e) => return Err(SteleError::internal(format!("read {FREEZE_PATH}: {e}"))),
@@ -663,7 +666,7 @@ pub fn write_freeze(ctx: &Context) -> Result<usize> {
         .collect();
     keys.sort();
     keys.dedup();
-    let dir = ctx.root.join(FREEZE_DIR);
+    let dir = ctx.home.join(FREEZE_DIR);
     std::fs::create_dir_all(&dir)
         .map_err(|e| SteleError::internal(format!("create {FREEZE_DIR}: {e}")))?;
     std::fs::write(dir.join(FREEZE_FILE), freeze_to_canonical_string(&keys))

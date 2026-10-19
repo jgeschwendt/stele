@@ -220,7 +220,7 @@ impl LockNode {
         imports.sort();
 
         Self {
-            budget: node.budget.map(|b| b as i64),
+            budget: node.budget.map(|b| i64::try_from(b).unwrap_or(i64::MAX)),
             claims,
             commands: node.commands.clone(),
             contains,

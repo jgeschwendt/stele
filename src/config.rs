@@ -7,7 +7,7 @@
 //! naming the offender. Strictness is enforced by `deny_unknown_fields` on every
 //! table plus the closed [`AssertionClass`] enum for the disable list.
 
-use crate::model::{Result, SteleError};
+use crate::model::{Result, SteleError, normalize_id};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::io::ErrorKind;
@@ -86,7 +86,9 @@ impl Default for Exhaustiveness {
 pub struct Freshness {
     pub churn_threshold: Option<u32>,
     pub enforced_leash: Option<u32>,
-    /// Per-node overrides keyed by node id; ids are arbitrary and never rejected.
+    /// Per-node overrides keyed by node id, normalized at load like every id (§2.1) so
+    /// `./apps/web/` matches `apps/web`; ids are arbitrary and never rejected (one
+    /// [`normalize_id`] refuses is kept verbatim and simply matches no node).
     pub node: BTreeMap<String, NodeFreshness>,
 }
 
@@ -111,7 +113,8 @@ pub enum AssertionClass {
     Structural,
 }
 
-/// Load `.stele/config.toml` (SPEC §3.4). An absent file yields all defaults; an
+/// Load `.stele/config.toml` (SPEC §3.4), normalizing the `[freshness.node]` keys. An
+/// absent file yields all defaults; an
 /// unknown key or unknown disable-class is an input error (exit 2); a genuine IO
 /// failure is an internal error (exit 3). `build` never calls this.
 pub fn load(root: &Path) -> Result<Config> {
@@ -121,5 +124,11 @@ pub fn load(root: &Path) -> Result<Config> {
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Config::default()),
         Err(e) => return Err(SteleError::internal(format!("read {CONFIG_PATH}: {e}"))),
     };
-    toml::from_str(&text).map_err(|e| SteleError::input_msg(format!("{CONFIG_PATH}: {e}")))
+    let mut config: Config =
+        toml::from_str(&text).map_err(|e| SteleError::input_msg(format!("{CONFIG_PATH}: {e}")))?;
+    config.freshness.node = std::mem::take(&mut config.freshness.node)
+        .into_iter()
+        .map(|(id, node)| (normalize_id(&id).unwrap_or(id), node))
+        .collect();
+    Ok(config)
 }

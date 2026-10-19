@@ -51,8 +51,8 @@ fn round_trip_is_a_fixpoint() {
 }
 
 // The canonical byte invariants (§3.2): exactly one trailing LF, no trailing
-// whitespace on any line, named escapes used, C0 controls as \u00xx, and
-// non-ASCII emitted raw (never \u-escaped).
+// whitespace on any line, named escapes used, C0 controls as \u00xx,
+// non-ASCII emitted raw (never \u-escaped), and a u64 budget saturating at i64.
 #[test]
 fn canonical_bytes_obey_the_escaping_contract() {
     let out = lock::to_canonical_string(&Lock::from_graph(&adversarial_graph()));
@@ -74,6 +74,10 @@ fn canonical_bytes_obey_the_escaping_contract() {
     assert!(out.contains("\\u0001"), "C0 control not escaped as \\u00xx");
     assert!(out.contains('é') && out.contains('世'), "non-ASCII not raw");
     assert!(!out.contains("\\u00e9"), "non-ASCII was \\u-escaped");
+    assert!(
+        out.contains(&format!("\"budget\": {}", i64::MAX)),
+        "a budget past i64 must saturate, not wrap"
+    );
 }
 
 // ─── canonical key order on real acme output ──────────────────────────────────
@@ -226,7 +230,7 @@ fn root_node() -> Node {
             decided_by: vec!["§ 0007".to_string()],
             allow: Vec::new(),
         },
-        budget: Some(900),
+        budget: Some(u64::MAX),
         source: PathBuf::from("AGENTS.md"),
         extracted_imports: Vec::new(),
         contains: Vec::new(),

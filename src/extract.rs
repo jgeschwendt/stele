@@ -17,6 +17,7 @@
 //! member (a tracked `Cargo.toml` `[package].name`) that owns it; Python maps a
 //! dotted module to the tracked file that would define it.
 
+use crate::anchors::walk;
 use crate::model::{ImportRef, Result, SteleError, Territory, read_text};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -197,16 +198,15 @@ impl Extractor for Elixir {
 /// Invoke `sink` with the module name of every `defmodule NAME do` in the tree:
 /// a `call` whose leading identifier is `defmodule` and whose `arguments` hold an
 /// `alias`.
-fn collect_defmodules(node: Node, src: &[u8], sink: &mut impl FnMut(String)) {
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if child.kind() == "call"
-            && let Some(name) = defmodule_name(child, src)
+fn collect_defmodules(root: Node, src: &[u8], sink: &mut impl FnMut(String)) {
+    walk(root, |node, _| {
+        if node.kind() == "call"
+            && let Some(name) = defmodule_name(node, src)
         {
             sink(name);
         }
-        collect_defmodules(child, src, sink);
-    }
+        true
+    });
 }
 
 /// The module name of a `defmodule` call, or `None` for any other call.
@@ -308,24 +308,23 @@ fn workspace_packages(ctx: &Ctx) -> Result<Vec<Package>> {
 /// Collect every module specifier paired with its 0-based line: the `string` source
 /// of an `import`/`export … from` statement and the first string argument of a
 /// `require(…)` call.
-fn collect_ts_sources(node: Node, src: &[u8], out: &mut Vec<(String, usize)>) {
-    match node.kind() {
-        "export_statement" | "import_statement" => {
-            if let Some(source) = string_child(node, src) {
-                out.push((source, node.start_position().row));
+fn collect_ts_sources(root: Node, src: &[u8], out: &mut Vec<(String, usize)>) {
+    walk(root, |node, _| {
+        match node.kind() {
+            "export_statement" | "import_statement" => {
+                if let Some(source) = string_child(node, src) {
+                    out.push((source, node.start_position().row));
+                }
             }
-        }
-        "call_expression" => {
-            if let Some(source) = require_source(node, src) {
-                out.push((source, node.start_position().row));
+            "call_expression" => {
+                if let Some(source) = require_source(node, src) {
+                    out.push((source, node.start_position().row));
+                }
             }
+            _ => {}
         }
-        _ => {}
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_ts_sources(child, src, out);
-    }
+        true
+    });
 }
 
 /// The specifier of a `require("…")` call, or `None` for any other call.
@@ -477,24 +476,23 @@ impl Extractor for RustLang {
 /// Collect the head crate segment of every `use` declaration and `extern crate`
 /// paired with its 0-based line, dropping the intra-crate roots
 /// `crate`/`self`/`super`.
-fn collect_rust_crate_heads(node: Node, src: &[u8], out: &mut Vec<(String, usize)>) {
-    match node.kind() {
-        "use_declaration" => {
-            if let Some(head) = use_head_segment(node, src) {
-                out.push((head, node.start_position().row));
+fn collect_rust_crate_heads(root: Node, src: &[u8], out: &mut Vec<(String, usize)>) {
+    walk(root, |node, _| {
+        match node.kind() {
+            "use_declaration" => {
+                if let Some(head) = use_head_segment(node, src) {
+                    out.push((head, node.start_position().row));
+                }
             }
-        }
-        "extern_crate_declaration" => {
-            if let Some(head) = extern_crate_name(node, src) {
-                out.push((head, node.start_position().row));
+            "extern_crate_declaration" => {
+                if let Some(head) = extern_crate_name(node, src) {
+                    out.push((head, node.start_position().row));
+                }
             }
+            _ => {}
         }
-        _ => {}
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_rust_crate_heads(child, src, out);
-    }
+        true
+    });
 }
 
 /// The head segment of a `use` path (`foo` in `use foo::bar::Baz`), or `None` for
@@ -590,42 +588,41 @@ fn python_module_name(path: &str) -> String {
 /// 0-based line: each `dotted_name` (or `aliased_import`) under an
 /// `import_statement`, and the `module_name` of a `from`-import when it is dotted
 /// (relative imports skipped).
-fn collect_python_modules(node: Node, src: &[u8], out: &mut Vec<(String, usize)>) {
-    match node.kind() {
-        "import_statement" => {
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                match child.kind() {
-                    "dotted_name" => {
-                        if let Ok(text) = child.utf8_text(src) {
-                            out.push((text.to_string(), child.start_position().row));
+fn collect_python_modules(root: Node, src: &[u8], out: &mut Vec<(String, usize)>) {
+    walk(root, |node, _| {
+        match node.kind() {
+            "import_statement" => {
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    match child.kind() {
+                        "dotted_name" => {
+                            if let Ok(text) = child.utf8_text(src) {
+                                out.push((text.to_string(), child.start_position().row));
+                            }
                         }
-                    }
-                    "aliased_import" => {
-                        if let Some(name) = child.child_by_field_name("name")
-                            && let Ok(text) = name.utf8_text(src)
-                        {
-                            out.push((text.to_string(), child.start_position().row));
+                        "aliased_import" => {
+                            if let Some(name) = child.child_by_field_name("name")
+                                && let Ok(text) = name.utf8_text(src)
+                            {
+                                out.push((text.to_string(), child.start_position().row));
+                            }
                         }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
-        }
-        "import_from_statement" => {
-            if let Some(module) = node.child_by_field_name("module_name")
-                && module.kind() == "dotted_name"
-                && let Ok(text) = module.utf8_text(src)
-            {
-                out.push((text.to_string(), module.start_position().row));
+            "import_from_statement" => {
+                if let Some(module) = node.child_by_field_name("module_name")
+                    && module.kind() == "dotted_name"
+                    && let Ok(text) = module.utf8_text(src)
+                {
+                    out.push((text.to_string(), module.start_position().row));
+                }
             }
+            _ => {}
         }
-        _ => {}
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_python_modules(child, src, out);
-    }
+        true
+    });
 }
 
 // ─── shared helpers ───────────────────────────────────────────────────────────
@@ -649,33 +646,32 @@ fn parse(parser: &mut Parser, language: &Language, src: &str, file: &str) -> Res
 /// leaf `alias`es. Such a group is EXPANDED into its component modules (`A.B.C`,
 /// `A.B.D`); the bare prefix `A.B` is NOT itself a reference, so the group's inner
 /// aliases are consumed here and never collected standalone.
-fn collect_module_refs(node: Node, src: &[u8], out: &mut Vec<(String, usize)>) {
-    if node.kind() == "dot"
-        && let Some(tuple) = node
-            .child_by_field_name("right")
-            .filter(|r| r.kind() == "tuple")
-        && let Some(prefix) = node
-            .child_by_field_name("left")
-            .and_then(|l| l.utf8_text(src).ok())
-    {
-        let mut cursor = tuple.walk();
-        for member in tuple.children(&mut cursor).filter(|c| c.kind() == "alias") {
-            if let Ok(name) = member.utf8_text(src) {
-                out.push((format!("{prefix}.{name}"), member.start_position().row));
+fn collect_module_refs(root: Node, src: &[u8], out: &mut Vec<(String, usize)>) {
+    walk(root, |node, _| {
+        if node.kind() == "dot"
+            && let Some(tuple) = node
+                .child_by_field_name("right")
+                .filter(|r| r.kind() == "tuple")
+            && let Some(prefix) = node
+                .child_by_field_name("left")
+                .and_then(|l| l.utf8_text(src).ok())
+        {
+            let mut cursor = tuple.walk();
+            for member in tuple.children(&mut cursor).filter(|c| c.kind() == "alias") {
+                if let Ok(name) = member.utf8_text(src) {
+                    out.push((format!("{prefix}.{name}"), member.start_position().row));
+                }
             }
+            return false;
         }
-        return;
-    }
-    if node.kind() == "alias"
-        && let Ok(text) = node.utf8_text(src)
-    {
-        out.push((text.to_string(), node.start_position().row));
-        return;
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_module_refs(child, src, out);
-    }
+        if node.kind() == "alias"
+            && let Ok(text) = node.utf8_text(src)
+        {
+            out.push((text.to_string(), node.start_position().row));
+            return false;
+        }
+        true
+    });
 }
 
 /// The trimmed source text of the line at 0-based `row` — a reference's own line

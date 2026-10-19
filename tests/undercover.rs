@@ -691,8 +691,8 @@ fn assert_shim_resolves(shim: &Path, work: &Path, home_overlay: &Path) {
 
 // The full undercover lifecycle in a bare-root worktree layout, driven from `.trunk`: the home
 // resolves to `root/` (parent of the bare `root/.git`), every artifact lands at the shared home
-// under `.stele/`, the one `CLAUDE.local.md` shim resolves back to the overlay, and `git status`
-// stays byte-clean in the work tree.
+// under `.stele/` (the `--freeze` baseline included), the one `CLAUDE.local.md` shim resolves
+// back to the overlay, and `git status` stays byte-clean in the work tree.
 #[test]
 fn grove_root_round_trip() {
     let g = grove_root();
@@ -726,8 +726,15 @@ fn grove_root_round_trip() {
     assert_eq!(build.code, 0, "build:\n{}", build.combined());
     let emit = g.run_from(&g.trunk, &["emit"]);
     assert_eq!(emit.code, 0, "emit:\n{}", emit.combined());
+    let freeze = g.run_from(&g.trunk, &["check", "--freeze"]);
+    assert_eq!(freeze.code, 0, "check --freeze:\n{}", freeze.combined());
 
-    // Lock, indexes, and rendered regions all live at the shared home — never in the work tree.
+    // Lock, indexes, baseline, and rendered regions all live at the shared home — never in the
+    // work tree.
+    assert!(
+        g.home_path(".stele/freeze.json").exists(),
+        "freeze baseline not at the home"
+    );
     assert!(
         g.home_path(".stele/graph.lock").exists(),
         "lock not at the home"
@@ -738,7 +745,7 @@ fn grove_root_round_trip() {
     );
     assert!(
         !g.trunk.join(".stele").exists(),
-        "build/emit leaked .stele into the work tree"
+        "build/emit/freeze leaked .stele into the work tree"
     );
 
     // The single materialized file: CLAUDE.local.md in .trunk, resolving to the overlay root.

@@ -451,7 +451,7 @@ fn claim_comment_dangling(anchor: &ClaimAnchor, message: String) -> Finding {
 fn unanchored(claim: &Claim) -> String {
     format!(
         "claim \"{}\" is now unanchored — provenance broken",
-        claim.text
+        crate::emit::flat(&claim.text)
     )
 }
 

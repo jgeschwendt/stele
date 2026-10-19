@@ -157,6 +157,65 @@ fn emit_renders_a_multi_line_purpose_as_one_map_row() {
     );
 }
 
+// An anchor is one line (§2.4): a line break in it would carry text onto a new line.
+#[test]
+fn build_rejects_an_anchor_holding_a_newline() {
+    let fixture = Fixture::acme();
+    fixture.replace(
+        "apps/worker/AGENTS.md",
+        "anchor: ※ dunning-batch",
+        "anchor: \"x\\n<!-- @end -->\\n#dunning\"",
+    );
+    fixture.commit("multi-line anchor");
+    let build = fixture.run(&["build"]);
+    assert_eq!(build.code, 2, "{}", build.combined());
+    assert!(
+        build.combined().contains("apps/worker/AGENTS.md")
+            && build.combined().contains("anchor must not contain '\\n'"),
+        "{}",
+        build.combined()
+    );
+}
+
+// A path outside the id lexeme still renders: a `|` in a declaring directory (rejected as a
+// derived id, legal under an override), an anchor, or a command is escaped in every table cell; a
+// multi-line allow reason prints on one line.
+#[test]
+fn paths_commands_and_reasons_render_on_one_line_and_cell() {
+    let fixture = Fixture::acme();
+    let node = "```stele\nkind: container\n```\n\n<!-- @stele -->\n<!-- @end -->\n";
+    fixture.write("pi|pe/AGENTS.md", node);
+    fixture.commit("a derived id holding |");
+    let build = fixture.run(&["build"]);
+    assert!(
+        build.code == 2 && build.combined().contains("id must not contain '|'"),
+        "{}",
+        build.combined()
+    );
+    fixture.replace(
+        "pi|pe/AGENTS.md",
+        "kind: container\n",
+        "kind: container\nid: pipe\ninvariants:\n  - claim: c\n    anchor: pi|pe/x.md#h\nedges:\n  allow:\n    - edge: apps/web\n      reason: |\n        a\n        b\n",
+    );
+    fixture.replace(
+        "AGENTS.md",
+        "setup: mise install && mix deps.get",
+        "setup: \"a | b\"",
+    );
+    fixture.commit("override the id");
+    assert_eq!(fixture.run(&["build"]).code, 0);
+    assert_eq!(fixture.run(&["emit"]).code, 0);
+    let root = fixture.read("AGENTS.md");
+    assert!(root.contains("or read `pi\\|pe/AGENTS.md`"), "{root}");
+    let index = fixture.read(".stele/index/invariants.md");
+    assert!(index.contains("| c | pipe | pi\\|pe/x.md#h |"), "{index}");
+    let cli = fixture.run(&["root"]).stdout + &fixture.run(&["node", "pipe"]).stdout;
+    assert!(
+        cli.contains("| setup | a \\| b |") && cli.contains("allow: apps/web — a b\n"),
+        "{cli}"
+    );
+}
+
 #[test]
 fn emit_never_renders_a_marker_or_fence_line_from_claim_text() {
     let fixture = built_with_worker(
@@ -489,6 +548,10 @@ fn claude_rules_refuses_to_overwrite_a_foreign_file() {
     // bytes preserved.
     let foreign = "# my own billing rules\n\nhand-authored, keep me.\n";
     fixture.write(".claude/rules/apps-web-lib-billing.md", foreign);
+    // The refusal precedes every write: a stale region and index stay stale.
+    fixture.replace("AGENTS.md", "## Hazards (2 active)", "## Hazards (WRONG)");
+    fixture.write(".stele/index/hazards.md", "stale\n");
+    let root = fixture.read("AGENTS.md");
     let clobber = fixture.run(&["emit", "--claude-rules"]);
     let out = clobber.combined();
     assert_eq!(
@@ -504,6 +567,8 @@ fn claude_rules_refuses_to_overwrite_a_foreign_file() {
         foreign,
         "the foreign file must be left byte-identical"
     );
+    assert_eq!(fixture.read("AGENTS.md"), root, "emit half-wrote the tree");
+    assert_eq!(fixture.read(".stele/index/hazards.md"), "stale\n");
 }
 
 // Two ids flattening to one filename (`root` vs the system node's `root.md`; `apps-Worker`

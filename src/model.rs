@@ -522,12 +522,38 @@ pub fn normalize_id(raw: &str) -> std::result::Result<String, String> {
     Ok(segments.join("/"))
 }
 
+/// A node id or edge target (§2.1): [`normalize_id`], then the id lexeme — no line break,
+/// control character, `|`, or backtick, so an id renders verbatim on any generated line or cell.
+pub fn node_id(raw: &str) -> std::result::Result<String, String> {
+    let id = normalize_id(raw)?;
+    match id
+        .chars()
+        .find(|&c| unrenderable(c) || matches!(c, '|' | '`'))
+    {
+        Some(c) => Err(format!("id must not contain {c:?}: {raw:?}")),
+        None => Ok(id),
+    }
+}
+
+/// Whitespace other than the ASCII space, or a control character: barred from ids and anchors
+/// (§2.1, §2.4) — either could break a generated line.
+fn unrenderable(c: char) -> bool {
+    c != ' ' && (c.is_whitespace() || c.is_control())
+}
+
 /// Derive a claim's slug from its `anchor` (§2.4). A landmark anchor ([`LANDMARK_ANCHOR_PREFIX`]
 /// then the slug) yields the remainder verbatim; a `<path>#<symbol>` anchor yields `<symbol>` lowercased with
 /// each maximal run of non-`[a-z0-9]` collapsed to a single `-` and leading/trailing
 /// `-` stripped. Either way the result must satisfy the §2.5 slug lexeme
-/// `[a-z0-9]+(-[a-z0-9]+)*`; a malformed slug is a §5.3 input error (exit 2).
+/// `[a-z0-9]+(-[a-z0-9]+)*`, and the anchor is one line (no line break or control character
+/// past the landmark prefix); a malformed slug or anchor is a §5.3 input error (exit 2).
 pub fn derive_slug(anchor: &str) -> std::result::Result<String, String> {
+    let bare = anchor
+        .strip_prefix(LANDMARK_ANCHOR_PREFIX)
+        .unwrap_or(anchor);
+    if let Some(c) = bare.chars().find(|&c| unrenderable(c)) {
+        return Err(format!("anchor must not contain {c:?}: {anchor:?} (§2.4)"));
+    }
     let slug = match anchor.strip_prefix(LANDMARK_ANCHOR_PREFIX) {
         Some(rest) => rest.to_string(),
         None => {

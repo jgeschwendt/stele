@@ -353,6 +353,64 @@ fn claude_rules_refuses_to_overwrite_a_foreign_file() {
     );
 }
 
+// Two ids flattening to one filename (`root` vs the system node's `root.md`) would let the
+// later node silently overwrite the earlier one's claims: exit 2 naming both, nothing written.
+#[test]
+fn claude_rules_reject_two_nodes_sharing_a_filename() {
+    let fixture = Fixture::acme();
+    fixture.write("root/x.md", "# h\n");
+    fixture.write(
+        "root/AGENTS.md",
+        "```stele\nkind: container\npurpose: r\ninvariants:\n  - claim: c\n    anchor: x.md#h\n```\n\n<!-- @stele -->\n<!-- @end -->\n",
+    );
+    fixture.commit("a top-level root node");
+    assert_eq!(fixture.run(&["build"]).code, 0);
+    for args in [
+        &["emit", "--claude-rules"][..],
+        &["emit", "--check", "--claude-rules"],
+    ] {
+        let emit = fixture.run(args);
+        let out = emit.combined();
+        assert_eq!(emit.code, 2, "{out}");
+        assert!(
+            out.contains("`/` and `root`") && out.contains("root.md"),
+            "{out}"
+        );
+    }
+    assert!(!fixture.path(".claude/rules").exists());
+}
+
+// The rules projection is whole: `emit --claude-rules` prunes marker-stamped files no node
+// renders any more (a foreign file stays), and `emit --check --claude-rules` diffs it.
+#[test]
+fn claude_rules_prune_stale_files_and_are_checked() {
+    let fixture = built();
+    assert_eq!(fixture.run(&["emit", "--claude-rules"]).code, 0);
+    fixture.write(
+        ".claude/rules/gone.md",
+        &format!("{CLAUDE_RULE_MARKER}\nstale\n"),
+    );
+    fixture.write(".claude/rules/mine.md", "hand-authored\n");
+    fixture.delete_file(".claude/rules/apps-worker.md");
+
+    let check = fixture.run(&["emit", "--check", "--claude-rules"]);
+    let out = check.combined();
+    assert_eq!(check.code, 1, "{out}");
+    assert!(
+        out.contains(".claude/rules/apps-worker.md")
+            && out.contains(".claude/rules/gone.md")
+            && !out.contains("mine.md"),
+        "{out}"
+    );
+    assert_eq!(fixture.run(&["emit", "--check"]).code, 0);
+
+    assert_eq!(fixture.run(&["emit", "--claude-rules"]).code, 0);
+    assert!(!fixture.path(".claude/rules/gone.md").exists());
+    assert_eq!(fixture.read(".claude/rules/mine.md"), "hand-authored\n");
+    let check = fixture.run(&["emit", "--check", "--claude-rules"]);
+    assert_eq!(check.code, 0, "{}", check.combined());
+}
+
 // ─── §4.4 budget chain counts plain (non-node) AGENTS.md on the path (F6) ─────
 
 // A VCS-tracked AGENTS.md that declares no `stele` node is still a SPEC §3.1 degradation

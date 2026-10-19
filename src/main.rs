@@ -4,7 +4,19 @@
 
 use stele::model::ExitCode;
 
+#[cfg(unix)]
+unsafe extern "C" {
+    fn signal(signum: i32, handler: usize) -> usize;
+}
+
 fn main() {
+    // Rust ignores SIGPIPE, so a reader closing early (`stele root | head`) panics in
+    // println! → exit 3. Restore SIG_DFL (SIGPIPE is 13 on every shipped target): the
+    // process ends quietly by SIGPIPE, like any Unix filter (§5.3).
+    #[cfg(unix)]
+    unsafe {
+        signal(13, 0);
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let code = std::panic::catch_unwind(|| stele::cli::run(&args)).unwrap_or_else(|_| {
         eprintln!("stele: internal error (unexpected panic)");

@@ -46,5 +46,8 @@ esac
 echo "smoke: uninstalling"
 HOME="$HOME_DIR" STELE_INSTALL_DIR="$BIN_DIR" sh "$ROOT/scripts/uninstall.sh"
 [ ! -e "$BIN_DIR/stele" ] || { echo "FAIL: uninstall left $BIN_DIR/stele behind"; exit 1; }
+ln -s "$WORK/gone" "$BIN_DIR/stele" # a hand-made link whose target was deleted
+STELE_INSTALL_DIR="$BIN_DIR" sh "$ROOT/scripts/uninstall.sh" >/dev/null
+[ ! -L "$BIN_DIR/stele" ] || { echo "FAIL: uninstall left a dangling $BIN_DIR/stele"; exit 1; }
 
 echo "smoke: PASS — release → install → --version ($GOT) → uninstall"

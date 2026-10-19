@@ -99,7 +99,7 @@ fn render_component(lock: &Lock, node: &LockNode) -> String {
         .map(|(slug, lm)| {
             format!(
                 "- {LANDMARK_ANCHOR_PREFIX}{slug} → {}:{}",
-                relativize(&lm.file, &node.id),
+                relativize(&lm.file, node.dir()),
                 lm.line
             )
         })
@@ -297,9 +297,10 @@ fn render_row(cells: &[String; ROUTER_COLUMNS], widths: &[usize; ROUTER_COLUMNS]
 }
 
 /// A repo-relative file path re-rooted at the node's directory (§3.1 interior
-/// anchors show `charge.ex`, not the full path): strip the `<node-id>/` prefix.
-fn relativize(file: &str, node_id: &str) -> String {
-    file.strip_prefix(&format!("{node_id}/"))
+/// anchors show `charge.ex`, not the full path): strip the declaring `<dir>/` prefix —
+/// never the id, which an `id:` override (§2.1) decouples from the directory.
+fn relativize(file: &str, dir: &str) -> String {
+    file.strip_prefix(&format!("{dir}/"))
         .unwrap_or(file)
         .to_string()
 }

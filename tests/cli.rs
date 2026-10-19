@@ -156,13 +156,19 @@ fn id_override_routes_by_the_declaring_file() {
     let fixture = Fixture::acme();
     fixture.write(
         "docs/AGENTS.md",
-        "```stele\nkind: container\nid: documentation\npurpose: docs\ninvariants:\n  - claim: docs stay current\n    anchor: ※ docs-current\n```\n\n<!-- @stele -->\n<!-- @end -->\n",
+        "```stele\nkind: component\nid: documentation\npurpose: docs\ninvariants:\n  - claim: docs stay current\n    anchor: ※ docs-current\n```\n\n<!-- @stele -->\n<!-- @end -->\n",
     );
+    fixture.write("docs/guide.md", "<!-- ※ docs-current -->\n");
     fixture.commit("declare an id-override node");
     for verb in [&["build"][..], &["emit"], &["emit", "--check"]] {
         let run = fixture.run(verb);
         assert_eq!(run.code, 0, "{verb:?}: {}", run.combined());
     }
+    assert!(
+        fixture
+            .read("docs/AGENTS.md")
+            .contains("※ docs-current → guide.md:1")
+    );
     assert_eq!(fixture.read("docs/CLAUDE.md"), "@AGENTS.md\n");
     assert!(
         fixture

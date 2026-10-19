@@ -181,16 +181,38 @@ fn git_common_dir(work: &Path) -> Option<PathBuf> {
 /// partial lock (or the undercover `CLAUDE.local.md` shim) beside the cwd. In a linked
 /// worktree this is that worktree's own root.
 fn work_tree_root(cwd: &Path) -> PathBuf {
-    let output = Command::new("git")
-        .args(["rev-parse", "--show-cdup"])
-        .current_dir(cwd)
-        .output();
-    match output {
-        Ok(out) if out.status.success() && !out.stdout.trim_ascii().is_empty() => {
-            cwd.join(String::from_utf8_lossy(out.stdout.trim_ascii()).as_ref())
-        }
-        _ => cwd.to_path_buf(),
+    match git_stdout(cwd, "--show-cdup") {
+        cdup if cdup.is_empty() => cwd.to_path_buf(),
+        cdup => cwd.join(cdup),
     }
+}
+
+/// The trimmed stdout of `git rev-parse <flag>` in `cwd`, empty on any git failure.
+fn git_stdout(cwd: &Path, flag: &str) -> String {
+    Command::new("git")
+        .args(["rev-parse", flag])
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|out| String::from_utf8_lossy(out.stdout.trim_ascii()).into_owned())
+        .unwrap_or_default()
+}
+
+/// `path`, typed relative to the cwd, as a top-level-relative path: joined onto the cwd's
+/// `--show-prefix` with `.`/`..` folded lexically (a `..` above the top level is dropped).
+fn rebase_on_cwd(prefix: &str, path: &str) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    for segment in prefix.split('/').chain(path.split('/')) {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out.join("/")
 }
 
 /// Resolve the [`Workspace`] for the cwd once at dispatch entry (§3.5). `work` is the
@@ -248,11 +270,15 @@ pub fn run(args: &[String]) -> i32 {
         return crate::serve::run(Path::new("."), args);
     }
     let json = args.iter().any(|a| a == JSON_FLAG);
-    let rest: Vec<&str> = args
-        .iter()
-        .map(String::as_str)
-        .filter(|a| *a != JSON_FLAG)
-        .collect();
+    let mut rest: Vec<String> = args.iter().filter(|a| *a != JSON_FLAG).cloned().collect();
+    // Every verb runs from the top level (§3.5), so a typed path argument — `--touching`,
+    // the only one — is rebased onto the cwd's prefix to keep its cwd-relative meaning.
+    if let Some(i) = rest.iter().position(|a| a == "--touching")
+        && let Some(path) = rest.get_mut(i + 1)
+    {
+        *path = rebase_on_cwd(&git_stdout(Path::new("."), "--show-prefix"), path);
+    }
+    let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
     // Resolve the home/work split once (§3.5), after the serve/--version short-circuits;
     // `work` is the work-tree top level, whatever the cwd; in normal mode `home == work`.
     let workspace = resolve_workspace(Path::new("."));
@@ -703,6 +729,10 @@ fn emit(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
 /// prose (§5.1).
 fn emit_write(ws: &Workspace, lock: &Lock, claude_rules: bool) -> Result<CommandOutput> {
     let root = &ws.home;
+    // An id collision in the rules projection is an input error before the first write.
+    let rules = claude_rules
+        .then(|| render_claude_rules(lock))
+        .transpose()?;
     for (id, node) in &lock.nodes {
         let path = node_agents_path(ws, id);
         let contents = read_node_agents(root, &path)?;
@@ -715,7 +745,14 @@ fn emit_write(ws: &Workspace, lock: &Lock, claude_rules: bool) -> Result<Command
             &contents[region.content_end..]
         );
         if updated != contents {
-            write_source_atomic(&root.join(&path), &updated)?;
+            let target = in_tree_target(root, &path).ok_or_else(|| {
+                SteleError::input(
+                    &path,
+                    1,
+                    "node AGENTS.md links outside the work tree; refusing to write through it",
+                )
+            })?;
+            write_source_atomic(&root.join(target), &updated)?;
         }
     }
 
@@ -732,8 +769,8 @@ fn emit_write(ws: &Workspace, lock: &Lock, claude_rules: bool) -> Result<Command
         &emit::render_hazards_index(lock),
     )?;
     ensure_shim(ws, lock)?;
-    if claude_rules {
-        write_claude_rules(root, lock)?;
+    if let Some(rules) = rules {
+        write_claude_rules(root, &rules)?;
     }
 
     let regions = lock.nodes.len();
@@ -974,12 +1011,11 @@ fn shim_import_path(work: &Path, home: &Path) -> PathBuf {
 /// stele marker: a target that is absent or already opens with [`emit::CLAUDE_RULE_MARKER`]
 /// is (re)generated; a foreign file (a hand-authored rule with no marker) is NEVER clobbered
 /// nor pruned — clobbering it is an exit-2 input error naming the file.
-fn write_claude_rules(root: &Path, lock: &Lock) -> Result<()> {
-    let rules = render_claude_rules(lock)?;
-    for (name, (_, content)) in &rules {
+fn write_claude_rules(root: &Path, rules: &BTreeMap<String, (&str, String)>) -> Result<()> {
+    for (name, (_, content)) in rules {
         write_claude_rule_file(root, name, content)?;
     }
-    for name in stale_claude_rules(root, &rules) {
+    for name in stale_claude_rules(root, rules) {
         std::fs::remove_file(root.join(CLAUDE_RULES_DIR).join(&name))
             .map_err(|e| SteleError::internal(format!("remove {CLAUDE_RULES_DIR}/{name}: {e}")))?;
     }
@@ -988,18 +1024,21 @@ fn write_claude_rules(root: &Path, lock: &Lock) -> Result<()> {
 
 /// The `.claude/rules/` projection (§3.3): filename → (node id, content) for every node that
 /// declares claims. [`emit::rule_slug`] flattens `/`, so two ids can share a filename (`a/b`
-/// and `a-b`; `root` and the system node) — an exit-2 input error naming both, never a
-/// silent overwrite.
+/// and `a-b`; `root` and the system node), and a case-folding filesystem (APFS, NTFS) makes
+/// `A-b` and `a-b` one file too — an exit-2 input error naming both, never a silent
+/// overwrite.
 fn render_claude_rules(lock: &Lock) -> Result<BTreeMap<String, (&str, String)>> {
-    let mut rules = BTreeMap::new();
+    let mut rules: BTreeMap<String, (&str, String)> = BTreeMap::new();
     for (id, node) in lock.nodes.iter().filter(|(_, n)| !n.claims.is_empty()) {
         let name = format!("{}.md", emit::rule_slug(id));
         let rule = (id.as_str(), emit::render_claude_rule(id, node));
-        if let Some((other, _)) = rules.insert(name.clone(), rule) {
+        let folded = name.to_lowercase();
+        if let Some((_, (other, _))) = rules.iter().find(|(n, _)| n.to_lowercase() == folded) {
             return Err(SteleError::input_msg(format!(
                 "node ids `{other}` and `{id}` both map to {CLAUDE_RULES_DIR}/{name}; rename one"
             )));
         }
+        rules.insert(name, rule);
     }
     Ok(rules)
 }
@@ -1928,13 +1967,16 @@ fn git_check_ignore(root: &Path, path: &str) -> Result<bool> {
 }
 
 /// Append an empty generated region to an already-authored AGENTS.md that carries a
-/// stele block but no region (§3.1). A non-AGENTS.md file, a blockless file (nothing to
-/// route), a symlink (never written through), or a file that already has a region is left
-/// byte-identical. Records the path for staging so the next `stele build` sees the change.
+/// stele block but no region (§3.1), at an in-tree symlink's target. A non-AGENTS.md file,
+/// a blockless file (nothing to route), a symlink out of the tree (never written through),
+/// or a file that already has a region is left byte-identical. Records the path for staging so the next `stele build` sees the change.
 fn ensure_region_for_block(root: &Path, rel: &Path, written: &mut Vec<String>) -> Result<()> {
-    if rel.file_name().is_none_or(|name| name != "AGENTS.md") || root.join(rel).is_symlink() {
+    if rel.file_name().is_none_or(|name| name != "AGENTS.md") {
         return Ok(());
     }
+    let Some(rel) = &in_tree_target(root, rel) else {
+        return Ok(());
+    };
     let contents = std::fs::read_to_string(root.join(rel))
         .map_err(|e| SteleError::internal(format!("read {}: {e}", rel.display())))?;
     // Ok(None) is "no stele block" — a blockless file declares no node and needs no
@@ -2017,18 +2059,18 @@ fn proposable_top_dirs(
 /// Scaffold one proposed node's AGENTS.md (§7). No file → write the heading + skeleton
 /// block + empty region. Prose-only file → prepend the skeleton (after any leading `#`
 /// heading), preserve every existing byte, and append an empty region if the file has
-/// none. A symlink is never written through and is left as is. Records the written path
-/// for staging.
+/// none. An in-tree symlink is written at its target; one out of the tree is left as is.
+/// Records the written path for staging.
 fn scaffold_node(
     root: &Path,
     rel_path: &str,
     kind: NodeKind,
     written: &mut Vec<String>,
 ) -> Result<()> {
-    let full = root.join(rel_path);
-    if full.is_symlink() {
+    let Some(target) = in_tree_target(root, Path::new(rel_path)) else {
         return Ok(());
-    }
+    };
+    let full = root.join(&target);
     let contents = match std::fs::read_to_string(&full) {
         Ok(existing) => prepend_skeleton(rel_path, &existing, kind)?,
         Err(e) if e.kind() == ErrorKind::NotFound => new_skeleton_file(rel_path, root, kind),
@@ -2040,8 +2082,25 @@ fn scaffold_node(
     }
     std::fs::write(&full, contents)
         .map_err(|e| SteleError::internal(format!("write {rel_path}: {e}")))?;
-    written.push(rel_path.to_string());
+    written.push(target.to_string_lossy().replace('\\', "/"));
     Ok(())
+}
+
+/// Where a write to `rel` (under `root`) lands: `rel` itself, or — for a symlink — its
+/// resolved target relative to `root`. `None` when the link dangles or leaves the tree,
+/// which is never written through.
+fn in_tree_target(root: &Path, rel: &Path) -> Option<PathBuf> {
+    let path = root.join(rel);
+    if !path.is_symlink() {
+        return Some(rel.to_path_buf());
+    }
+    let target = path.canonicalize().ok()?;
+    Some(
+        target
+            .strip_prefix(root.canonicalize().ok()?)
+            .ok()?
+            .to_path_buf(),
+    )
 }
 
 /// A brand-new node AGENTS.md (§7): `# <name>` heading, the skeleton block, then an

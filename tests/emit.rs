@@ -268,6 +268,30 @@ fn emit_never_writes_a_shim_through_a_symlink() {
     assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
 }
 
+// A node file symlinked inside the tree (AGENTS.md → ROOT.md) is rewritten at its target,
+// the link kept; one linking out of the tree is refused (exit 2), its target untouched.
+#[cfg(unix)]
+#[test]
+fn emit_writes_through_in_tree_symlinks_only() {
+    let fixture = built();
+    let outside = tempfile::tempdir().unwrap();
+    let golden = fixture.read("AGENTS.md");
+    for (target, code) in [
+        (fixture.path("ROOT.md"), 0),
+        (outside.path().join("a.md"), 2),
+    ] {
+        std::fs::write(&target, &golden).unwrap();
+        fixture.delete_file("AGENTS.md");
+        std::os::unix::fs::symlink(&target, fixture.path("AGENTS.md")).unwrap();
+        fixture.delete_line_containing("AGENTS.md", "## Indexes");
+        let stale = fixture.read("AGENTS.md");
+        assert_eq!(fixture.run(&["emit"]).code, code);
+        assert!(fixture.path("AGENTS.md").is_symlink());
+        let want = if code == 0 { &golden } else { &stale };
+        assert_eq!(&std::fs::read_to_string(&target).unwrap(), want);
+    }
+}
+
 /// Every NESTED node's directory in acme — the root (`AGENTS.md`) is covered by the
 /// root-shim tests above.
 const ACME_NESTED_DIRS: [&str; 5] = [
@@ -404,31 +428,35 @@ fn claude_rules_refuses_to_overwrite_a_foreign_file() {
     );
 }
 
-// Two ids flattening to one filename (`root` vs the system node's `root.md`) would let the
-// later node silently overwrite the earlier one's claims: exit 2 naming both, nothing written.
+// Two ids flattening to one filename (`root` vs the system node's `root.md`; `apps-Worker`
+// vs `apps/worker`, one file on a case-folding filesystem) would let the later node silently
+// overwrite the earlier one's claims: exit 2 naming both, nothing written — not even a shim.
 #[test]
 fn claude_rules_reject_two_nodes_sharing_a_filename() {
-    let fixture = Fixture::acme();
-    fixture.write("root/x.md", "# h\n");
-    fixture.write(
-        "root/AGENTS.md",
-        "```stele\nkind: container\npurpose: r\ninvariants:\n  - claim: c\n    anchor: x.md#h\n```\n\n<!-- @stele -->\n<!-- @end -->\n",
-    );
-    fixture.commit("a top-level root node");
-    assert_eq!(fixture.run(&["build"]).code, 0);
-    for args in [
-        &["emit", "--claude-rules"][..],
-        &["emit", "--check", "--claude-rules"],
+    for (dir, both) in [
+        ("root", "`/` and `root`"),
+        ("apps-Worker", "`apps-Worker` and `apps/worker`"),
     ] {
-        let emit = fixture.run(args);
-        let out = emit.combined();
-        assert_eq!(emit.code, 2, "{out}");
-        assert!(
-            out.contains("`/` and `root`") && out.contains("root.md"),
-            "{out}"
+        let fixture = Fixture::acme();
+        fixture.write(&format!("{dir}/x.md"), "# h\n");
+        fixture.write(
+            &format!("{dir}/AGENTS.md"),
+            "```stele\nkind: container\npurpose: r\ninvariants:\n  - claim: c\n    anchor: x.md#h\n```\n\n<!-- @stele -->\n<!-- @end -->\n",
         );
+        fixture.commit("a colliding node");
+        assert_eq!(fixture.run(&["build"]).code, 0);
+        for args in [
+            &["emit", "--claude-rules"][..],
+            &["emit", "--check", "--claude-rules"],
+        ] {
+            let emit = fixture.run(args);
+            let out = emit.combined();
+            assert_eq!(emit.code, 2, "{out}");
+            assert!(out.contains(both), "{out}");
+        }
+        assert!(!fixture.path(".claude/rules").exists());
+        assert!(!fixture.path(&format!("{dir}/CLAUDE.md")).exists());
     }
-    assert!(!fixture.path(".claude/rules").exists());
 }
 
 // The rules projection is whole: `emit --claude-rules` prunes marker-stamped files no node

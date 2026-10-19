@@ -240,6 +240,29 @@ fn init_never_writes_through_a_symlinked_agents_file() {
     );
 }
 
+// …but an AGENTS.md linking INSIDE the tree is scaffolded at its target, the link kept: a
+// block gets its region (AGENTS.md → CLAUDE.md), prose its skeleton (lib/AGENTS.md → NOTES.md).
+#[cfg(unix)]
+#[test]
+fn init_writes_through_an_in_tree_symlinked_agents_file() {
+    let fixture = Fixture::bare();
+    fixture.write("CLAUDE.md", "```stele\nkind: system\n```\n");
+    fixture.write("lib/NOTES.md", "# lib\n");
+    for (link, target) in [("AGENTS.md", "CLAUDE.md"), ("lib/AGENTS.md", "NOTES.md")] {
+        std::os::unix::fs::symlink(target, fixture.path(link)).unwrap();
+    }
+    fixture.commit("AGENTS.md files linking inside the tree");
+
+    assert_eq!(fixture.run(&["init"]).code, 0);
+    assert!(fixture.path("AGENTS.md").is_symlink() && fixture.path("lib/AGENTS.md").is_symlink());
+    assert!(
+        fixture
+            .read("CLAUDE.md")
+            .ends_with("<!-- @stele --><!-- @end -->\n")
+    );
+    assert!(fixture.read("lib/NOTES.md").contains("kind: container"));
+}
+
 // ─── a stele verb outside a git repo is a clean input error (§5.3) ────────────
 
 // Outside a work tree `git ls-files` prints "fatal: not a git repository" and exits

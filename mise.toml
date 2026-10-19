@@ -1,5 +1,6 @@
 [tools]
-lefthook = "1"
+# hk runs the pre-push gate (hk.pkl); `hk install --mise` wires it.
+hk = "2.5.0"
 rust = "stable"
 
 [tasks.figures]

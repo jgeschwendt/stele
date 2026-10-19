@@ -30,8 +30,9 @@ fn absent_config_yields_all_defaults() {
     assert!(config.check.disable.is_empty());
 }
 
-// A present config with every knob set — including a per-node freshness override and
-// a `check.disable` list — round-trips to the typed values (SPEC §3.4).
+// A present config with every knob set — including a per-node freshness override (its
+// key normalized like any node id, §2.1) and a `check.disable` list — round-trips to the
+// typed values (SPEC §3.4).
 #[test]
 fn overrides_parse_into_typed_values() {
     let config = load_str(
@@ -44,7 +45,7 @@ fn overrides_parse_into_typed_values() {
          [freshness]\n\
          churn_threshold = 40\n\
          enforced_leash = 90\n\
-         [freshness.node.\"apps/web\"]\n\
+         [freshness.node.\"./apps//web/\"]\n\
          enforced_leash = 30\n\
          [check]\n\
          disable = [\"freshness\", \"liveness\"]\n",

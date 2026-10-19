@@ -321,7 +321,7 @@ pub fn run(args: &[String]) -> i32 {
 }
 
 fn dispatch(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
-    // `--undercover` (§3.5) is an `init`-only flag. The read/emit verbs otherwise tolerate
+    // `--undercover` (§3.5) is an `init`-only flag. The read verbs otherwise tolerate
     // unknown tokens (they scan for their own flags), so reject it explicitly here rather than
     // let a mistyped `stele check --undercover` run and silently ignore the intent (exit 2).
     if args.first().copied() != Some("init") && args.contains(&UNDERCOVER_FLAG) {
@@ -434,7 +434,8 @@ fn error_data(error: &SteleError) -> Value {
 const UNBORN_HEAD_NOTICE: &str = "stele build: no commit yet (unborn HEAD) — every claim left verified:null; commit, then \
      re-run stele build to stamp watermarks";
 
-/// The mutating verbs (§5.3 `stele build | init`) accept ONLY the global `--json` flag
+/// The mutating verbs (§5.3 `stele build | init`, and `emit` once its own two flags are
+/// filtered out) accept ONLY the global `--json` flag
 /// (already stripped from `args` before dispatch) and no other token. `args[0]` is the
 /// verb; any further argument is a §5.3 input error (exit 2) surfaced BEFORE any
 /// filesystem effect — an unknown flag must never silently run the mutation (e.g. a
@@ -541,6 +542,7 @@ fn check(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
         committed: &committed,
         config: &config,
         graph: &graph,
+        home: &ws.home,
         root: &ws.work,
         run_commands,
         source_root: &source_root,
@@ -630,6 +632,7 @@ fn blame(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
         committed: &committed,
         config: &config,
         graph: &graph,
+        home: &ws.home,
         root: &ws.work,
         run_commands: false,
         source_root: &source_root,
@@ -692,6 +695,12 @@ const CLAUDE_LOCAL_SHIM: &str = "CLAUDE.local.md";
 /// path-scoped `.claude/rules/*.md` (§3.3, opt-in). Like `node`/`blame` it trusts the
 /// committed lock and does not byte-compare — staleness is `check`'s job (§5.3).
 fn emit(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
+    let stray: Vec<&str> = args
+        .iter()
+        .filter(|a| ![EMIT_CHECK_FLAG, EMIT_CLAUDE_RULES_FLAG].contains(a))
+        .copied()
+        .collect();
+    reject_extra_args(&stray, "stele emit [--check] [--claude-rules] [--json]")?;
     let _config = config::load(&ws.home)?;
     let on_disk = read_committed_lock(&ws.home)?;
     require_lock_version(&on_disk)?;

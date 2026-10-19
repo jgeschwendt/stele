@@ -87,26 +87,28 @@ fn exit_2_on_init_with_a_stray_arg_and_writes_nothing() {
     );
 }
 
-// `stele build` is likewise strict: a stray positional argument is an input error (exit 2)
-// that aborts BEFORE any lock write, so the committed lock is never overwritten by junk.
+// `stele build` and `stele emit` are likewise strict: a stray argument (a mistyped
+// `emit --chek` included) is an input error (exit 2) that aborts BEFORE any write, so
+// neither the committed lock nor a rendered region is touched.
 #[test]
-fn exit_2_on_build_with_a_stray_arg_and_leaves_the_lock_untouched() {
+fn exit_2_on_build_or_emit_with_a_stray_arg_and_writes_nothing() {
     let fixture = Fixture::acme();
     assert_eq!(fixture.run(&["build"]).code, 0);
-    let before = fixture.read(".stele/graph.lock");
-
-    let build = fixture.run(&["build", "stray"]);
-    assert_eq!(build.code, 2, "{}", build.combined());
-    assert!(
-        build.combined().contains("usage: stele build"),
-        "expected a usage line: {}",
-        build.combined()
-    );
-    assert_eq!(
-        fixture.read(".stele/graph.lock"),
-        before,
-        "build with a stray arg mutated the lock"
-    );
+    for (verb, written) in [("build", ".stele/graph.lock"), ("emit", "AGENTS.md")] {
+        let before = fixture.read(written);
+        let run = fixture.run(&[verb, "--chek"]);
+        assert_eq!(run.code, 2, "{}", run.combined());
+        assert!(
+            run.combined().contains(&format!("usage: stele {verb}")),
+            "expected a usage line: {}",
+            run.combined()
+        );
+        assert_eq!(
+            fixture.read(written),
+            before,
+            "{verb} with a stray arg wrote"
+        );
+    }
 }
 
 // Two nodes normalizing to the same id → exit 2 (§2.1): a second AGENTS.md explicitly

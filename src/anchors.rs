@@ -163,27 +163,16 @@ fn scan_parsed(
     data: &mut AnchorData,
 ) -> Result<()> {
     let tree = parse(parser, lang, contents, file)?;
-    let mut comments = Vec::new();
-    collect_comments(tree.root_node(), contents.as_bytes(), &mut comments);
-    for (start_row, text) in comments {
-        scan_text(&text, start_row, file, data);
-    }
-    Ok(())
-}
-
-/// Collect each comment node's `(start row, text)`, not descending into a comment
-/// (so a nested doc-comment marker never double-counts its parent's tokens).
-fn collect_comments(node: Node, src: &[u8], out: &mut Vec<(usize, String)>) {
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if child.kind().contains("comment") {
-            if let Ok(text) = child.utf8_text(src) {
-                out.push((child.start_position().row, text.to_string()));
-            }
-        } else {
-            collect_comments(child, src, out);
+    // A comment never contains another node worth scanning (a nested doc-comment
+    // marker would double-count its parent's tokens), so the walk stops at each one.
+    walk(tree.root_node(), |node, _| {
+        let comment = node.kind().contains("comment");
+        if comment && let Ok(text) = node.utf8_text(contents.as_bytes()) {
+            scan_text(text, node.start_position().row, file, data);
         }
-    }
+        !comment
+    });
+    Ok(())
 }
 
 /// The HTML comment delimiters — in markdown the ONLY construct whose anchor tokens are
@@ -358,36 +347,53 @@ pub fn resolve_symbol(root: &Path, rel_path: &str, symbol: &str) -> Result<Symbo
     };
     let mut parser = Parser::new();
     let tree = parse(&mut parser, lang, &contents, rel_path)?;
-    let mut lines = Vec::new();
-    collect_definitions(
-        tree.root_node(),
-        contents.as_bytes(),
-        lang,
-        symbol,
-        &mut lines,
-    );
-    Ok(match lines.as_slice() {
-        [] => SymbolResolution::Unresolved,
-        [line] => SymbolResolution::Resolved(*line),
-        _ => SymbolResolution::Ambiguous,
-    })
+    Ok(
+        match definitions(tree.root_node(), contents.as_bytes(), lang, symbol).as_slice() {
+            [] => SymbolResolution::Unresolved,
+            [def] => SymbolResolution::Resolved(def.start_position().row + 1),
+            _ => SymbolResolution::Ambiguous,
+        },
+    )
 }
 
-/// Collect the 1-based start line of every named definition of `symbol`: a node
-/// whose kind is a definition kind for `lang` and whose `name` field text equals
-/// `symbol`. Recurses through the whole tree (definitions nest).
-fn collect_definitions(node: Node, src: &[u8], lang: Lang, symbol: &str, out: &mut Vec<usize>) {
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if is_definition_kind(lang, child.kind())
-            && child
+/// Every named definition of `symbol`, in source order: a node whose kind is a
+/// definition kind for `lang` and whose `name` field text equals `symbol`. Walks the
+/// whole tree (definitions nest).
+fn definitions<'a>(root: Node<'a>, src: &[u8], lang: Lang, symbol: &str) -> Vec<Node<'a>> {
+    let mut out = Vec::new();
+    walk(root, |node, _| {
+        if is_definition_kind(lang, node.kind())
+            && node
                 .child_by_field_name(NAME_FIELD)
                 .and_then(|n| n.utf8_text(src).ok())
                 == Some(symbol)
         {
-            out.push(child.start_position().row + 1);
+            out.push(node);
         }
-        collect_definitions(child, src, lang, symbol, out);
+        true
+    });
+    out
+}
+
+/// Depth-first, pre-order walk of `root`'s subtree on one cursor — iterative, so nesting
+/// depth costs no stack and a pathologically nested file cannot overflow it. `visit`
+/// gets each node and its depth below `root`, and returns whether to descend into it.
+/// The depth is counted here: `TreeCursor::depth` rescans the cursor stack, which is
+/// quadratic over a deep tree.
+pub(crate) fn walk<'a>(root: Node<'a>, mut visit: impl FnMut(Node<'a>, u32) -> bool) {
+    let mut cursor = root.walk();
+    let mut depth = 0;
+    loop {
+        if visit(cursor.node(), depth) && cursor.goto_first_child() {
+            depth += 1;
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() {
+                return;
+            }
+            depth -= 1;
+        }
     }
 }
 
@@ -582,12 +588,13 @@ fn region_digest_bound(
         bind_landmark(root_node, src, lang, line)
     } else {
         let symbol = anchor.rsplit('#').next().unwrap_or(anchor);
-        find_definition_node(root_node, src, lang, symbol).unwrap_or(root_node)
+        definitions(root_node, src, lang, symbol)
+            .first()
+            .copied()
+            .unwrap_or(root_node)
     };
-    let mut serialized = String::new();
-    serialize_structure(bound, src, &mut serialized);
     Some(RegionDigest {
-        digest: sha256_hex(&serialized),
+        digest: sha256_hex(&serialize_structure(bound, src)),
         name: region_name(bound, src, lang, file),
     })
 }
@@ -677,18 +684,16 @@ fn bind_landmark<'a>(root: Node<'a>, src: &[u8], lang: Lang, line: usize) -> Nod
 /// The comment node spanning 0-based `row` (the landmark occurrence's line, which may
 /// be a block comment's continuation line), or `None`. Comment nodes are leaves, so the
 /// search only descends non-comments.
-fn find_comment_at_row(node: Node, row: usize) -> Option<Node> {
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if child.kind().contains("comment") {
-            if (child.start_position().row..=child.end_position().row).contains(&row) {
-                return Some(child);
-            }
-        } else if let Some(found) = find_comment_at_row(child, row) {
-            return Some(found);
+fn find_comment_at_row(root: Node, row: usize) -> Option<Node> {
+    let mut found = None;
+    walk(root, |node, _| {
+        let comment = node.kind().contains("comment");
+        if comment && (node.start_position().row..=node.end_position().row).contains(&row) {
+            found.get_or_insert(node);
         }
-    }
-    None
+        !comment
+    });
+    found
 }
 
 /// The first named definition among `comment`'s siblings that follow it in source
@@ -740,33 +745,7 @@ fn is_definition_node(lang: Lang, node: Node, src: &[u8]) -> bool {
     }
 }
 
-/// The first named definition of `symbol` anywhere in the tree (§4.5 symbol
-/// binding): a definition-kind node whose `name` field equals `symbol`. The anchor
-/// resolved to exactly one such node (§2.4), so the first match is that node.
-fn find_definition_node<'a>(
-    node: Node<'a>,
-    src: &[u8],
-    lang: Lang,
-    symbol: &str,
-) -> Option<Node<'a>> {
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if is_definition_kind(lang, child.kind())
-            && child
-                .child_by_field_name(NAME_FIELD)
-                .and_then(|n| n.utf8_text(src).ok())
-                == Some(symbol)
-        {
-            return Some(child);
-        }
-        if let Some(found) = find_definition_node(child, src, lang, symbol) {
-            return Some(found);
-        }
-    }
-    None
-}
-
-/// Serialize a bound node's structure into `out` (§4.5): a pre-order walk emitting
+/// Serialize a bound node's structure (§4.5): a pre-order walk emitting
 /// `(<kind> …children…)` for interior nodes and `(<kind> <token-text>)` for leaves,
 /// over ALL children (named and anonymous, so operators and punctuation count).
 /// Comment subtrees are dropped entirely and whitespace-only leaves are skipped, so
@@ -774,29 +753,36 @@ fn find_definition_node<'a>(
 /// token-level semantic edit (flipped constant, reordered guard, changed field
 /// list). Whitespace never enters the digest; the same node always yields the same
 /// bytes, so the sha256 is reproducible.
-fn serialize_structure(node: Node, src: &[u8], out: &mut String) {
-    if node.kind().contains("comment") {
-        return;
-    }
-    if node.child_count() == 0 {
-        let text = node.utf8_text(src).unwrap_or("");
-        if text.trim().is_empty() {
-            return;
+fn serialize_structure(bound: Node, src: &[u8]) -> String {
+    let mut out = String::new();
+    // Interior nodes still awaiting their `)`: entering a node at `depth` closes every
+    // open one at or below it (the walk has left their subtrees).
+    let mut open = 0;
+    walk(bound, |node, depth| {
+        for _ in depth..open {
+            out.push(')');
         }
-        out.push('(');
-        out.push_str(node.kind());
-        out.push(' ');
-        out.push_str(text);
-        out.push(')');
-        return;
-    }
-    out.push('(');
-    out.push_str(node.kind());
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        serialize_structure(child, src, out);
-    }
-    out.push(')');
+        open = depth;
+        if node.kind().contains("comment") {
+            return false;
+        }
+        if node.child_count() > 0 {
+            out.push('(');
+            out.push_str(node.kind());
+            open += 1;
+            return true;
+        }
+        let text = node.utf8_text(src).unwrap_or("");
+        if !text.trim().is_empty() {
+            out.push('(');
+            out.push_str(node.kind());
+            out.push(' ');
+            out.push_str(text);
+            out.push(')');
+        }
+        false
+    });
+    out + &")".repeat(open as usize)
 }
 
 /// Lowercase-hex sha256 of `serialized` (§4.5 digest emission).

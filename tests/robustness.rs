@@ -191,6 +191,34 @@ fn tracked_source_deleted_without_staging_does_not_abort() {
     );
 }
 
+// A pathologically nested source must not overflow the stack: every tree-sitter walk
+// (comment scan, import extraction, symbol and landmark binding, the §4.5 digest) is
+// iterative, so 20 000 nested parens cost heap, never a stack-overflow abort.
+#[test]
+fn deeply_nested_source_does_not_overflow_the_stack() {
+    let fixture = Fixture::bare();
+    fixture.write(
+        "AGENTS.md",
+        "# root\n\n```stele\nkind: system\ninvariants:\n  - claim: f nests\n    anchor: deep.rs#f\n  \
+         - claim: g nests\n    anchor: ※ deep-g\n```\n",
+    );
+    let nest = |body: &str| format!("{}{body}{}", "(".repeat(20_000), ")".repeat(20_000));
+    fixture.write(
+        "deep.rs",
+        &format!(
+            "use std::fmt;\nfn f() -> i32 {{ {} }}\n// ※ deep-g\nfn g() -> i32 {{ {} }}\n",
+            nest("1"),
+            nest("2")
+        ),
+    );
+    fixture.commit("a root claim pair over a deeply nested rust source");
+
+    let build = fixture.run(&["build"]);
+    assert_eq!(build.code, 0, "{}", build.combined());
+    let check = fixture.run(&["check"]);
+    assert_eq!(check.code, 0, "{}", check.combined());
+}
+
 // A committed dangling symlink whose name carries a source extension (`dead.rs` →
 // nonexistent target) is tracked, so the scan follows it and reads ENOENT. It must
 // skip, never abort `build` (companion to the deleted-file case above).

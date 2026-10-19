@@ -214,7 +214,8 @@ fn pre_0_3_0_region_markers_are_exit_2_naming_the_new_form() {
 // ─── §3.2 superseded lock versions ───────────────────────────────────────────
 
 // Version 1 (the `stele:` grammar) needs `migrate` first; version 2 lacks the node
-// `source` paths (§2.1 `id:` overrides), so a rebuild alone re-locks it.
+// `source` paths (§2.1 `id:` overrides), so a rebuild alone re-locks it. A newer version
+// needs a newer engine — a rebuild here would downgrade it.
 #[test]
 fn superseded_lock_versions_are_exit_2_naming_their_fix() {
     let fixture = Fixture::acme();
@@ -223,6 +224,7 @@ fn superseded_lock_versions_are_exit_2_naming_their_fix() {
     for (version, fix) in [
         (1, "run stele migrate, then stele build"),
         (2, ". run stele build"),
+        (4, "upgrade stele to an engine that reads it"),
     ] {
         fixture.write(
             ".stele/graph.lock",

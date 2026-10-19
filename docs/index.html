@@ -171,7 +171,8 @@ stele emit --check             <span class="snippet-note"># committed files vs w
     <li><strong>upgrading from 0.2 is a hard cut</strong> — a version-1 lock fails every verb with
       <code class="code">run stele migrate, then stele build</code>. <code class="code">stele migrate</code>
       rewrites the old <code class="code">stele:</code> grammar in place over build's scan scope,
-      idempotently; there is no dual-read.</li>
+      idempotently; there is no dual-read. A 0.3.x version-2 lock carries no node
+      <code class="code">source</code> and fails with <code class="code">run stele build</code>.</li>
   </ul>
 </section>
 

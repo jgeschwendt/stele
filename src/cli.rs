@@ -603,7 +603,7 @@ fn render_allow_report(entries: &[(String, String, String)]) -> String {
         out.push_str("  (none)\n");
     }
     for (node, edge, reason) in entries {
-        out.push_str(&format!("  {node} · {edge} · {reason}\n"));
+        out.push_str(&format!("  {node} · {edge} · {}\n", emit::flat(reason)));
     }
     out
 }
@@ -729,10 +729,14 @@ fn emit(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
 /// prose (§5.1).
 fn emit_write(ws: &Workspace, lock: &Lock, claude_rules: bool) -> Result<CommandOutput> {
     let root = &ws.home;
-    // An id collision in the rules projection is an input error before the first write.
+    // An id collision or a hand-authored target in the rules projection is an input error
+    // before the first write.
     let rules = claude_rules
         .then(|| render_claude_rules(lock))
         .transpose()?;
+    for name in rules.iter().flat_map(BTreeMap::keys) {
+        refuse_foreign_rule(root, name)?;
+    }
     // Every region renders and validates before the first write: no half-written tree.
     let mut writes = Vec::new();
     for node in lock.nodes.values() {
@@ -1012,7 +1016,7 @@ fn shim_import_path(work: &Path, home: &Path) -> PathBuf {
 /// nor pruned — clobbering it is an exit-2 input error naming the file.
 fn write_claude_rules(root: &Path, rules: &BTreeMap<String, (&str, String)>) -> Result<()> {
     for (name, (_, content)) in rules {
-        write_claude_rule_file(root, name, content)?;
+        write_under_root(root, CLAUDE_RULES_DIR, name, content)?;
     }
     for name in stale_claude_rules(root, rules) {
         std::fs::remove_file(root.join(CLAUDE_RULES_DIR).join(&name))
@@ -1059,11 +1063,11 @@ fn stale_claude_rules(root: &Path, rules: &BTreeMap<String, (&str, String)>) -> 
         .collect()
 }
 
-/// Write one generated `.claude/rules/<name>` (§3.3), guarding a hand-authored file. When
-/// the target exists and does NOT open with [`emit::CLAUDE_RULE_MARKER`] it is a foreign
-/// file — refuse with an exit-2 input error naming it (never overwrite a team's rule); an
-/// absent or marker-carrying target is (re)generated.
-fn write_claude_rule_file(root: &Path, name: &str, content: &str) -> Result<()> {
+/// Guard one generated `.claude/rules/<name>` (§3.3) before emit's first write. When the
+/// target exists and does NOT open with [`emit::CLAUDE_RULE_MARKER`] it is a foreign file —
+/// refuse with an exit-2 input error naming it (never overwrite a team's rule); an absent or
+/// marker-carrying target may be (re)generated.
+fn refuse_foreign_rule(root: &Path, name: &str) -> Result<()> {
     let path = root.join(CLAUDE_RULES_DIR).join(name);
     if let Ok(existing) = std::fs::read_to_string(&path)
         && !existing.starts_with(emit::CLAUDE_RULE_MARKER)
@@ -1075,7 +1079,7 @@ fn write_claude_rule_file(root: &Path, name: &str, content: &str) -> Result<()> 
              move it aside or delete it, then re-run stele emit --claude-rules",
         ));
     }
-    write_under_root(root, CLAUDE_RULES_DIR, name, content)
+    Ok(())
 }
 
 /// Byte-diff one on-disk generated file against its freshly-rendered content; a missing or
@@ -1485,7 +1489,7 @@ fn render_commands_section(commands: &std::collections::BTreeMap<String, String>
     }
     out.push_str("| command | run |\n| --- | --- |\n");
     for (name, cmd) in commands {
-        out.push_str(&format!("| {name} | {cmd} |\n"));
+        out.push_str(&format!("| {} | {} |\n", emit::cell(name), emit::cell(cmd)));
     }
     out
 }
@@ -1536,7 +1540,11 @@ fn render_node(node: &LockNode) -> String {
         ));
     }
     for allow in &node.declared.allow {
-        out.push_str(&format!("allow: {} — {}\n", allow.edge, allow.reason));
+        out.push_str(&format!(
+            "allow: {} — {}\n",
+            allow.edge,
+            emit::flat(&allow.reason)
+        ));
     }
     render_claim_group(&mut out, node, "invariant", "invariants");
     render_claim_group(&mut out, node, "hazard", "hazards");

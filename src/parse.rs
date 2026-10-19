@@ -9,7 +9,7 @@
 
 use crate::model::{
     Claim, ClaimKind, Edges, Node, NodeKind, PURPOSE_MAX_CHARS, Result, SYSTEM_ID, SteleError,
-    derive_slug, normalize_id,
+    derive_slug, node_id,
 };
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -290,7 +290,7 @@ fn normalize_targets(
 /// Normalize one edge target (§2.1), mapping a `..`-segment or OS-absolute rejection to
 /// a §5.3 input error (exit 2) naming the offending `edges.<field>`.
 fn normalize_target(rel_path: &Path, block: &SteleBlock, field: &str, raw: &str) -> Result<String> {
-    normalize_id(raw).map_err(|message| {
+    node_id(raw).map_err(|message| {
         SteleError::input(
             rel_path,
             block.fence_line,
@@ -308,14 +308,13 @@ fn resolve_id(rel_path: &Path, block: &SteleBlock, override_id: Option<&str>) ->
         .parent()
         .map(Path::to_string_lossy)
         .unwrap_or_default();
-    let id = normalize_id(override_id.unwrap_or(if dir.is_empty() { SYSTEM_ID } else { &dir }))
-        .map_err(|message| SteleError::input(rel_path, block.fence_line, message))?;
-    match (dir.is_empty(), id == SYSTEM_ID) {
-        (true, false) => Err("the root node's id is always `/`"),
-        (false, true) => Err("`/` is reserved for the root node"),
-        _ => Ok(id),
-    }
-    .map_err(|message| SteleError::input(rel_path, block.fence_line, format!("id: {message}")))
+    node_id(override_id.unwrap_or(if dir.is_empty() { SYSTEM_ID } else { &dir }))
+        .and_then(|id| match (dir.is_empty(), id == SYSTEM_ID) {
+            (true, false) => Err("the root node's id is always `/`".into()),
+            (false, true) => Err("`/` is reserved for the root node".into()),
+            _ => Ok(id),
+        })
+        .map_err(|message| SteleError::input(rel_path, block.fence_line, format!("id: {message}")))
 }
 
 // ─── generated-region markers (§3.1 item 2) ──────────────────────────────────

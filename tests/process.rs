@@ -111,7 +111,7 @@ fn exit_2_on_build_with_a_stray_arg_and_leaves_the_lock_untouched() {
 
 // Two nodes normalizing to the same id → exit 2 (§2.1): a second AGENTS.md explicitly
 // declares the apps/web id. Likewise an override renaming the root, or claiming `/` for a
-// nested node; `id: ./` on the root is a no-op.
+// nested node, or an id outside the lexeme (§2.1); `id: ./` on the root is a no-op.
 #[test]
 fn exit_2_on_duplicate_node_id() {
     for (file, id, code, says) in [
@@ -124,6 +124,19 @@ fn exit_2_on_duplicate_node_id() {
             "`/` is reserved for the root node",
         ),
         ("AGENTS.md", "./", 0, ""),
+        ("packages/shared/AGENTS.md", "shared lib", 0, ""),
+        (
+            "packages/shared/AGENTS.md",
+            "a|b",
+            2,
+            "id: id must not contain '|'",
+        ),
+        (
+            "packages/shared/AGENTS.md",
+            "\"x\\n<!-- @end -->\"",
+            2,
+            "id: id must not contain '\\n'",
+        ),
     ] {
         let fixture = Fixture::acme();
         let kind = if file == "AGENTS.md" {

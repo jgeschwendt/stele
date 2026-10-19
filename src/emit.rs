@@ -106,7 +106,7 @@ fn render_component(lock: &Lock, node: &LockNode) -> String {
         .map(|(slug, lm)| {
             format!(
                 "- {LANDMARK_ANCHOR_PREFIX}{slug} → {}:{}",
-                relativize(&lm.file, node.dir()),
+                flat(&relativize(&lm.file, node.dir())),
                 lm.line
             )
         })
@@ -186,8 +186,9 @@ pub fn flat(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Node text for a markdown table cell: [`flat`], with `|` escaped.
-fn cell(text: &str) -> String {
+/// Node text for a markdown table cell: [`flat`], with `|` escaped (GFM splits on it even
+/// inside a code span).
+pub fn cell(text: &str) -> String {
     flat(text).replace('|', "\\|")
 }
 
@@ -281,7 +282,7 @@ fn router_table(rows: &[Row]) -> Vec<String> {
             id.clone(),
             kind.clone(),
             cell(purpose),
-            format!("`stele unfold {id}` · or read `{source}`"),
+            format!("`stele unfold {id}` · or read `{}`", cell(source)),
         ]);
     }
 
@@ -346,7 +347,7 @@ fn render_claims_index(lock: &Lock, title: &str, kind: &str) -> String {
 
     let mut out = format!("# {title}\n\n| claim | node | anchor |\n| --- | --- | --- |\n");
     for (node, _slug, text, anchor) in &rows {
-        out.push_str(&format!("| {} | {node} | {anchor} |\n", cell(text)));
+        out.push_str(&format!("| {} | {node} | {} |\n", cell(text), cell(anchor)));
     }
     out
 }

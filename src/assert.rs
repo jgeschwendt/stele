@@ -1838,10 +1838,42 @@ const MIX_BUILTINS: [&str; 16] = [
 ];
 
 /// A pragmatic set of `cargo` builtin subcommands (§4.6), same curation rationale as
-/// [`MIX_BUILTINS`]; anything else must be a `.cargo/config.toml` `[alias]`. Alpha-sorted.
-const CARGO_BUILTINS: [&str; 19] = [
-    "add", "bench", "build", "check", "clean", "clippy", "doc", "fetch", "fix", "fmt", "init",
-    "install", "new", "publish", "remove", "run", "test", "tree", "update",
+/// [`MIX_BUILTINS`], plus cargo's built-in aliases (`b`, `c`, `d`, `r`, `t`); anything
+/// else must be a `.cargo/config.toml` `[alias]`. Alpha-sorted.
+const CARGO_BUILTINS: [&str; 33] = [
+    "add",
+    "b",
+    "bench",
+    "build",
+    "c",
+    "check",
+    "clean",
+    "clippy",
+    "d",
+    "doc",
+    "fetch",
+    "fix",
+    "fmt",
+    "generate-lockfile",
+    "init",
+    "install",
+    "login",
+    "metadata",
+    "new",
+    "package",
+    "publish",
+    "r",
+    "remove",
+    "run",
+    "rustc",
+    "rustdoc",
+    "search",
+    "t",
+    "test",
+    "tree",
+    "uninstall",
+    "update",
+    "vendor",
 ];
 
 /// The shell builtins the liveness resolver (§4.6) treats as always-resolved — rung (a),
@@ -1991,8 +2023,9 @@ fn fold_captured(stdout: &[u8], stderr: &[u8]) -> String {
 /// Builtin subcommands (mix, cargo) are static ([`MIX_BUILTINS`]/[`CARGO_BUILTINS`]);
 /// the sets carry only the manifest-declared names (aliases, scripts, recipes).
 struct Runners {
-    /// `mix.exs` alias keys (§4.6), `None` when absent.
-    mix: Option<BTreeSet<String>>,
+    /// `mix.exs` alias keys (§4.6) and whether it declares deps (a `{:dep, …}` tuple),
+    /// whose tasks only `mix help` could list; `None` when absent.
+    mix: Option<(BTreeSet<String>, bool)>,
     /// Root `package.json` `scripts` keys (§4.6), `None` when absent.
     node_scripts: Option<BTreeSet<String>>,
     /// `.cargo/config.toml` `[alias]` keys (§4.6); `Some` (possibly empty) iff
@@ -2005,7 +2038,7 @@ struct Runners {
 impl Runners {
     fn detect(root: &Path) -> Self {
         Self {
-            mix: read_manifest(root, "mix.exs").map(|s| parse_mix_aliases(&s)),
+            mix: read_manifest(root, "mix.exs").map(|s| (parse_mix_aliases(&s), s.contains("{:"))),
             node_scripts: read_manifest(root, "package.json").map(|s| parse_npm_scripts(&s)),
             cargo_aliases: read_manifest(root, "Cargo.toml").map(|_| parse_cargo_aliases(root)),
             just_recipes: just_source(root).map(|s| parse_just_recipes(&s)),
@@ -2027,9 +2060,9 @@ fn just_source(root: &Path) -> Option<String> {
 /// Resolve one command segment's executable (§4.6), returning `None` when it resolves
 /// and `Some(reason)` when it does not. Leading `VAR=value` assignments are skipped; the
 /// first remaining token is the executable. A DETECTED runner name (mix/cargo/just/
-/// npm/pnpm/yarn) resolves through its task list; every other first token resolves on
-/// PATH or as a repo-relative executable file. Arguments past the subcommand are NOT
-/// resolved (§4.6).
+/// npm/pnpm/yarn) resolves through its task list, skipping runner flags (`+toolchain`,
+/// `-x`); every other first token resolves on PATH or as a repo-relative executable
+/// file. Arguments past the subcommand are NOT resolved (§4.6).
 fn resolve_segment(
     root: &Path,
     path_env: Option<&std::ffi::OsStr>,
@@ -2046,16 +2079,22 @@ fn resolve_segment(
     if SHELL_BUILTINS.contains(&first) {
         return None;
     }
-    let sub = words.get(1).map(String::as_str);
+    let mut args = words[1..]
+        .iter()
+        .map(String::as_str)
+        .filter(|w| !w.starts_with(['-', '+']));
+    let sub = args.next();
 
     match (first, runners) {
         (
             "mix",
             Runners {
-                mix: Some(aliases), ..
+                mix: Some((aliases, deps)),
+                ..
             },
         ) => match sub {
-            Some(task) if !MIX_BUILTINS.contains(&task) && !aliases.contains(task) => {
+            // A declared dep may supply any task (`mix phx.server`): unverifiable, so lenient.
+            Some(task) if !deps && !MIX_BUILTINS.contains(&task) && !aliases.contains(task) => {
                 Some("task not found in mix.exs")
             }
             _ => None,
@@ -2094,7 +2133,7 @@ fn resolve_segment(
             // runner builtin and resolves leniently — the strict check is the `run` form,
             // which is what a stale script key trips (§4.6). This avoids false positives
             // on the many package-manager builtins we do not enumerate.
-            match (sub, words.get(2).map(String::as_str)) {
+            match (sub, args.next()) {
                 (Some("run"), Some(script)) if !scripts.contains(script) => {
                     Some("script not found in package.json")
                 }
@@ -2156,7 +2195,7 @@ fn is_executable_file(path: &Path) -> bool {
 // A deliberately small POSIX-flavored word splitter — NOT a shell. It honors single
 // quotes (fully literal), double quotes (literal with `\` escaping the next char), and
 // backslash escapes, and it splits on the four unquoted shell operators `&&`, `||`,
-// `|`, `;` into independently-resolved segments. It does NOT expand variables, command
+// `|`, `;` and on newline into independently-resolved segments. It does NOT expand variables, command
 // substitutions, globs, tildes, or braces; it does not interpret redirections, `&`
 // backgrounding, or subshell parentheses — those either land as ordinary tokens (never
 // the first, which is all resolution reads) or, being unquoted, are simply not special.
@@ -2196,7 +2235,7 @@ fn split_segments(command: &str) -> Vec<String> {
                 cur.push(c);
                 quote = Some(c);
             }
-            ';' => flush_segment(&mut cur, &mut segments),
+            ';' | '\n' => flush_segment(&mut cur, &mut segments),
             '&' if chars.get(i + 1) == Some(&'&') => {
                 flush_segment(&mut cur, &mut segments);
                 i += 1;
@@ -2314,7 +2353,7 @@ fn parse_mix_aliases(source: &str) -> BTreeSet<String> {
         return aliases;
     };
     for line in source[start..].lines().skip(1) {
-        let trimmed = line.trim();
+        let trimmed = line.trim().trim_start_matches('[');
         if trimmed == "end" {
             break;
         }

@@ -880,10 +880,16 @@ fn node_source_root(ws: &Workspace) -> PathBuf {
     }
 }
 
-/// Read a node's AGENTS.md (an IO failure is exit 3).
+/// Read a node's AGENTS.md: a file gone since the build is a stale lock (exit 2), any
+/// other IO failure exit 3.
 fn read_node_agents(root: &Path, path: &Path) -> Result<String> {
-    std::fs::read_to_string(root.join(path))
-        .map_err(|e| SteleError::internal(format!("read {}: {e}", path.display())))
+    std::fs::read_to_string(root.join(path)).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => SteleError::input_msg(format!(
+            "lock names {} but it is gone; {RUN_BUILD_HINT}",
+            path.display()
+        )),
+        _ => SteleError::internal(format!("read {}: {e}", path.display())),
+    })
 }
 
 /// Locate a node's generated region, mapping its absence to the §3.1 exit-2 error that

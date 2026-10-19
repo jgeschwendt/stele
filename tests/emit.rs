@@ -166,6 +166,17 @@ fn emit_rejects_a_node_with_no_region_pointing_at_init() {
         emit.combined()
     );
     assert!(emit.combined().contains("init"), "{}", emit.combined());
+    // A lock node whose file is gone since the build is a stale lock (exit 2), not exit 3.
+    fixture.delete_file("apps/web/AGENTS.md");
+    for args in [&["emit"][..], &["emit", "--check"]] {
+        let emit = fixture.run(args);
+        assert_eq!(emit.code, 2, "{}", emit.combined());
+        assert!(
+            emit.combined().contains("run stele build"),
+            "{}",
+            emit.combined()
+        );
+    }
 }
 
 // A lock node id or source that fails §2.1 normalization is a malformed lock (exit 2,

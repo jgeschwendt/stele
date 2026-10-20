@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en" class="ui">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>stele — guide</title>
+<link rel="stylesheet" href="https://gigantic.dev/ui/ui.css" />
+<link rel="stylesheet" href="https://gigantic.dev/ui/docs.css" />
+<link rel="stylesheet" href="page.css" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23476349'/%3E%3Cpath d='M5.5 12.25V6.5a2.5 2.5 0 0 1 5 0v5.75Z' fill='white'/%3E%3Crect x='3.75' y='12.25' width='8.5' height='1.5' rx='0.5' fill='white'/%3E%3C/svg%3E" />
+</head>
+<body data-page="guide">
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+<!-- Phosphor Icons (regular), MIT (c) 2023 Phosphor Icons — via jgeschwendt/ui icons/ -->
+<symbol id="ph-bank" viewBox="0 0 256 256" fill="currentColor"><path d="M24,104H48v64H32a8,8,0,0,0,0,16H224a8,8,0,0,0,0-16H208V104h24a8,8,0,0,0,4.19-14.81l-104-64a8,8,0,0,0-8.38,0l-104,64A8,8,0,0,0,24,104Zm40,0H96v64H64Zm80,0v64H112V104Zm48,64H160V104h32ZM128,41.39,203.74,88H52.26ZM248,208a8,8,0,0,1-8,8H16a8,8,0,0,1,0-16H240A8,8,0,0,1,248,208Z"/></symbol>
+<symbol id="ph-circle-half" viewBox="0 0 256 256" fill="currentColor"><path d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm8,16.37a86.4,86.4,0,0,1,16,3V212.67a86.4,86.4,0,0,1-16,3Zm32,9.26a87.81,87.81,0,0,1,16,10.54V195.83a87.81,87.81,0,0,1-16,10.54ZM40,128a88.11,88.11,0,0,1,80-87.63V215.63A88.11,88.11,0,0,1,40,128Zm160,50.54V77.46a87.82,87.82,0,0,1,0,101.08Z"/></symbol>
+<symbol id="ph-moon" viewBox="0 0 256 256" fill="currentColor"><path d="M233.54,142.23a8,8,0,0,0-8-2,88.08,88.08,0,0,1-109.8-109.8,8,8,0,0,0-10-10,104.84,104.84,0,0,0-52.91,37A104,104,0,0,0,136,224a103.09,103.09,0,0,0,62.52-20.88,104.84,104.84,0,0,0,37-52.91A8,8,0,0,0,233.54,142.23ZM188.9,190.34A88,88,0,0,1,65.66,67.11a89,89,0,0,1,31.4-26A106,106,0,0,0,96,56,104.11,104.11,0,0,0,200,160a106,106,0,0,0,14.92-1.06A89,89,0,0,1,188.9,190.34Z"/></symbol>
+<symbol id="ph-sun" viewBox="0 0 256 256" fill="currentColor"><path d="M120,40V16a8,8,0,0,1,16,0V40a8,8,0,0,1-16,0Zm72,88a64,64,0,1,1-64-64A64.07,64.07,0,0,1,192,128Zm-16,0a48,48,0,1,0-48,48A48.05,48.05,0,0,0,176,128ZM58.34,69.66A8,8,0,0,0,69.66,58.34l-16-16A8,8,0,0,0,42.34,53.66Zm0,116.68-16,16a8,8,0,0,0,11.32,11.32l16-16a8,8,0,0,0-11.32-11.32ZM192,72a8,8,0,0,0,5.66-2.34l16-16a8,8,0,0,0-11.32-11.32l-16,16A8,8,0,0,0,192,72Zm5.66,114.34a8,8,0,0,0-11.32,11.32l16,16a8,8,0,0,0,11.32-11.32ZM48,128a8,8,0,0,0-8-8H16a8,8,0,0,0,0,16H40A8,8,0,0,0,48,128Zm80,80a8,8,0,0,0-8,8v24a8,8,0,0,0,16,0V216A8,8,0,0,0,128,208Zm112-88H216a8,8,0,0,0,0,16h24a8,8,0,0,0,0-16Z"/></symbol>
+</svg>
+
+<header class="appbar">
+  <h1 class="appbar-title">
+    <svg class="icon" aria-hidden="true"><use href="#ph-bank" /></svg>
+    stele <small>· guide</small>
+  </h1>
+  <span class="spacer"></span>
+  <div class="segmented" role="group" aria-label="theme">
+    <button type="button" data-theme-set="light" aria-pressed="false" title="light">
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#ph-sun" /></svg>light
+    </button>
+    <button type="button" data-theme-set="auto" aria-pressed="true" title="follow the system">
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#ph-circle-half" /></svg>auto
+    </button>
+    <button type="button" data-theme-set="dark" aria-pressed="false" title="dark">
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#ph-moon" /></svg>dark
+    </button>
+  </div>
+</header>
+
+
+<main class="docs-shell" data-container>
+
+<header class="stack">
+  <p class="eyebrow">stele — guide</p>
+  <p class="lead docs-lead">The five-minute path from a bare repo to a CI-enforced agent-doc graph. The <a class="link" href="spec.html">SPEC</a> is the contract and covers every rule in depth; <a class="link" href="https://github.com/jgeschwendt/stele/blob/main/EXAMPLE.md">EXAMPLE.md</a> is a full worked example. This guide is just the happy path.</p>
+  <nav class="row docs-toc" aria-label="sections">
+    <a class="pill" href="#install">install</a>
+    <a class="pill" href="#scaffold">scaffold</a>
+    <a class="pill" href="#anchor-your-claims">anchor</a>
+    <a class="pill" href="#build-and-commit">build &amp; commit</a>
+    <a class="pill" href="#enforce-in-ci">enforce in CI</a>
+    <a class="pill" href="#query-it">query</a>
+    <a class="pill" href="#no-engine">no engine</a>
+    <a class="pill" href="#undercover-mode">undercover</a>
+    <a class="pill" href="index.html">design</a>
+    <a class="pill" href="spec.html">spec</a>
+  </nav>
+</header>
+
+<section class="docs-section" id="install">
+<header>
+<h2 class="h2">1 · Install</h2>
+</header>
+<div class="stack">
+<pre class="snippet"><code>curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash
+</code></pre>
+<p class="docs-note">Pin a version with <code class="code">… | bash -s v0.3.0</code>; prereleases with <code class="code">… | channel=canary bash</code>. The binary lands in <code class="code">~/.local/bin/stele</code>. From source: <code class="code">cargo install --git https://github.com/jgeschwendt/stele stele-cli</code>.</p>
+<h3 class="h3" id="install-upgrading-from-0-2">Upgrading from 0.2</h3>
+<p class="docs-note">A repo whose lock is <code class="code">version</code> 1 fails every verb until it is migrated (<a class="link" href="spec.html#sources-and-artifacts-lockfile">SPEC §3.2</a>, no dual-read) —</p>
+<pre class="snippet"><code>committed lock is version 1; this engine writes version 3. run stele migrate, then stele build
+</code></pre>
+<p class="docs-note">A 0.3.x <code class="code">version</code> 2 lock needs only <code class="code">stele build</code>.</p>
+<p class="docs-note">One pass, once per repo:</p>
+<pre class="snippet"><code>stele migrate   # rewrites the old notation in place, over build&#39;s scan scope; idempotent
+git diff        # review it — migrate warns on a dirty tree rather than refusing
+stele build     # re-locks at version 3
+stele emit      # re-renders the regions with the new markers
+</code></pre>
+<p class="docs-note">Then commit the sources, the shims, <code class="code">.stele/graph.lock</code> and <code class="code">.stele/index/</code> together. A repo scaffolded at 0.3.0 or later never runs <code class="code">migrate</code>.</p>
+</div>
+</section>
+
+<section class="docs-section" id="scaffold">
+<header>
+<h2 class="h2">2 · Scaffold</h2>
+</header>
+<div class="stack">
+<p class="docs-note">From the repo root (must be a git repository):</p>
+<pre class="snippet"><code>stele init
+</code></pre>
+<p class="docs-note">This scaffolds <code class="code">AGENTS.md</code> skeletons — a <code class="code">system</code> node at the root, <code class="code">container</code> nodes for candidate directories — and stages them. Each skeleton is a plain markdown file opening with a fenced <code class="code">stele</code> block:</p>
+<pre class="snippet"><code># payments
+
+```stele
+kind: container
+purpose: Payment capture and refund flow. Stripe is the only processor.
+commands:
+  test: cargo test -p payments
+invariants:
+  - claim: every charge is idempotent — retries must reuse the idempotency key
+    anchor: src/charge.rs#create_charge
+hazards:
+  - claim: refund webhooks arrive out of order; never assume capture precedes refund
+    anchor: ※ webhook-dispatch
+edges:
+  decided_by: [§ 0007]
+```
+
+&lt;!-- @stele --&gt;&lt;!-- @end --&gt;
+</code></pre>
+<p class="docs-note">Anything outside those two markers is yours — ordinary markdown, untouched by the engine. The empty region is what <code class="code">emit</code> fills in step 4; everything strictly between <code class="code">&lt;!-- @stele --&gt;</code> and <code class="code">&lt;!-- @end --&gt;</code> is engine-owned from then on.</p>
+<p class="docs-note">Fill in <code class="code">purpose</code> (what an agent can&#39;t derive from the tree), real <code class="code">commands</code>, and the claims worth enforcing. Delete skeletons for directories that don&#39;t deserve a node — shallow is fine; the graph should follow interface boundaries, not mirror the tree.</p>
+</div>
+</section>
+
+<section class="docs-section" id="anchor-your-claims">
+<header>
+<h2 class="h2">3 · Anchor your claims</h2>
+</header>
+<div class="stack">
+<p class="docs-note">Every invariant or hazard needs an anchor tying it to code, one of:</p>
+<ul class="claims stack" role="list">
+<li id="anchor-your-claims-path-symbol"><strong><code class="code">path#symbol</code></strong> — a definition in that file (<code class="code">src/charge.rs#create_charge</code>), or a heading slug in a markdown file (<code class="code">research/claims.md#c1</code>).</li>
+<li id="anchor-your-claims-slug"><strong><code class="code">※ &lt;slug&gt;</code></strong> — a named landmark: put a <code class="code">// ※ &lt;slug&gt;</code> comment on the definition in the source file, in that language&#39;s native comment syntax. The <code class="code">anchor:</code> field quotes the comment verbatim — glyph, one space, slug — so one <code class="code">rg &#39;※ &#39;</code> finds declaration and reference alike. Survives renames and moves that <code class="code">path#symbol</code> doesn&#39;t.</li>
+</ul>
+<p class="docs-note">A <code class="code">⊨ &lt;node-id&gt;/&lt;slug&gt;</code> comment closes the loop the other way, binding a code region back to a declared claim. A <code class="code">※</code> or <code class="code">⊨</code> whose payload isn&#39;t a well-formed slug or address is prose and is silently ignored (<a class="link" href="spec.html#model-comment-anchor-grammar">SPEC §2.5</a>) — <code class="code">※</code> is an everyday annotation mark, so the scanner never errors on one. Decisions are referenced as <code class="code">decided_by: [§ 0007]</code>, resolved against the repo&#39;s ADR directory.</p>
+<p class="docs-note">Anchors are what make claims checkable: when the anchored code changes, the claim goes stale and CI says so.</p>
+</div>
+</section>
+
+<section class="docs-section" id="build-and-commit">
+<header>
+<h2 class="h2">4 · Build and commit</h2>
+</header>
+<div class="stack">
+<pre class="snippet"><code>stele build   # compiles authored sources → .stele/graph.lock (+ .stele/index/)
+stele emit    # fills each `&lt;!-- @stele --&gt;` … `&lt;!-- @end --&gt;` region, transpose indexes, the CLAUDE.md shims (root + one per nested node)
+</code></pre>
+<p class="docs-note">Commit everything: the <code class="code">AGENTS.md</code> files, their <code class="code">CLAUDE.md</code> shims, <code class="code">.stele/graph.lock</code>, <code class="code">.stele/index/</code>. The lock is the canonical graph — queries and CI read it, never re-derive it.</p>
+<p class="docs-note"><code class="code">build</code> is the reconciliation point: it re-stamps each claim&#39;s <code class="code">verified</code> mark against the current code. Run it locally when you&#39;ve reviewed that a claim still holds; <strong>CI never runs <code class="code">stele build</code></strong> — that would launder staleness.</p>
+<p class="docs-note">Paths the engine should never scan (fixtures, vendored trees) go in a <code class="code">.steleignore</code> at the root — gitignore syntax.</p>
+</div>
+</section>
+
+<section class="docs-section" id="enforce-in-ci">
+<header>
+<h2 class="h2">5 · Enforce in CI</h2>
+</header>
+<div class="stack">
+<pre class="snippet"><code>stele:
+  runs-on: ubuntu-latest
+  steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0        # full history — freshness checks use blame
+    - run: curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash -s v0.3.0
+    - run: ~/.local/bin/stele check
+    - run: ~/.local/bin/stele emit --check
+</code></pre>
+<p class="docs-note"><code class="code">stele check</code> runs six assertion classes over lock vs. code and exits nonzero with findings:</p>
+<div class="table-wrap">
+<table data-table>
+<thead>
+<tr>
+<th>class</th>
+<th>catches</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>referential</td>
+<td>anchors pointing at symbols/landmarks/files that no longer exist</td>
+</tr>
+<tr>
+<td>structural</td>
+<td>declared dependencies the code doesn&#39;t have — and code dependencies never declared</td>
+</tr>
+<tr>
+<td>exhaustiveness</td>
+<td>directories no node covers — unrouted context an agent can&#39;t navigate to</td>
+</tr>
+<tr>
+<td>budget</td>
+<td>node docs exceeding their token budget</td>
+</tr>
+<tr>
+<td>freshness</td>
+<td>anchored code changed since the claim was last verified (<code class="code">stele blame &lt;node&gt;/&lt;slug&gt;</code> shows who/when)</td>
+</tr>
+<tr>
+<td>liveness</td>
+<td>documented <code class="code">commands:</code> that no longer resolve or run</td>
+</tr>
+</tbody></table>
+</div>
+<p class="docs-note"><code class="code">stele emit --check</code> fails if committed AGENTS.md files diverge from what the lock would render. Useful flags: <code class="code">check --only &lt;class&gt;</code>, <code class="code">check --run-commands</code> (actually execute <code class="code">commands:</code>), <code class="code">check --freeze</code> (accept current structure as baseline), <code class="code">--json</code> everywhere for the machine envelope.</p>
+</div>
+</section>
+
+<section class="docs-section" id="query-it">
+<header>
+<h2 class="h2">6 · Query it</h2>
+</header>
+<div class="stack">
+<p class="docs-note">Agents (and you) read the graph instead of grepping docs:</p>
+<pre class="snippet"><code>stele root                       # the system node — start here
+stele unfold payments --depth 2  # a node with its children
+stele invariants --touching src/charge.rs   # claims governing a file you&#39;re editing
+stele hazards                    # every active hazard
+stele nodes --kind container
+stele blame payments/idempotent-charges     # provenance of one claim
+</code></pre>
+<p class="docs-note">For MCP-capable harnesses, <code class="code">stele serve</code> speaks JSON-RPC over stdio and exposes the same read verbs as tools:</p>
+<pre class="snippet"><code>{ &quot;mcpServers&quot;: { &quot;stele&quot;: { &quot;command&quot;: &quot;stele&quot;, &quot;args&quot;: [&quot;serve&quot;] } } }
+</code></pre>
+</div>
+</section>
+
+<section class="docs-section" id="no-engine">
+<header>
+<h2 class="h2">7 · No engine? Nothing breaks</h2>
+</header>
+<div class="stack">
+<p class="docs-note">The emitted <code class="code">AGENTS.md</code> files are complete, standard-compliant markdown — every harness that reads AGENTS.md gets the full graph content with zero tooling. The degradation ladder is deliberate: plain files → CLI queries → MCP. The engine adds verification and lazy navigation; it never becomes a reading dependency.</p>
+</div>
+</section>
+
+<section class="docs-section" id="undercover-mode">
+<header>
+<h2 class="h2">8 · Undercover mode</h2>
+</header>
+<div class="stack">
+<p class="docs-note">When you&#39;re the <em>only</em> stele user on a shared repo — a work, upstream, or open-source checkout whose collaborators must never see a stele artifact — run it privately:</p>
+<pre class="snippet"><code>stele init --undercover
+</code></pre>
+<p class="docs-note">Everything the engine writes stays out of version control, analogous to <code class="code">CLAUDE.local.md</code>. Only the marker&#39;s presence selects the mode; without it every command is byte-for-byte normal.</p>
+<div class="table-wrap">
+<table data-table>
+<thead>
+<tr>
+<th>where</th>
+<th>what</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>graph home</td>
+<td>parent of <code class="code">git rev-parse --git-common-dir</code> — the repo root (normal checkout) or the shared bare root (grove)</td>
+</tr>
+<tr>
+<td><code class="code">&lt;home&gt;/.stele/tree/&lt;dir&gt;/AGENTS.md</code></td>
+<td>node sources — the overlay, mirroring tree paths (root node at <code class="code">.stele/tree/AGENTS.md</code>)</td>
+</tr>
+<tr>
+<td><code class="code">&lt;home&gt;/.stele/graph.lock</code> + <code class="code">.stele/index/</code></td>
+<td>the private lock and transpose indexes</td>
+</tr>
+<tr>
+<td><code class="code">&lt;work&gt;/CLAUDE.local.md</code></td>
+<td>the one materialized file — a relative <code class="code">@</code>-import of the overlay root, auto-loaded by Claude Code (SPEC <a class="link" href="spec.html#sources-and-artifacts-undercover-mode">§3.5</a>)</td>
+</tr>
+<tr>
+<td><code class="code">&lt;common-dir&gt;/info/exclude</code></td>
+<td>a managed block hiding <code class="code">/.stele/</code> and <code class="code">/CLAUDE.local.md</code>, so <code class="code">git status</code> stays clean</td>
+</tr>
+</tbody></table>
+</div>
+<p class="docs-note">Author node blocks under <code class="code">.stele/tree/</code>, then <code class="code">stele build</code> + <code class="code">stele emit</code> + <code class="code">stele check</code> exactly as normal — every artifact lands at the home; queries and MCP resolve it from any worktree.</p>
+<p class="docs-note" id="undercover-mode-worktrees-share-one-graph"><strong>Worktrees share one graph.</strong> The home is the parent of the git <em>common</em> dir, so every linked worktree — and every sibling in a bare-root (grove) layout — reads the same private graph, which survives worktree churn. <code class="code">emit</code> drops a <code class="code">CLAUDE.local.md</code> in whichever worktree you run it from, and freshness measures against <em>that</em> worktree&#39;s HEAD.</p>
+<p class="docs-note" id="undercover-mode-whats-different"><strong>What&#39;s different.</strong> There&#39;s no CI story — nothing is committed for a pipeline to gate, so <code class="code">stele check</code> is yours to run locally. The degradation ladder trades its files rung for invisibility: collaborators see nothing, and your surface is CLI → MCP plus the one shim. <code class="code">emit --claude-rules</code> is unavailable (the single shim is the only materialized file). And undercover cannot coexist with a tracked shared graph — a repo already carrying a committed <code class="code">.stele/</code> or <code class="code">stele</code>-block <code class="code">AGENTS.md</code> refuses <code class="code">init --undercover</code> (exit 2); mixing the two is a v2 concern.</p>
+</div>
+</section>
+
+</main>
+
+<script>
+/* The theme contract, verbatim from jgeschwendt/ui docs.js — same localStorage
+   key, so a theme chosen on the ui pages is the theme this one opens in. */
+const THEME_KEY = "ui-theme";
+function applyTheme(mode) {
+  const root = document.documentElement;
+  if (mode === "auto") {
+    root.removeAttribute("data-theme");
+    localStorage.removeItem(THEME_KEY);
+  } else {
+    root.dataset.theme = mode;
+    localStorage.setItem(THEME_KEY, mode);
+  }
+  for (const b of document.querySelectorAll("[data-theme-set]")) {
+    b.setAttribute("aria-pressed", String(b.dataset.themeSet === mode));
+  }
+}
+for (const b of document.querySelectorAll("[data-theme-set]")) {
+  b.addEventListener("click", () => applyTheme(b.dataset.themeSet));
+}
+applyTheme(localStorage.getItem(THEME_KEY) || "auto");
+</script>
+</body>
+</html>

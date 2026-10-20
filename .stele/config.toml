@@ -1,0 +1,4 @@
+# docs/ is the published site, not architecture: only docs/spec.html escapes .steleignore
+# (it carries the decision-log landmark), so the directory needs no node.
+[exhaustiveness]
+exclude = ["_build", "deps", "docs", "node_modules", "target"]

@@ -1,6 +1,11 @@
 {
   "adrs": {},
   "landmarks": {
+    "decision-log": {
+      "file": "docs/spec.html",
+      "line": 440,
+      "node": "/"
+    },
     "refund-cap": {
       "file": "tests/gallery.rs",
       "line": 79,
@@ -20,19 +25,19 @@
           "text": "every [Cn] citation must stay licensed by research/claims.md's status for that claim — never state a `reported` claim as settled fact",
           "verified": {
             "digest": null,
-            "sha": "332553ab847232d2802e3981a41c71ef978f6d00"
+            "sha": "df73b2972790c3448144a7d52df0ff7810422b25"
           }
         },
         {
-          "anchor": "SPEC.md#decision-log",
+          "anchor": "※ decision-log",
           "enforced_by": null,
           "id": "decision-log",
           "kind": "invariant",
-          "resolved": "SPEC.md:333",
-          "text": "SPEC.md outranks everything here — code and examples conform to it; changing behavior means revising the spec (and its decision log) first",
+          "resolved": "docs/spec.html:440",
+          "text": "docs/spec.html outranks everything here — code and examples conform to it; changing behavior means revising the spec (and its decision log) first",
           "verified": {
             "digest": null,
-            "sha": "332553ab847232d2802e3981a41c71ef978f6d00"
+            "sha": "df73b2972790c3448144a7d52df0ff7810422b25"
           }
         }
       ],
@@ -57,7 +62,7 @@
       },
       "id": "/",
       "kind": "system",
-      "purpose": "stele — typed agent-doc graph reconciled against extracted code truth. SPEC.md is the contract; the Rust engine implements it and self-hosts on this repo.",
+      "purpose": "stele — typed agent-doc graph reconciled against extracted code truth. docs/spec.html is the contract; the Rust engine implements it and self-hosts on this repo.",
       "source": "AGENTS.md"
     },
     "research": {

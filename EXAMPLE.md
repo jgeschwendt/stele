@@ -1,6 +1,6 @@
 # stele — worked example
 
-Companion to SPEC.md draft 0.10. A fictional-but-realistic monorepo (`acme`): Phoenix web app + background worker + shared TS package. Artifacts shown in full or as labeled excerpts so the design can be attacked concretely. Hole-poking prompts marked ⚔ throughout.
+Companion to docs/spec.html draft 0.10. A fictional-but-realistic monorepo (`acme`): Phoenix web app + background worker + shared TS package. Artifacts shown in full or as labeled excerpts so the design can be attacked concretely. Hole-poking prompts marked ⚔ throughout.
 
 ## 1. The repo
 

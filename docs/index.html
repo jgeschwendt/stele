@@ -66,6 +66,8 @@
     <a class="pill" href="#query">query surface</a>
     <a class="pill" href="#undercover">undercover mode</a>
     <a class="pill" href="#artifacts">artifacts</a>
+    <a class="pill" href="guide.html">guide</a>
+    <a class="pill" href="spec.html">spec</a>
   </nav>
 </header>
 
@@ -114,7 +116,8 @@ cargo install --git https://github.com/jgeschwendt/stele stele-cli</pre>
   <header>
     <h2 class="h2">Adoption path</h2>
     <p class="docs-note">Bare repo to CI-enforced graph. The long form is
-      <code class="code">GUIDE.md</code>; every rule behind it is in the SPEC.</p>
+      <a class="link" href="guide.html">the guide</a>; every rule behind it is in
+      <a class="link" href="spec.html">the spec</a>.</p>
   </header>
   <ol class="steps">
     <li><strong>Install</strong> — one binary, pinned in CI to the version you tested against.</li>
@@ -292,8 +295,8 @@ stele blame payments/idempotent-charges     <span class="snippet-note"># provena
     <table data-table>
       <thead><tr><th>artifact</th><th>what it is</th></tr></thead>
       <tbody>
-        <tr data-artifact="guide"><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/stele/blob/main/GUIDE.md">GUIDE.md</a></td><td>the adoption path — install, scaffold, anchor, build, enforce, query, undercover</td></tr>
-        <tr data-artifact="spec"><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/stele/blob/main/SPEC.md">SPEC.md</a></td><td>the contract — model, sources, assertion suite, query surface, process contract</td></tr>
+        <tr data-artifact="guide"><td class="table-mono"><a class="link" href="guide.html">docs/guide.html</a></td><td>the adoption path — install, scaffold, anchor, build, enforce, query, undercover</td></tr>
+        <tr data-artifact="spec"><td class="table-mono"><a class="link" href="spec.html">docs/spec.html</a></td><td>the contract — model, sources, assertion suite, query surface, process contract</td></tr>
         <tr data-artifact="example"><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/stele/blob/main/EXAMPLE.md">EXAMPLE.md</a></td><td>worked example on a fictional monorepo: every artifact, an agent session with token accounting, a CI failure gallery</td></tr>
         <tr data-artifact="claims"><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/stele/blob/main/research/claims.md">research/claims.md</a></td><td>the claim ledger C1–C26 — every <code class="code">[Cn]</code> citation in the SPEC resolves here</td></tr>
         <tr data-artifact="findings"><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/stele/tree/main/research/findings">research/findings/</a></td><td>primary-source research notes, including the prior-art sweep that positions the design</td></tr>
@@ -303,7 +306,8 @@ stele blame payments/idempotent-charges     <span class="snippet-note"># provena
       </tbody>
     </table>
   </div>
-  <p class="docs-foot">stele v0.3.0 · SPEC Draft 0.10 · SPEC.md and GUIDE.md are the contract ·
+  <p class="docs-foot">stele v0.3.0 · SPEC Draft 0.10 · <a class="link" href="spec.html">the spec</a> and
+    <a class="link" href="guide.html">the guide</a> are the contract ·
     <a class="link" href="https://github.com/jgeschwendt/stele/blob/main/LICENSE.md">PolyForm Noncommercial 1.0.0</a>;
     commercial use needs a separate license.</p>
 </section>

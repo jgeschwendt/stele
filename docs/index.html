@@ -54,8 +54,10 @@
     <span class="badge badge-accent">v0.3.0 · glyph notation</span>
     <span class="badge">SPEC Draft 0.10 — the contract</span>
     <span class="badge">self-hosting: this repo runs its own gate</span>
+    <span class="badge">adopted: an external repo gates on a pinned stele in CI</span>
   </div>
   <nav class="row docs-toc" aria-label="sections">
+    <a class="pill" href="#why">why</a>
     <a class="pill" href="#install">install</a>
     <a class="pill" href="#ladder">degradation ladder</a>
     <a class="pill" href="#adopt">adoption path</a>
@@ -66,6 +68,22 @@
     <a class="pill" href="#artifacts">artifacts</a>
   </nav>
 </header>
+
+<section class="docs-section" id="why" data-component="why">
+  <header>
+    <h2 class="h2">Why</h2>
+    <p class="docs-note">The full argument, with citations, is
+      <a class="link" href="https://github.com/jgeschwendt/stele/blob/main/research/report.md">research/report.md</a>.</p>
+  </header>
+  <p>Measured evidence says coding agents don't benefit from prose overviews of a codebase — even
+    human-written ones — and are actively harmed by stale or redundant context. What does transmit
+    value: concrete tooling commands, non-derivable invariants and hazards, and navigation structure
+    delivered lazily at the point of relevance. Every existing tool either <em>generates</em> docs from
+    code (unverified, drifting) or <em>checks</em> declared architecture forward-only (never coupled to
+    the docs agents read). stele occupies the empty intersection: the docs are a typed, queryable graph
+    compiled from authored intent, verified against the extracted truth of the code, in CI, both
+    directions — and they degrade to plain markdown files any harness can read.</p>
+</section>
 
 <section class="docs-section" id="install" data-component="install">
   <header>
@@ -277,12 +295,18 @@ stele blame payments/idempotent-charges     <span class="snippet-note"># provena
         <tr data-artifact="guide"><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/stele/blob/main/GUIDE.md">GUIDE.md</a></td><td>the adoption path — install, scaffold, anchor, build, enforce, query, undercover</td></tr>
         <tr data-artifact="spec"><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/stele/blob/main/SPEC.md">SPEC.md</a></td><td>the contract — model, sources, assertion suite, query surface, process contract</td></tr>
         <tr data-artifact="example"><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/stele/blob/main/EXAMPLE.md">EXAMPLE.md</a></td><td>worked example on a fictional monorepo: every artifact, an agent session with token accounting, a CI failure gallery</td></tr>
+        <tr data-artifact="claims"><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/stele/blob/main/research/claims.md">research/claims.md</a></td><td>the claim ledger C1–C26 — every <code class="code">[Cn]</code> citation in the SPEC resolves here</td></tr>
+        <tr data-artifact="findings"><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/stele/tree/main/research/findings">research/findings/</a></td><td>primary-source research notes, including the prior-art sweep that positions the design</td></tr>
         <tr data-artifact="report"><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/stele/blob/main/research/report.md">research/report.md</a></td><td>the evidence base — cited survey the design decisions trace to</td></tr>
+        <tr data-artifact="wild-ideas"><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/stele/blob/main/research/wild-ideas.md">research/wild-ideas.md</a></td><td>the ideation corpus the design was selected from — three visions; v2 extension points derive from it</td></tr>
         <tr data-artifact="repo"><td class="table-mono"><a class="link" href="https://github.com/jgeschwendt/stele">jgeschwendt/stele</a></td><td>the engine — a Rust single binary, self-hosting on its own graph</td></tr>
       </tbody>
     </table>
   </div>
-  <p class="docs-foot">stele v0.3.0 · SPEC Draft 0.10 · SPEC.md and GUIDE.md are the contract.</p>
+  <p class="docs-foot">stele v0.3.0 · SPEC Draft 0.10 · SPEC.md and GUIDE.md are the contract ·
+    <a class="link" href="https://github.com/jgeschwendt/stele/blob/main/LICENSE.md">PolyForm Noncommercial 1.0.0</a>;
+    commercial use needs a separate license, and external contributions are not accepted — the chain
+    of title stays with one owner.</p>
 </section>
 
 </main>

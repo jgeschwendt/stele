@@ -211,7 +211,7 @@ impl Fixture {
     /// front and stdin is then closed; the MCP server reads to EOF and exits, so the
     /// captured stdout holds every newline-delimited response in request order. Same
     /// child-PATH discipline as [`Self::run`] so command resolution stays host-independent.
-    pub fn run_with_stdin(&self, args: &[&str], stdin: &str) -> RunResult {
+    pub fn run_with_stdin(&self, args: &[&str], stdin: impl AsRef<[u8]>) -> RunResult {
         use std::io::Write;
         let mut child = isolate_git(
             Command::new(BIN)
@@ -228,7 +228,7 @@ impl Fixture {
             .stdin
             .take()
             .expect("child stdin")
-            .write_all(stdin.as_bytes())
+            .write_all(stdin.as_ref())
             .expect("write child stdin");
         let output = child.wait_with_output().expect("wait for stele");
         RunResult {

@@ -17,12 +17,8 @@
 use crate::cli::{self, Mode, VerbRender, Workspace};
 use crate::model::ExitCode;
 use serde_json::{Value, json};
-use std::io::{BufRead, Write};
+use std::io::Write;
 use std::path::Path;
-
-/// The MCP protocol version this server implements and defaults to when the client asks
-/// for one it does not recognize (§version-negotiation: respond with the latest supported).
-const LATEST_PROTOCOL_VERSION: &str = "2025-11-25";
 
 /// Protocol versions this server will echo back verbatim when a client requests one of
 /// them (§version-negotiation: "if the server supports the requested version it MUST
@@ -31,14 +27,9 @@ const LATEST_PROTOCOL_VERSION: &str = "2025-11-25";
 const SUPPORTED_PROTOCOL_VERSIONS: [&str; 4] =
     ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
 
-/// The server name — also the tool namespace (§5.2): tools are un-prefixed here and
-/// resolve to `stele.<verb>` on the wire.
-const SERVER_NAME: &str = "stele";
-
-/// The §5.3 exit class at or above which a verb result is an ERROR (input/internal),
-/// mapped to an `isError:true` tool result rather than a normal one; below it (0 clean,
-/// 1 assertion findings) is a normal tool result.
-const ERROR_EXIT_FLOOR: i32 = 2;
+/// The version this server implements and answers an unrecognized request with
+/// (§version-negotiation: respond with the latest supported).
+const LATEST_PROTOCOL_VERSION: &str = SUPPORTED_PROTOCOL_VERSIONS[3];
 
 // JSON-RPC 2.0 error codes (the standard set).
 const PARSE_ERROR: i64 = -32700;
@@ -46,10 +37,8 @@ const INVALID_REQUEST: i64 = -32600;
 const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
 
-/// `stele serve` (§5.2): reject the meaningless `--json` flag, refuse cleanly outside a
-/// git repo, then run the blocking MCP stdio loop until stdin EOF. Returns the process
-/// exit code. serve owns stdout for protocol framing, so `run` is intercepted BEFORE the
-/// CLI's `--json` envelope machinery (see [`crate::cli::run`]).
+/// `stele serve` (§5.2): runs the blocking MCP stdio loop until stdin EOF. Intercepted
+/// BEFORE the CLI's `--json` envelope machinery (see [`crate::cli::run`]) — serve owns stdout.
 pub fn run(root: &Path, args: &[String]) -> i32 {
     if args.iter().any(|a| a == "--json") {
         eprintln!(
@@ -58,62 +47,47 @@ pub fn run(root: &Path, args: &[String]) -> i32 {
         );
         return ExitCode::Input as i32;
     }
-    // Resolve the home/work split once (§3.5); in normal mode `home == work == root`
-    // verbatim, so every downstream lock read stays byte-identical. serve works from any
-    // work tree — the graph home the queries read from is derived from the cwd's common dir.
+    // Queries read the graph home (§3.5) but scan the work tree's VCS-tracked files (§2.4),
+    // so a non-repo cwd can never answer one.
     let workspace = cli::resolve_workspace(root);
-    // Refuse cleanly (exit 2) outside a git work tree: serve's tools scan VCS-tracked
-    // files (§2.4), so a non-repo cwd can never answer a query. The probe runs on the WORK
-    // tree.
     if let Err(error) = cli::ensure_git_repo(&workspace.work) {
         eprintln!("{error}");
         return error.exit as i32;
     }
-    // One stderr note in undercover mode (§3.5): the queries read the private graph at the home,
-    // not the invoking work tree. stdout stays pure protocol — this is stderr only.
     if workspace.mode == Mode::Undercover {
         eprintln!(
             "stele serve: undercover mode — reading the private graph at {}",
             workspace.home.display()
         );
     }
-    serve_loop(&workspace)
+    match serve_loop(&workspace) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("stele serve: stdio error: {e}");
+            ExitCode::Internal as i32
+        }
+    }
 }
 
 /// The blocking read/dispatch/write loop (MCP stdio transport): one JSON-RPC message per
 /// line in, one response line per request out, notifications answered with nothing. A
 /// malformed line becomes a parse-error response and the loop continues (never a crash);
-/// stdin EOF is graceful shutdown (§lifecycle, exit 0).
-fn serve_loop(ws: &Workspace) -> i32 {
+/// stdin EOF is graceful shutdown (§lifecycle).
+fn serve_loop(ws: &Workspace) -> std::io::Result<()> {
     eprintln!("stele serve: MCP stdio server ready (protocol {LATEST_PROTOCOL_VERSION})");
-    let stdin = std::io::stdin();
-    let mut reader = stdin.lock();
     let mut stdout = std::io::stdout();
-    let mut line = String::new();
-    loop {
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) => return 0,
-            Ok(_) => {}
-            Err(e) => {
-                eprintln!("stele serve: stdin read error: {e}");
-                return ExitCode::Internal as i32;
-            }
-        }
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Some(response) = handle_message(ws, trimmed) {
+    for line in std::io::stdin().lines() {
+        let line = line?;
+        let text = line.trim();
+        if !text.is_empty()
+            && let Some(response) = handle_message(ws, text)
+        {
             // Compact serialization has no embedded newlines (transport requirement); the
             // trailing `\n` is the message delimiter.
-            let serialized = serde_json::to_string(&response)
-                .unwrap_or_else(|_| String::from(r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"Internal error"}}"#));
-            if writeln!(stdout, "{serialized}").is_err() || stdout.flush().is_err() {
-                return ExitCode::Internal as i32;
-            }
+            writeln!(stdout, "{response}")?;
         }
     }
+    Ok(())
 }
 
 /// Parse and dispatch one JSON-RPC message. Returns the response `Value` for a request,
@@ -121,9 +95,8 @@ fn serve_loop(ws: &Workspace) -> i32 {
 /// non-JSON line → parse error; a non-object or method-less request → invalid request; an
 /// unknown method on a request → method-not-found (an unknown notification is ignored).
 fn handle_message(ws: &Workspace, text: &str) -> Option<Value> {
-    let value: Value = match serde_json::from_str(text) {
-        Ok(v) => v,
-        Err(_) => return Some(error_response(Value::Null, PARSE_ERROR, "Parse error")),
+    let Ok(value) = serde_json::from_str::<Value>(text) else {
+        return Some(error_response(Value::Null, PARSE_ERROR, "Parse error"));
     };
     let Some(obj) = value.as_object() else {
         return Some(error_response(
@@ -133,39 +106,39 @@ fn handle_message(ws: &Workspace, text: &str) -> Option<Value> {
         ));
     };
     // Absent `id` marks a notification (JSON-RPC): no response, even on error.
-    let id = obj.get("id").cloned();
+    let id = obj.get("id").cloned()?;
     let Some(method) = obj.get("method").and_then(Value::as_str) else {
-        return id.map(|id| error_response(id, INVALID_REQUEST, "Invalid Request: missing method"));
+        return Some(error_response(
+            id,
+            INVALID_REQUEST,
+            "Invalid Request: missing method",
+        ));
     };
-    match method {
-        "initialize" => id.map(|id| initialize_result(id, obj.get("params"))),
-        "notifications/initialized" => None,
-        "ping" => id.map(|id| success(id, json!({}))),
-        "tools/list" => id.map(|id| success(id, tools_list())),
-        "tools/call" => id.map(|id| tools_call(ws, id, obj.get("params"))),
-        other => {
-            id.map(|id| error_response(id, METHOD_NOT_FOUND, &format!("Method not found: {other}")))
-        }
-    }
+    Some(match method {
+        "initialize" => initialize_result(id, obj.get("params")),
+        "notifications/initialized" => return None,
+        "ping" => success(id, json!({})),
+        "tools/list" => success(id, json!({ "tools": tool_definitions() })),
+        "tools/call" => tools_call(ws, id, obj.get("params")),
+        other => error_response(id, METHOD_NOT_FOUND, &format!("Method not found: {other}")),
+    })
 }
 
 /// The `initialize` result (§lifecycle): negotiate the protocol version — echo the
 /// client's when supported, else advertise the latest — and declare the `tools`
 /// capability plus server identity. Tools are static, so `listChanged` is not declared.
 fn initialize_result(id: Value, params: Option<&Value>) -> Value {
-    let requested = params
-        .and_then(|p| p.get("protocolVersion"))
-        .and_then(Value::as_str);
-    let version = match requested {
-        Some(v) if SUPPORTED_PROTOCOL_VERSIONS.contains(&v) => v,
-        _ => LATEST_PROTOCOL_VERSION,
-    };
+    let version = params
+        .and_then(|p| p["protocolVersion"].as_str())
+        .filter(|v| SUPPORTED_PROTOCOL_VERSIONS.contains(v))
+        .unwrap_or(LATEST_PROTOCOL_VERSION);
     success(
         id,
         json!({
             "protocolVersion": version,
             "capabilities": { "tools": {} },
-            "serverInfo": { "name": SERVER_NAME, "version": env!("CARGO_PKG_VERSION") },
+            // The server name is also the tool namespace (§5.2): `stele.<verb>` on the wire.
+            "serverInfo": { "name": "stele", "version": env!("CARGO_PKG_VERSION") },
             "instructions": "stele MCP server (SPEC §5.2): eight read-only query tools over the \
                 committed graph lock. Mutating verbs (build/init/emit) are shell/CI-only and not \
                 exposed here.",
@@ -173,16 +146,10 @@ fn initialize_result(id: Value, params: Option<&Value>) -> Value {
     )
 }
 
-/// The `tools/list` result (§server/tools): the eight read verbs, each with a one-line
-/// description drawn from SPEC §5.1 and a valid JSON Schema `inputSchema`. No pagination
-/// cursor — the whole set fits one page.
-fn tools_list() -> Value {
-    json!({ "tools": tool_definitions() })
-}
-
 /// Every exposed tool definition (§5.2): `{name, description, inputSchema}`. Names are
 /// un-prefixed (the server namespace supplies `stele.`); schemas are 2020-12 JSON Schema
-/// objects with `additionalProperties:false` so only the declared params are accepted.
+/// objects with `additionalProperties:false` so only the declared params are accepted. The
+/// whole set fits one `tools/list` page — no pagination cursor.
 fn tool_definitions() -> Vec<Value> {
     vec![
         tool(
@@ -277,9 +244,7 @@ fn tool(name: &str, description: &str, input_schema: Value) -> Value {
 /// Handle `tools/call` (§server/tools): resolve the tool name to a CLI argv, dispatch it
 /// through the shared verb renderer, and package the result. An unknown tool name or
 /// missing params is a JSON-RPC protocol error (§Error Handling: unknown tools are
-/// protocol errors); a verb-level input/internal error (exit ≥ 2, e.g. a missing lock)
-/// is an `isError:true` tool result; clean output and assertion findings (exit 0/1) are
-/// normal tool results.
+/// protocol errors).
 fn tools_call(ws: &Workspace, id: Value, params: Option<&Value>) -> Value {
     let Some(params) = params else {
         return error_response(
@@ -288,7 +253,7 @@ fn tools_call(ws: &Workspace, id: Value, params: Option<&Value>) -> Value {
             "Invalid params: tools/call requires params",
         );
     };
-    let Some(name) = params.get("name").and_then(Value::as_str) else {
+    let Some(name) = params["name"].as_str() else {
         return error_response(
             id,
             INVALID_PARAMS,
@@ -298,87 +263,44 @@ fn tools_call(ws: &Workspace, id: Value, params: Option<&Value>) -> Value {
     let Some(argv) = argv_for_tool(name, params.get("arguments")) else {
         return error_response(id, INVALID_PARAMS, &format!("Unknown tool: {name}"));
     };
-
     let argv_refs: Vec<&str> = argv.iter().map(String::as_str).collect();
-    let VerbRender { exit, text } = cli::serve_render(ws, &argv_refs);
-    if exit >= ERROR_EXIT_FLOOR {
-        // Missing/unknown-version lock and other input/internal errors surface as a
-        // tool-level error result carrying the CLI's message (§5.2).
-        return success(id, tool_result(&text, true));
-    }
-    // The check verb prints nothing on a clean run and no status on findings; append the
-    // §5.3 exit code so an agent always sees the outcome (0 clean, 1 findings).
-    let content = if name == "check" {
-        let mut text = text;
-        if !text.is_empty() && !text.ends_with('\n') {
-            text.push('\n');
-        }
+    let VerbRender { exit, mut text } = cli::serve_render(ws, &argv_refs);
+    // §5.3 input/internal errors (e.g. a missing lock) are `isError` results carrying the
+    // CLI's message (§5.2); check otherwise gets its exit appended — clean runs print nothing.
+    let is_error = exit >= ExitCode::Input as i32;
+    if name == "check" && !is_error {
         text.push_str(&format!("exit: {exit}"));
-        text
-    } else {
-        text
-    };
-    success(id, tool_result(&content, false))
+    }
+    success(
+        id,
+        json!({ "content": [{ "type": "text", "text": text }], "isError": is_error }),
+    )
 }
 
-/// Build the CLI argv for a tool call from its named arguments (§5.2: CLI flags map to
-/// named tool parameters). An absent optional arg is simply omitted; a missing REQUIRED
-/// arg is left out too, so the verb's own usage check produces the exit-2 error result
-/// (one code path). Returns `None` only for an unknown tool name.
+/// The CLI argv for a tool call, derived from its `inputSchema` (§5.2: CLI flags map to
+/// named tool parameters): required string args as positionals, then each optional one as
+/// its `--flag`. Absent or ill-typed args are omitted, leaving a missing required arg to
+/// the verb's own usage check. `None` only for an unknown tool name.
 fn argv_for_tool(name: &str, arguments: Option<&Value>) -> Option<Vec<String>> {
-    let string_arg = |key: &str| {
-        arguments
-            .and_then(|a| a.get(key))
-            .and_then(Value::as_str)
-            .map(str::to_string)
-    };
+    let tool = tool_definitions().into_iter().find(|t| t["name"] == name)?;
+    let schema = &tool["inputSchema"];
+    let required = schema["required"].as_array().cloned().unwrap_or_default();
+    let arg = |key: &str| arguments.and_then(|a| a.get(key));
     let mut argv = vec![name.to_string()];
-    match name {
-        "root" => {}
-        "node" => argv.extend(string_arg("id")),
-        "unfold" => {
-            argv.extend(string_arg("id"));
-            if let Some(depth) = arguments
-                .and_then(|a| a.get("depth"))
-                .and_then(Value::as_i64)
-            {
-                argv.push("--depth".to_string());
-                argv.push(depth.to_string());
-            }
+    argv.extend(
+        required
+            .iter()
+            .filter_map(|k| Some(arg(k.as_str()?)?.as_str()?.to_string())),
+    );
+    let optional = schema["properties"].as_object().into_iter().flatten();
+    for (key, prop) in optional.filter(|(k, _)| !required.contains(&json!(k))) {
+        let flag = format!("--{}", key.replace('_', "-"));
+        match (prop["type"].as_str(), arg(key)) {
+            (Some("string"), Some(Value::String(s))) => argv.extend([flag, s.clone()]),
+            (Some("integer"), Some(v)) if v.is_i64() => argv.extend([flag, v.to_string()]),
+            (Some("boolean"), Some(Value::Bool(true))) => argv.push(flag),
+            _ => {}
         }
-        "invariants" => {
-            if let Some(path) = string_arg("touching") {
-                argv.push("--touching".to_string());
-                argv.push(path);
-            }
-        }
-        "hazards" => {
-            if let Some(node) = string_arg("node") {
-                argv.push("--node".to_string());
-                argv.push(node);
-            }
-        }
-        "nodes" => {
-            if let Some(kind) = string_arg("kind") {
-                argv.push("--kind".to_string());
-                argv.push(kind);
-            }
-        }
-        "check" => {
-            if let Some(only) = string_arg("only") {
-                argv.push("--only".to_string());
-                argv.push(only);
-            }
-            if arguments
-                .and_then(|a| a.get("run_commands"))
-                .and_then(Value::as_bool)
-                == Some(true)
-            {
-                argv.push("--run-commands".to_string());
-            }
-        }
-        "blame" => argv.extend(string_arg("claim")),
-        _ => return None,
     }
     Some(argv)
 }
@@ -391,9 +313,4 @@ fn success(id: Value, result: Value) -> Value {
 /// A JSON-RPC 2.0 error response.
 fn error_response(id: Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
-}
-
-/// An MCP tool result (§server/tools): unstructured text content plus the `isError` flag.
-fn tool_result(text: &str, is_error: bool) -> Value {
-    json!({ "content": [ { "type": "text", "text": text } ], "isError": is_error })
 }

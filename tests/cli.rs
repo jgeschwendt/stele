@@ -118,6 +118,15 @@ fn unfold_expands_two_hops() {
         "depth 1 must not reach hop 2:\n{}",
         shallow.stdout
     );
+
+    // A flag where the id belongs is the usage error, not a node named `--depth`.
+    let missing = fixture.run(&["unfold", "--depth", "2"]);
+    assert_eq!(missing.code, 2, "{}", missing.combined());
+    assert!(
+        missing.stderr.contains("usage: stele unfold"),
+        "{}",
+        missing.stderr
+    );
 }
 
 // Probe 5 — `stele invariants --touching <path>` surfaces the owning node's invariants

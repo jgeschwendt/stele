@@ -42,10 +42,8 @@ const INVALID_PARAMS: i64 = -32602;
 /// A request's outcome before its envelope: the `result`, or an error's `(code, message)`.
 type Outcome = Result<Value, (i64, String)>;
 
-/// `stele serve` (§5.2): runs the blocking MCP stdio loop until stdin EOF. Intercepted
-/// BEFORE the CLI's `--json` envelope machinery (see [`crate::cli::run`]) — serve owns stdout.
-/// One JSON-RPC message per line in, one response line per request out; stdin EOF is
-/// graceful shutdown (§lifecycle), a stdio error exits internal.
+/// `stele serve` (§5.2): the blocking MCP stdio loop. stdin EOF is graceful shutdown
+/// (§lifecycle); a stdio error exits internal.
 pub fn run(root: &Path, args: &[String]) -> i32 {
     if args.iter().any(|a| a == "--json") {
         eprintln!(
@@ -84,11 +82,8 @@ pub fn run(root: &Path, args: &[String]) -> i32 {
     0
 }
 
-/// Parse and dispatch one JSON-RPC message. Returns the response `Value` for a request,
-/// or `None` for a blank line, a notification (no `id`) and messages that warrant no
-/// reply. A non-JSON line → parse error; a non-object or method-less request → invalid
-/// request; an unknown method on a request → method-not-found (an unknown notification is
-/// ignored). A malformed line is an error response, never a crash.
+/// Parse and dispatch one JSON-RPC line: the response for a request, `None` when no reply
+/// is owed (blank line, notification). Malformed input is an error response, never a crash.
 fn handle_message(ws: &Workspace, text: &str) -> Option<Value> {
     let (id, outcome): (Value, Outcome) = match serde_json::from_str::<Value>(text) {
         // serde_json skips surrounding whitespace, so only a blank line lands here.
@@ -142,10 +137,10 @@ fn initialize_result(params: Option<&Value>) -> Value {
     })
 }
 
-/// Every exposed tool definition (§5.2): `{name, description, inputSchema}`. Names are
-/// un-prefixed (the server namespace supplies `stele.`); schemas are 2020-12 JSON Schema
-/// objects with `additionalProperties:false` so only the declared params are accepted. The
-/// whole set fits one `tools/list` page — no pagination cursor.
+/// Every exposed tool definition (§5.2), also the source [`argv_for_tool`] derives argv
+/// from. Schemas are 2020-12 JSON Schema objects with `additionalProperties:false`
+/// (undeclared args are never forwarded). The whole set fits one `tools/list` page — no
+/// pagination cursor.
 fn tool_definitions() -> Value {
     json!([
         {
@@ -232,10 +227,8 @@ fn tool_definitions() -> Value {
     ])
 }
 
-/// Handle `tools/call` (§server/tools): resolve the tool name to a CLI argv, dispatch it
-/// through the shared verb renderer, and package the result. An unknown tool name or
-/// missing params is a JSON-RPC protocol error (§Error Handling: unknown tools are
-/// protocol errors).
+/// Handle `tools/call` (§server/tools). Bad params or an unknown tool is a JSON-RPC
+/// protocol error (§Error Handling); a verb failure is an `isError` result.
 fn tools_call(ws: &Workspace, params: Option<&Value>) -> Outcome {
     let params = params.ok_or((
         INVALID_PARAMS,

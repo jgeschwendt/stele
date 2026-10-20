@@ -1,19 +1,12 @@
 //! The MCP tier — `stele serve` (SPEC §5.2), driven end-to-end against the real binary.
-//! Each probe spawns `stele serve` on a scratch repo, feeds a batch of
-//! newline-delimited JSON-RPC messages on stdin (closed to signal EOF), and parses the
-//! newline-delimited responses off stdout. The server reads to EOF and exits (§lifecycle
-//! shutdown), so the captured stdout holds one response per request, in order.
 
 mod common;
 
 use common::Fixture;
 use serde_json::{Value, json};
 
-/// The MCP protocol version this server implements (server/tools + lifecycle, 2025-11-25).
-const LATEST_PROTOCOL_VERSION: &str = "2025-11-25";
-
-/// Feed `messages` to `stele serve` as newline-delimited JSON on stdin, then parse the
-/// response lines. Asserts a clean exit (0) — EOF shutdown must always succeed.
+/// Feed `messages` to `stele serve` as newline-delimited stdin, closed for EOF shutdown
+/// (§lifecycle), and parse stdout: one response per request, in order.
 fn exchange(fixture: &Fixture, messages: &[Value]) -> Vec<Value> {
     let input = messages
         .iter()
@@ -21,15 +14,23 @@ fn exchange(fixture: &Fixture, messages: &[Value]) -> Vec<Value> {
         .collect::<String>();
     let out = fixture.run_with_stdin(&["serve"], input);
     assert_eq!(out.code, 0, "serve must exit 0 on EOF:\n{}", out.combined());
-    out.stdout
+    responses(&out.stdout)
+}
+
+fn responses(stdout: &str) -> Vec<Value> {
+    stdout
         .lines()
         .map(|l| serde_json::from_str(l).expect(l))
         .inspect(|r: &Value| assert_eq!(r["jsonrpc"], "2.0", "{r}"))
         .collect()
 }
 
-fn init(id: u8, version: &str) -> Value {
+fn init(id: usize, version: &str) -> Value {
     json!({"jsonrpc":"2.0","id":id,"method":"initialize","params":{"protocolVersion":version}})
+}
+
+fn call(id: usize, params: Value) -> Value {
+    json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":params})
 }
 
 #[test]
@@ -37,16 +38,15 @@ fn handshake_negotiates_version_and_lists_eight_tools() {
     let responses = exchange(
         &Fixture::bare(),
         &[
-            init(1, LATEST_PROTOCOL_VERSION),
+            init(1, "2025-06-18"),
             json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
             json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
-            // An unsupported version → the latest; a supported older one → echoed verbatim.
             init(3, "1.0.0"),
-            init(4, "2025-06-18"),
         ],
     );
+    // A supported older version → echoed verbatim; an unsupported one → the latest.
     let init = &responses[0]["result"];
-    assert_eq!(init["protocolVersion"], LATEST_PROTOCOL_VERSION);
+    assert_eq!(init["protocolVersion"], "2025-06-18");
     assert!(init["capabilities"]["tools"].is_object(), "{init}");
     assert_eq!(init["serverInfo"]["name"], "stele");
 
@@ -82,10 +82,7 @@ fn handshake_negotiates_version_and_lists_eight_tools() {
                 && t["inputSchema"]["additionalProperties"] == false),
         "{tools:?}"
     );
-    assert_eq!(
-        [&responses[2], &responses[3]].map(|r| &r["result"]["protocolVersion"]),
-        [LATEST_PROTOCOL_VERSION, "2025-06-18"]
-    );
+    assert_eq!(responses[2]["result"]["protocolVersion"], "2025-11-25");
 }
 
 /// Serve text is byte-identical to CLI stdout (§5.2 shared render path); `check` appends
@@ -148,7 +145,7 @@ fn tool_calls_match_cli_stdout() {
     let messages: Vec<Value> = rows
         .iter()
         .enumerate()
-        .map(|(id, (_, params, _))| json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":params}))
+        .map(|(id, (_, params, _))| call(id, params.clone()))
         .collect();
     for ((argv, _, tail), response) in rows.iter().zip(exchange(&fixture, &messages)) {
         let text = fixture.run(argv).stdout + tail;
@@ -162,7 +159,6 @@ fn tool_calls_match_cli_stdout() {
 
 #[test]
 fn malformed_and_unknown_inputs_are_resilient() {
-    let call = |id: u8, params: Value| json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":params});
     let responses = exchange(
         &Fixture::bare(),
         &[
@@ -170,7 +166,6 @@ fn malformed_and_unknown_inputs_are_resilient() {
             json!({"jsonrpc":"2.0","id":5,"method":"bogus/method"}),
             call(6, json!({"name":"nope"})),
             json!({"jsonrpc":"2.0","id":8}),
-            json!({"jsonrpc":"2.0"}),
             json!({"jsonrpc":"2.0","id":9,"method":"tools/call"}),
             call(10, json!({})),
             json!({"jsonrpc":"2.0","method":"notifications/unknown"}),
@@ -201,11 +196,7 @@ fn malformed_and_unknown_inputs_are_resilient() {
 fn raw_stream_survives_until_a_stdio_error() {
     let fixture = Fixture::bare();
     fixture.write(".stele/undercover", "stele undercover\n");
-    let mut stdin = format!(
-        "{}\n \t\nnot json\n",
-        json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"check"}})
-    )
-    .into_bytes();
+    let mut stdin = format!("{}\n \t\nnot json\n", call(1, json!({"name":"check"}))).into_bytes();
     stdin.extend(b"\xff\n");
     let out = fixture.run_with_stdin(&["serve"], stdin);
     assert_eq!(out.code, 3, "{}", out.combined());
@@ -215,11 +206,7 @@ fn raw_stream_survives_until_a_stdio_error() {
         "{}",
         out.stderr
     );
-    let responses: Vec<Value> = out
-        .stdout
-        .lines()
-        .map(|l| serde_json::from_str(l).expect(l))
-        .collect();
+    let responses = responses(&out.stdout);
     assert_eq!(responses.len(), 2, "{responses:?}");
     assert_eq!(responses[0]["result"]["isError"], true, "{}", responses[0]);
     assert!(

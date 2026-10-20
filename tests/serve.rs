@@ -45,10 +45,10 @@ fn handshake_negotiates_version_and_lists_eight_tools() {
         ],
     );
     // A supported older version → echoed verbatim; an unsupported one → the latest.
-    let init = &responses[0]["result"];
-    assert_eq!(init["protocolVersion"], "2025-06-18");
-    assert!(init["capabilities"]["tools"].is_object(), "{init}");
-    assert_eq!(init["serverInfo"]["name"], "stele");
+    let result = &responses[0]["result"];
+    assert_eq!(result["protocolVersion"], "2025-06-18");
+    assert!(result["capabilities"]["tools"].is_object(), "{result}");
+    assert_eq!(result["serverInfo"]["name"], "stele");
 
     // Exactly the eight read verbs — no mutating verb leaks in — each an object schema.
     let tools = responses[1]["result"]["tools"].as_array().expect("tools");
@@ -163,7 +163,8 @@ fn malformed_and_unknown_inputs_are_resilient() {
         &Fixture::bare(),
         &[
             json!("not-an-object"),
-            json!({"jsonrpc":"2.0","id":5,"method":"bogus/method"}),
+            // A notification's method sent with an id is a request, and every request is answered.
+            json!({"jsonrpc":"2.0","id":5,"method":"notifications/initialized"}),
             call(6, json!({"name":"nope"})),
             json!({"jsonrpc":"2.0","id":8}),
             json!({"jsonrpc":"2.0","id":9,"method":"tools/call"}),

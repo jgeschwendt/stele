@@ -70,9 +70,8 @@ pub fn run(root: &Path, args: &[String]) -> i32 {
     for line in std::io::stdin().lines() {
         // Compact serialization has no embedded newlines (transport requirement); the
         // trailing `\n` is the message delimiter.
-        let written = line.and_then(|line| match handle_message(&workspace, &line) {
-            Some(response) => writeln!(stdout, "{response}"),
-            None => Ok(()),
+        let written = line.and_then(|line| {
+            handle_message(&workspace, &line).map_or(Ok(()), |r| writeln!(stdout, "{r}"))
         });
         if let Err(e) = written {
             eprintln!("stele serve: stdio error: {e}");
@@ -102,7 +101,6 @@ fn handle_message(ws: &Workspace, text: &str) -> Option<Value> {
             match msg["method"].as_str() {
                 None => Err((INVALID_REQUEST, "Invalid Request: missing method".into())),
                 Some("initialize") => Ok(initialize_result(msg.get("params"))),
-                Some("notifications/initialized") => return None,
                 Some("ping") => Ok(json!({})),
                 Some("tools/list") => Ok(json!({ "tools": tool_definitions() })),
                 Some("tools/call") => tools_call(ws, msg.get("params")),

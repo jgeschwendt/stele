@@ -9,9 +9,11 @@
 //! are NOT exposed (§5.2: they write source or the lock and belong to the shell/CI tier).
 //!
 //! Every tool call reuses the CLI's own verb dispatch through [`crate::cli::serve_render`],
-//! so a tool's text content is byte-identical to `stele <verb>`'s stdout — one code path
+//! so a tool's text content is byte-identical to `stele <verb>`'s stdout (an error result
+//! carries the message the CLI prints to stderr; `check` appends `exit: N`) — one code path
 //! per verb, no duplicated rendering. Each call loads the COMMITTED lock fresh (via the
-//! verb's own read path); serve never rebuilds and never writes (§5.2/§5.3). A missing or
+//! verb's own read path) and never writes the lock or a source (§5.2/§5.3); `check` still
+//! rebuilds in memory and, with `run_commands`, runs the declared commands. A missing or
 //! unknown-version lock is a per-call tool error result, not a startup failure.
 
 use crate::assert::ALL_CLASSES;
@@ -24,8 +26,9 @@ use std::path::Path;
 
 /// Protocol versions this server will echo back verbatim when a client requests one of
 /// them (§version-negotiation: "if the server supports the requested version it MUST
-/// respond with the same version"). The stdio + tools wire shape is stable across these;
-/// serve declares no version-gated optional capability, so each is honestly supported.
+/// respond with the same version"). The stdio + tools wire shape is shared across these,
+/// save one gap: 2025-03-26 requires receiving JSON-RPC batches, and serve answers an array
+/// with invalid-request (fetched 2026-10-20 · modelcontextprotocol.io 2025-03-26/basic).
 const SUPPORTED_PROTOCOL_VERSIONS: [&str; 4] =
     ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
 
@@ -71,7 +74,7 @@ pub fn run(root: &Path, args: &[String]) -> i32 {
         // Compact serialization has no embedded newlines (transport requirement); the
         // trailing `\n` is the message delimiter.
         let written = line.and_then(|line| {
-            handle_message(&workspace, &line).map_or(Ok(()), |r| writeln!(stdout, "{r}"))
+            handle_message(&workspace, line.trim()).map_or(Ok(()), |r| writeln!(stdout, "{r}"))
         });
         if let Err(e) = written {
             eprintln!("stele serve: stdio error: {e}");
@@ -85,8 +88,7 @@ pub fn run(root: &Path, args: &[String]) -> i32 {
 /// is owed (blank line, notification). Malformed input is an error response, never a crash.
 fn handle_message(ws: &Workspace, text: &str) -> Option<Value> {
     let (id, outcome): (Value, Outcome) = match serde_json::from_str::<Value>(text) {
-        // serde_json skips surrounding whitespace, so only a blank line lands here.
-        Err(_) if text.trim().is_empty() => return None,
+        Err(_) if text.is_empty() => return None,
         Err(_) => (Value::Null, Err((PARSE_ERROR, "Parse error".into()))),
         Ok(value) if !value.is_object() => (
             Value::Null,
@@ -95,7 +97,7 @@ fn handle_message(ws: &Workspace, text: &str) -> Option<Value> {
                 "Invalid Request: expected a JSON-RPC object".into(),
             )),
         ),
-        // Absent `id` marks a notification (JSON-RPC): no response, even on error.
+        // Absent `id`: treated as a notification and never answered, even on error.
         Ok(msg) => (
             msg.get("id")?.clone(),
             match msg["method"].as_str() {
@@ -127,7 +129,8 @@ fn initialize_result(params: Option<&Value>) -> Value {
     json!({
         "protocolVersion": version,
         "capabilities": { "tools": {} },
-        // The server name is also the tool namespace (§5.2): `stele.<verb>` on the wire.
+        // The server name is also the tool namespace (§5.2): bare verbs on the wire, which a
+        // client qualifies as `stele.<verb>`.
         "serverInfo": { "name": "stele", "version": env!("CARGO_PKG_VERSION") },
         "instructions": "stele MCP server (SPEC §5.2): eight read-only query tools over the \
             committed graph lock. Mutating verbs (build/init/emit) are shell/CI-only and not \
@@ -198,7 +201,7 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "check",
-            "description": "Run the six assertion classes over the committed graph; result is the findings text with a trailing `exit:` status line.",
+            "description": "Rebuild the graph, compare it to the committed lock, and run the six assertion classes; result is the findings text with a trailing `exit:` status line (an error result has none).",
             "inputSchema": {
                 "type": "object",
                 "properties": {

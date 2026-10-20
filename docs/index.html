@@ -232,7 +232,7 @@ stele emit --check             <span class="snippet-note"># committed files vs w
       materialized from one lock.</p>
   </header>
   <pre class="snippet">stele root                                  <span class="snippet-note"># the system node — start here</span>
-stele unfold payments --depth 2             <span class="snippet-note"># a node with its children</span>
+stele unfold payments --depth 2             <span class="snippet-note"># a node with its neighbours, two hops out</span>
 stele invariants --touching src/charge.rs   <span class="snippet-note"># claims governing the file you're editing</span>
 stele hazards                               <span class="snippet-note"># every active hazard</span>
 stele nodes --kind container                <span class="snippet-note"># the graph by kind</span>

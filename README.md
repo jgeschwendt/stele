@@ -1,3 +1,3 @@
 # stele
 
-Law set in stone for agent docs—`stele` checks what AGENTS.md claims against what the code does.
+Declared law, living context—`stele` keeps agent claims true to the code.

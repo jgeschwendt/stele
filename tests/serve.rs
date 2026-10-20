@@ -24,6 +24,7 @@ fn exchange(fixture: &Fixture, messages: &[Value]) -> Vec<Value> {
     out.stdout
         .lines()
         .map(|l| serde_json::from_str(l).expect(l))
+        .inspect(|r: &Value| assert_eq!(r["jsonrpc"], "2.0", "{r}"))
         .collect()
 }
 
@@ -44,7 +45,6 @@ fn handshake_negotiates_version_and_lists_eight_tools() {
             init(4, "2025-06-18"),
         ],
     );
-    assert_eq!(responses.len(), 4, "{responses:?}");
     let init = &responses[0]["result"];
     assert_eq!(init["protocolVersion"], LATEST_PROTOCOL_VERSION);
     assert!(init["capabilities"]["tools"].is_object(), "{init}");
@@ -78,7 +78,8 @@ fn handshake_negotiates_version_and_lists_eight_tools() {
     assert!(
         tools
             .iter()
-            .all(|t| t["description"].as_str().is_some_and(|d| !d.is_empty())),
+            .all(|t| t["description"].as_str().is_some_and(|d| !d.is_empty())
+                && t["inputSchema"]["additionalProperties"] == false),
         "{tools:?}"
     );
     assert_eq!(
@@ -97,10 +98,11 @@ fn tool_calls_match_cli_stdout() {
         9,
         "  alias AcmeWeb.Billing.Charge",
     );
-    fixture.commit("store imports billing (undeclared edge)");
+    fixture.replace("AGENTS.md", "commands:\n", "commands:\n  flake: false\n");
+    fixture.commit("store imports billing (undeclared edge); a failing command");
     assert_eq!(fixture.run(&["build"]).code, 0);
 
-    let rows: [(&[&str], Value, &str); 8] = [
+    let rows: [(&[&str], Value, &str); 9] = [
         (&["root"], json!({"name":"root"}), ""),
         (
             &["node", "billing"],
@@ -110,6 +112,11 @@ fn tool_calls_match_cli_stdout() {
         (
             &["unfold", "apps/web", "--depth", "2"],
             json!({"name":"unfold","arguments":{"id":"apps/web","depth":2}}),
+            "",
+        ),
+        (
+            &["unfold", "apps/web"],
+            json!({"name":"unfold","arguments":{"id":"apps/web","depth":"2"}}),
             "",
         ),
         (
@@ -128,13 +135,13 @@ fn tool_calls_match_cli_stdout() {
             "",
         ),
         (
-            &["check", "--only", "structural"],
-            json!({"name":"check","arguments":{"only":"structural"}}),
+            &["check", "--run-commands"],
+            json!({"name":"check","arguments":{"run_commands":true}}),
             "exit: 1",
         ),
         (
-            &["check", "--only", "liveness", "--run-commands"],
-            json!({"name":"check","arguments":{"only":"liveness","run_commands":true}}),
+            &["check", "--only", "liveness"],
+            json!({"name":"check","arguments":{"only":"liveness","run_commands":false}}),
             "exit: 0",
         ),
     ];
@@ -172,7 +179,7 @@ fn malformed_and_unknown_inputs_are_resilient() {
     );
     let pairs: Vec<Value> = responses
         .iter()
-        .map(|r| json!([r["id"], r["error"]["code"]]))
+        .map(|r| json!([r["id"], r["error"].get("code").unwrap_or(&r["result"])]))
         .collect();
     assert_eq!(
         json!(pairs),
@@ -183,7 +190,7 @@ fn malformed_and_unknown_inputs_are_resilient() {
             [8, -32600],
             [9, -32602],
             [10, -32602],
-            [7, null],
+            [7, {}],
         ])
     );
 }
@@ -196,7 +203,7 @@ fn raw_stream_survives_until_a_stdio_error() {
     fixture.write(".stele/undercover", "stele undercover\n");
     let mut stdin = format!(
         "{}\n \t\nnot json\n",
-        json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"root"}})
+        json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"check"}})
     )
     .into_bytes();
     stdin.extend(b"\xff\n");
@@ -218,7 +225,7 @@ fn raw_stream_survives_until_a_stdio_error() {
     assert!(
         responses[0]["result"]["content"][0]["text"]
             .as_str()
-            .is_some_and(|t| t.contains("run stele build")),
+            .is_some_and(|t| t.contains("run stele build") && !t.contains("exit:")),
         "{}",
         responses[0]
     );

@@ -2,14 +2,14 @@
 
 ```stele
 kind: system
-purpose: stele — typed agent-doc graph reconciled against extracted code truth. SPEC.md is the contract; the Rust engine implements it and self-hosts on this repo.
+purpose: stele — typed agent-doc graph reconciled against extracted code truth. docs/spec.html is the contract; the Rust engine implements it and self-hosts on this repo.
 commands:
   test: cargo test
   lint: cargo clippy --all-targets -- -D warnings && cargo fmt --check
   graph: cargo run -- build && cargo run -- emit   # local only; CI never runs stele build (§5.1)
 invariants:
-  - claim: SPEC.md outranks everything here — code and examples conform to it; changing behavior means revising the spec (and its decision log) first
-    anchor: SPEC.md#decision-log
+  - claim: docs/spec.html outranks everything here — code and examples conform to it; changing behavior means revising the spec (and its decision log) first
+    anchor: ※ decision-log
   - claim: every [Cn] citation must stay licensed by research/claims.md's status for that claim — never state a `reported` claim as settled fact
     anchor: research/claims.md#c1
 ```
@@ -20,15 +20,15 @@ This repo eats its own convention: the block above is a real stele node — `ste
 
 | where | what |
 | --- | --- |
-| GUIDE.md | the adoption path — install → init → anchor → build → CI |
-| SPEC.md | the v1 specification (read §1 constraints + §2 model first) |
+| docs/guide.html | the adoption path — install → init → anchor → build → CI |
+| docs/spec.html | the v1 specification (read §1 constraints + §2 model first) |
 | EXAMPLE.md | worked example — read this first to feel the design |
 | research/ | evidence base: report, claim ledger, primary-source findings |
 
 ## Working here
 
-- Design decisions in SPEC.md's decision log and §10 are settled — relitigate only with new evidence, in a PR that updates the log.
-- Doc edits own the whole file: verify external claims (harness behavior, tool capabilities) against live sources, and date-stamp negative claims — several in SPEC.md carry `(as of 2026-07…)` markers that rot by design.
+- Design decisions in docs/spec.html's decision log and §10 are settled — relitigate only with new evidence, in a PR that updates the log.
+- Doc edits own the whole file: verify external claims (harness behavior, tool capabilities) against live sources, and date-stamp negative claims — several in docs/spec.html carry `(as of 2026-07…)` markers that rot by design.
 - The §4 assertion suite is the test-fixture contract; EXAMPLE.md's CI failure gallery is the expected-output oracle (`tests/gallery.rs` encodes it).
 
 <!-- @stele -->

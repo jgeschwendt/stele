@@ -332,7 +332,7 @@ pub fn resolve_symbol(root: &Path, rel_path: &str, symbol: &str) -> Result<Symbo
     // Markdown has no tree-sitter named-definition grammar (§2.4), so a `<path>#<symbol>`
     // anchor into a `.md`/`.markdown` file resolves against GitHub-style heading slugs —
     // headings are the definition analogue. This repo's own AGENTS.md depends on it
-    // (`research/claims.md#c1`, `SPEC.md#decision-log`). digest stays null (parser-less →
+    // (`research/claims.md#c1`). digest stays null (parser-less →
     // §4.5 churn fallback), same as any other parser-less anchored file.
     if matches!(ext.as_deref(), Some("markdown" | "md")) {
         return resolve_markdown_heading(root, path, rel_path, symbol);

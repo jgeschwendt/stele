@@ -117,8 +117,8 @@ fn tool_calls_match_cli_stdout() {
             "",
         ),
         (
-            &["invariants", "--touching", "apps/web/lib/billing"],
-            json!({"name":"invariants","arguments":{"touching":"apps/web/lib/billing"}}),
+            &["invariants", "--touching", "apps/worker"],
+            json!({"name":"invariants","arguments":{"touching":"apps/worker"}}),
             "",
         ),
         (
@@ -169,6 +169,8 @@ fn malformed_and_unknown_inputs_are_resilient() {
             json!({"jsonrpc":"2.0","id":8}),
             json!({"jsonrpc":"2.0","id":9,"method":"tools/call"}),
             call(10, json!({})),
+            // An ill-typed required argument is left out, so the verb's own usage line answers.
+            call(11, json!({"name":"node","arguments":{"id":5}})),
             json!({"jsonrpc":"2.0","method":"notifications/unknown"}),
             json!({"jsonrpc":"2.0","id":7,"method":"ping"}),
         ],
@@ -186,18 +188,21 @@ fn malformed_and_unknown_inputs_are_resilient() {
             [8, -32600],
             [9, -32602],
             [10, -32602],
+            [11, {"content":[{"type":"text","text":"usage: stele node <id>"}],"isError":true}],
             [7, {}],
         ])
     );
 }
 
-/// Undercover with no lock: the stderr note, a tool-error result, a skipped blank line, a
-/// parse error, then a non-UTF-8 line ends the stream as a stdio error (exit 3).
+/// Undercover with no lock: the stderr note, a tool-error result (its line padded with
+/// non-JSON whitespace), a skipped blank line, a parse error, then a non-UTF-8 line ends the
+/// stream as a stdio error (exit 3).
 #[test]
 fn raw_stream_survives_until_a_stdio_error() {
     let fixture = Fixture::bare();
     fixture.write(".stele/undercover", "stele undercover\n");
-    let mut stdin = format!("{}\n \t\nnot json\n", call(1, json!({"name":"check"}))).into_bytes();
+    let check = call(1, json!({"name":"check"}));
+    let mut stdin = format!("\u{a0}{check}\u{b}\n \t\nnot json\n").into_bytes();
     stdin.extend(b"\xff\n");
     let out = fixture.run_with_stdin(&["serve"], stdin);
     assert_eq!(out.code, 3, "{}", out.combined());

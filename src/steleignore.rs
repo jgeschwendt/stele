@@ -105,23 +105,21 @@ impl Pattern {
         };
 
         // Any remaining `/` (leading or internal) anchors the pattern to the repo root;
-        // a slash-free pattern matches at any depth, expressed as a leading `**`.
-        let anchored = line.contains('/');
-        let body = line.strip_prefix('/').unwrap_or(line);
-
-        let mut segments = Vec::new();
-        if !anchored {
-            segments.push(Segment::DoubleStar);
-        }
-        for seg in body.split('/').filter(|s| !s.is_empty()) {
-            segments.push(if seg == "**" {
-                Segment::DoubleStar
-            } else {
-                Segment::Glob(seg.to_string())
-            });
-        }
+        // a slash-free pattern matches at any depth, expressed as a leading `**`. A pattern
+        // with no segment left (`/`, `!`) matches nothing, as in git.
+        let mut segments: Vec<Segment> = line
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .map(|seg| match seg {
+                "**" => Segment::DoubleStar,
+                _ => Segment::Glob(seg.to_string()),
+            })
+            .collect();
         if segments.is_empty() {
             return None;
+        }
+        if !line.contains('/') {
+            segments.insert(0, Segment::DoubleStar);
         }
         Some(Pattern {
             dir_only,
@@ -210,7 +208,23 @@ mod tests {
     fn blank_and_comment_lines_are_skipped() {
         let s = "# a comment\n\n  \ntests/fixtures/\n";
         assert!(ig(s, "tests/fixtures/x"));
-        assert_eq!(Steleignore::parse("# only comments\n\n").patterns.len(), 0);
+        // A pattern with no segment left (`/`, `//`, a bare `!`) matches nothing, as in git.
+        assert_eq!(
+            Steleignore::parse("# only comments\n\n/\n//\n!\n")
+                .patterns
+                .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn an_unreadable_input_file_is_an_internal_error() {
+        // A directory where `.steleignore` or `.stele/config.toml` belongs: exit 3, not a skip.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".stele/config.toml")).unwrap();
+        std::fs::create_dir(dir.path().join(STELEIGNORE_FILE)).unwrap();
+        assert!(Steleignore::load(dir.path()).is_err());
+        assert!(crate::config::load(dir.path()).is_err());
     }
 
     #[test]
@@ -233,6 +247,7 @@ mod tests {
     fn glob_and_doublestar() {
         assert!(ig("*.tmp\n", "a/b/c.tmp"));
         assert!(!ig("*.tmp\n", "a/b/c.tmpx"));
+        assert!(ig("c.tmp**\n", "a/b/c.tmp"));
         assert!(ig("build/**/gen.rs\n", "build/a/b/gen.rs"));
         assert!(ig("build/**/gen.rs\n", "build/gen.rs"));
         assert!(!ig("build/**/gen.rs\n", "build/a/gen.rsx"));

@@ -207,14 +207,15 @@ fn init_undercover_installs_exclude_block_before_artifacts() {
 }
 
 // Self-heal (§3.5, finding 1): a historically-partial state — marker present, exclude block gone
-// — is repaired on the next `build`. The block returns and the work tree is clean again.
+// — is repaired on the next `build`. The block returns and the work tree is clean again; lines
+// outside the fence are never touched.
 #[test]
 fn undercover_build_self_heals_exclude_block() {
     let fixture = undercover_built();
 
-    // Simulate a lost block: truncate `info/exclude` to empty (the block never installed, or a
-    // teammate's tooling clobbered it), leaving the marker in place.
-    fixture.write(".git/info/exclude", "");
+    // Simulate a lost block: `info/exclude` holds only a teammate's unterminated line (the block
+    // never installed, or their tooling clobbered it), leaving the marker in place.
+    fixture.write(".git/info/exclude", "*.log");
     // Sanity: with the block gone and host config isolated, the overlay WOULD show.
     assert!(
         git_stdout(&fixture, &["status", "--porcelain"]).contains(".stele"),
@@ -224,18 +225,43 @@ fn undercover_build_self_heals_exclude_block() {
     let build = fixture.run(&["build"]);
     assert_eq!(build.code, 0, "build:\n{}", build.combined());
 
-    let exclude = fixture.read(".git/info/exclude");
-    assert!(
-        exclude.contains("# stele:begin undercover")
-            && exclude.contains("/.stele/")
-            && exclude.contains("/CLAUDE.local.md"),
-        "build did not re-install the exclude block:\n{exclude}"
+    let block = "# stele:begin undercover\n/.stele/\n/CLAUDE.local.md\n# stele:end undercover\n";
+    assert_eq!(
+        fixture.read(".git/info/exclude"),
+        format!("*.log\n{block}"),
+        "build did not re-install the exclude block after the teammate's line"
     );
     assert_eq!(
         git_stdout(&fixture, &["status", "--porcelain"]),
         "",
         "self-heal left the work tree dirty"
     );
+
+    // A stale block is rewritten in place; the lines around it are byte-preserved.
+    fixture.write(
+        ".git/info/exclude",
+        "keep\n# stele:begin undercover\n/stale\n# stele:end undercover\nafter\n",
+    );
+    assert_eq!(fixture.run(&["build"]).code, 0);
+    assert_eq!(
+        fixture.read(".git/info/exclude"),
+        format!("keep\n{block}after\n")
+    );
+
+    // An overlay root that is not a directory, or an unreadable exclude, is exit 3.
+    for (held, plant, says) in [
+        (".stele/tree", ".stele/tree", "read overlay "),
+        (".git/info/exclude", ".git/info/exclude/x", "read "),
+    ] {
+        let held = fixture.path(held);
+        std::fs::remove_dir_all(&held)
+            .or_else(|_| std::fs::remove_file(&held))
+            .unwrap();
+        fixture.write(plant, "");
+        let build = fixture.run(&["build"]);
+        assert_eq!(build.code, 3, "{plant}: {}", build.combined());
+        assert!(build.stderr.starts_with(says), "{plant}: {}", build.stderr);
+    }
 }
 
 // The shim lands at the WORK-TREE ROOT, not the cwd (§3.5, finding 2): `emit` invoked from a

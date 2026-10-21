@@ -44,25 +44,33 @@ fn prose_glyphs_build_clean_and_declare_nothing() {
 
 // ─── §4.1 a typo'd landmark fails referentially, never lexically ─────────────
 
+// The same holds for an anchor in neither namespace (no `※`, no `#`) and for a
+// `<path>#<symbol>` naming two definitions (ambiguous, §2.4).
 #[test]
 fn typo_in_a_referenced_landmark_fails_check_not_build() {
-    let fixture = Fixture::acme();
-    // The comment keeps its slug; only the node file's reference is mistyped, so the
-    // slug has cardinality 0 — an exit-1 referential failure, not an exit-2 parse error.
-    fixture.replace(
-        "apps/web/lib/billing/AGENTS.md",
-        BILLING_ANCHOR,
-        "anchor: ※ refund-capp",
-    );
-    fixture.commit("typo the refund-cap anchor reference");
+    for (anchor, says) in [
+        // The comment keeps its slug; only the node file's reference is mistyped, so the
+        // slug has cardinality 0 — an exit-1 referential failure, not an exit-2 parse error.
+        ("※ refund-capp", "anchor ※ refund-capp unresolved"),
+        ("refund-cap", "anchor refund-cap unresolved"),
+        ("twice.py#f", "anchor twice.py#f ambiguous"),
+    ] {
+        let fixture = Fixture::acme();
+        fixture.write("twice.py", "def f():\n    pass\n\ndef f():\n    pass\n");
+        fixture.replace(
+            "apps/web/lib/billing/AGENTS.md",
+            BILLING_ANCHOR,
+            &format!("anchor: {anchor}"),
+        );
+        fixture.commit("mistype the refund-cap anchor reference");
 
-    let build = fixture.run(&["build"]);
-    assert_eq!(build.code, 0, "{}", build.combined());
-    let check = fixture.run(&["check"]);
-    let out = check.combined();
-    assert_eq!(check.code, 1, "{out}");
-    assert!(out.contains("※ refund-capp"), "{out}");
-    assert!(out.contains("unresolved"), "{out}");
+        let build = fixture.run(&["build"]);
+        assert_eq!(build.code, 0, "{}", build.combined());
+        let check = fixture.run(&["check"]);
+        let out = check.combined();
+        assert_eq!(check.code, 1, "{out}");
+        assert!(out.contains(says), "{out}");
+    }
 }
 
 #[test]

@@ -16,10 +16,17 @@ const ACME_AGENTS: [&str; 6] = [
     "packages/shared/AGENTS.md",
 ];
 
-// (a) On a bare two-directory tree with no AGENTS.md, the full adoption path is green.
+// (a) On a bare two-directory tree with only prose AGENTS.md files, the full adoption path is
+// green: a proposed node's prose keeps its own region, or gains one after an unterminated last
+// line; a nested blockless file is no proposal and stays byte-identical.
 #[test]
 fn walkthrough_bare_tree_init_build_check() {
     let fixture = Fixture::bare();
+    let region = "<!-- @stele --><!-- @end -->\n";
+    let lib_notes = "# lib notes\n";
+    fixture.write("apps/AGENTS.md", &format!("Apps prose.\n\n{region}"));
+    fixture.write("apps/web/lib/AGENTS.md", lib_notes);
+    fixture.write("packages/AGENTS.md", "# packages\nshared code");
     fixture.write(
         "apps/web/lib/app.ex",
         "defmodule Acme.App do\n  def hello, do: :world\nend\n",
@@ -35,6 +42,19 @@ fn walkthrough_bare_tree_init_build_check() {
     fixture.commit("materialize a bare two-directory tree");
 
     assert_eq!(fixture.run(&["init"]).code, 0);
+    let apps = fixture.read("apps/AGENTS.md");
+    assert!(
+        apps.starts_with("```stele\nkind: container\n")
+            && apps.ends_with(&format!("```\n\nApps prose.\n\n{region}")),
+        "{apps}"
+    );
+    let packages = fixture.read("packages/AGENTS.md");
+    assert!(
+        packages.starts_with("# packages\n\n```stele\nkind: container\n")
+            && packages.ends_with(&format!("```\n\nshared code\n\n{region}")),
+        "{packages}"
+    );
+    assert_eq!(fixture.read("apps/web/lib/AGENTS.md"), lib_notes);
     assert_eq!(fixture.run(&["build"]).code, 0);
     assert_eq!(fixture.run(&["check", "--freeze"]).code, 0);
     let check = fixture.run(&["check"]);
@@ -119,15 +139,25 @@ fn init_never_proposes_the_dot_stele_dir_as_a_node() {
 }
 
 // `stele init --json` (the sole flag a mutating verb accepts, §5.3) still runs and prints
-// exactly one success envelope to stdout.
+// exactly one success envelope to stdout — even when staging fails (a held index lock): that
+// is a stderr warning naming the `git add` to run by hand, never an abort.
 #[test]
 fn init_json_still_scaffolds_and_prints_one_envelope() {
     let fixture = Fixture::bare();
     fixture.write("apps/web/app.ex", "defmodule Acme.App do\nend\n");
     fixture.commit("bare tree for a --json init");
+    fixture.write(".git/index.lock", "");
 
     let init = fixture.run(&["init", "--json"]);
     assert_eq!(init.code, 0, "{}", init.combined());
+    assert!(
+        init.stderr.contains("stele init: `git add` failed: ")
+            && init
+                .stderr
+                .contains("stage the scaffold yourself so stele build sees it: git add -- AGENTS.md apps/AGENTS.md"),
+        "{}",
+        init.stderr
+    );
     let value: serde_json::Value =
         serde_json::from_str(init.stdout.trim()).expect("init --json stdout is one JSON object");
     assert_eq!(value["ok"], true, "{}", init.stdout);

@@ -81,16 +81,38 @@ fn node_resolves_abbreviation_and_prints_all_fields() {
     assert!(out.contains("budget: 600"), "{out}");
 }
 
-// Probe 3 — an unknown node id is an input error (exit 2) that lists candidates.
+// Probe 3 — an unknown node id is an input error (exit 2) that lists candidates: the ids
+// containing the query when there are any, else every id; an abbreviation two nodes share is
+// ambiguous, naming both.
 #[test]
 fn node_unknown_id_exits_two_with_candidates() {
-    let fixture = built();
-    let node = fixture.run(&["node", "does-not-exist"]);
-    assert_eq!(node.code, 2, "{}", node.combined());
-    let out = node.combined();
-    assert!(out.contains("no node \"does-not-exist\""), "{out}");
-    // The candidate list names real node ids.
-    assert!(out.contains("apps/web/lib/billing"), "{out}");
+    let fixture = Fixture::acme();
+    fixture.write(
+        "packages/shared/store/AGENTS.md",
+        "```stele\nkind: component\n```\n",
+    );
+    fixture.commit("a second node whose final segment is `store`");
+    assert_eq!(fixture.run(&["build"]).code, 0);
+    for (query, says, absent) in [
+        ("does-not-exist", "candidates: /, apps/web,", ""),
+        (
+            "web/lib",
+            "candidates: apps/web/lib/billing, apps/web/lib/store\n",
+            "/,",
+        ),
+        (
+            "store",
+            "ambiguous — it abbreviates apps/web/lib/store, packages/shared/store",
+            "candidates",
+        ),
+    ] {
+        let node = fixture.run(&["node", query]);
+        let out = node.combined();
+        assert_eq!(node.code, 2, "{query}: {out}");
+        assert!(out.contains(&format!("node {query:?}")), "{out}");
+        assert!(out.contains(says), "{out}");
+        assert!(absent.is_empty() || !out.contains(absent), "{out}");
+    }
 }
 
 // Probe 4 — `stele unfold <id> --depth 2` prints the node plus neighbours out to two
@@ -117,6 +139,12 @@ fn unfold_expands_two_hops() {
         !shallow.stdout.contains("packages/shared"),
         "depth 1 must not reach hop 2:\n{}",
         shallow.stdout
+    );
+    // A node with no children and no depends has no neighbours.
+    let leaf = fixture.run(&["unfold", "packages/shared"]).stdout;
+    assert!(
+        leaf.ends_with("neighbours (depth 1):\n  (none)\n\n"),
+        "{leaf}"
     );
 
     // A flag where the id belongs is the usage error, not a node named `--depth`.
@@ -280,29 +308,63 @@ fn lock_gate_and_report_and_json_envelope() {
     );
 }
 
-// `--undercover` is an `init`-only flag (§3.5): on any other verb it is an exit-2 bad flag,
-// never silently ignored (the read/emit verbs otherwise tolerate unknown tokens).
+// A bad command line is an exit-2 input error naming the fix (§5.3). `--undercover` is an
+// `init`-only flag (§3.5): on any other verb it is a bad flag, never silently ignored (the
+// read/emit verbs otherwise tolerate unknown tokens).
 #[test]
-fn undercover_flag_rejected_on_other_verbs() {
+fn bad_command_lines_exit_2() {
     let fixture = built();
-    for verb in [
-        ["check", "--undercover"],
-        ["emit", "--undercover"],
-        ["nodes", "--undercover"],
+    for (args, says) in [
+        (&["check", "--undercover"][..], "only valid on `stele init`"),
+        (&["emit", "--undercover"], "only valid on `stele init`"),
+        (&["nodes", "--undercover"], "only valid on `stele init`"),
+        (&[], "usage: stele root | node <id>"),
+        (&["bogus"], "unknown command: \"bogus\""),
+        (&["blame"], "usage: stele blame <node-id>/<slug>"),
+        (
+            &["check", "--only", "vibes"],
+            "unknown --only class \"vibes\"",
+        ),
+        (&["check", "--only"], "--only requires a class argument"),
+        (
+            &["unfold", "apps/web", "--depth", "0"],
+            "positive integer, got \"0\"",
+        ),
     ] {
-        let out = fixture.run(&verb);
-        assert_eq!(
-            out.code,
-            2,
-            "{verb:?} must reject --undercover with exit 2:\n{}",
-            out.combined()
-        );
-        assert!(
-            out.combined().contains("only valid on `stele init`"),
-            "{verb:?}: {}",
-            out.combined()
-        );
+        let out = fixture.run(args);
+        assert_eq!(out.code, 2, "{args:?}: {}", out.combined());
+        assert!(out.stderr.contains(says), "{args:?}: {}", out.combined());
     }
+}
+
+// A graph with no system node (§2.1): `root` has nothing to render (exit 2), `emit` writes no
+// CLAUDE.md shim, and a `--touching` path no node owns surfaces no invariants.
+#[test]
+fn a_graph_without_a_system_node() {
+    let fixture = Fixture::bare();
+    fixture.write(
+        "lib/AGENTS.md",
+        "```stele\nkind: container\n```\n\n<!-- @stele --><!-- @end -->\n",
+    );
+    fixture.commit("a lone container node");
+    for verb in ["build", "emit"] {
+        let run = fixture.run(&[verb]);
+        assert_eq!(run.code, 0, "{verb}: {}", run.combined());
+    }
+    assert!(!fixture.path("CLAUDE.md").exists() && !fixture.path("lib/CLAUDE.md").exists());
+    let root = fixture.run(&["root"]);
+    assert_eq!(root.code, 2, "{}", root.combined());
+    assert!(
+        root.stderr.contains("declares no `kind: system` node"),
+        "{}",
+        root.stderr
+    );
+    assert_eq!(
+        fixture
+            .run(&["invariants", "--touching", "elsewhere"])
+            .stdout,
+        "invariants (0):\n  (none)\n\n"
+    );
 }
 
 // Every verb runs from the work-tree top level (§3.5), whatever the cwd: from a subdirectory

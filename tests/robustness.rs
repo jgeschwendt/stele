@@ -26,10 +26,11 @@ fn tracked_binary_file_does_not_abort_the_scan() {
     std::fs::write(fixture.path("logo.png"), BINARY_BLOB).expect("write binary blob");
     fixture.commit("root node plus a tracked binary");
 
-    let build = fixture.run(&["build"]);
-    assert_eq!(build.code, 0, "{}", build.combined());
-    let check = fixture.run(&["check"]);
-    assert_eq!(check.code, 0, "{}", check.combined());
+    // `migrate` skips it the same way (§5.1 scan scope).
+    for verb in ["build", "check", "migrate"] {
+        let run = fixture.run(&[verb]);
+        assert_eq!(run.code, 0, "{verb}: {}", run.combined());
+    }
 }
 
 // A node source (AGENTS.md) is NOT a binary blob to skip: invalid UTF-8 there is a hard
@@ -46,13 +47,17 @@ fn invalid_utf8_node_source_is_a_hard_input_error() {
     .expect("write invalid-utf8 node source");
     fixture.commit("a node source with invalid UTF-8");
 
-    let build = fixture.run(&["build"]);
-    assert_eq!(build.code, 2, "{}", build.combined());
-    assert!(
-        build.combined().contains("lib/AGENTS.md"),
-        "the error must name the offending node source:\n{}",
-        build.combined()
-    );
+    // `migrate` gives it the same hard stop (§5.3), before writing anything.
+    for verb in ["build", "migrate"] {
+        let run = fixture.run(&[verb]);
+        assert_eq!(run.code, 2, "{verb}: {}", run.combined());
+        assert!(
+            run.stderr
+                .contains("lib/AGENTS.md: node source is not valid UTF-8"),
+            "the error must name the offending node source:\n{}",
+            run.combined()
+        );
+    }
 }
 
 // ─── F2: marker-lookalikes inside a fence are quotations (§3.1) ───────────────
@@ -300,23 +305,57 @@ fn init_writes_through_an_in_tree_symlinked_agents_file() {
 #[test]
 fn stele_verb_outside_a_git_repo_is_a_clean_input_error() {
     let dir = tempfile::tempdir().expect("create non-git temp dir");
-    let out = std::process::Command::new(common::BIN)
-        .arg("build")
-        .current_dir(dir.path())
-        .output()
-        .expect("spawn stele binary");
-    assert_eq!(
-        out.status.code(),
-        Some(2),
-        "must exit 2 (input error), not 3"
-    );
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("not a git repository"),
-        "message must explain the condition:\n{stderr}"
-    );
-    assert!(
-        !stderr.contains("fatal:"),
-        "raw git text must not leak:\n{stderr}"
-    );
+    for args in [&["build"][..], &["init", "--undercover"]] {
+        let out = std::process::Command::new(common::BIN)
+            .args(args)
+            .current_dir(dir.path())
+            .output()
+            .expect("spawn stele binary");
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "{args:?} must exit 2 (input error), not 3"
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("not a git repository"),
+            "message must explain the condition:\n{stderr}"
+        );
+        assert!(
+            !stderr.contains("fatal:"),
+            "raw git text must not leak:\n{stderr}"
+        );
+    }
+}
+
+// ─── an IO failure is exit 3, naming what failed (§5.3) ───────────────────────
+
+// Each row plants one unreadable or unwritable path — a directory where a file belongs, a
+// corrupt git index — and runs the verb that trips on it.
+#[test]
+fn io_failures_are_exit_3() {
+    for (plant, verb, says) in [
+        (
+            ".stele/graph.lock/x",
+            "build",
+            "rename into ./.stele/graph.lock: ",
+        ),
+        (".stele/graph.lock/x", "check", "read .stele/graph.lock: "),
+        ("apps/AGENTS.md/x", "init", "read apps/AGENTS.md: "),
+        ("AGENTS.md/x", "emit", "read AGENTS.md: "),
+        (".git/index", "build", "`git ls-files` failed: "),
+    ] {
+        let fixture = Fixture::bare();
+        fixture.write("AGENTS.md", "```stele\nkind: system\n```\n");
+        fixture.write("apps/app.ex", "defmodule App do\nend\n");
+        fixture.commit("a root node and one top-level dir");
+        if verb == "emit" {
+            assert_eq!(fixture.run(&["build"]).code, 0);
+            fixture.delete_file("AGENTS.md");
+        }
+        fixture.write(plant, "not what this path should hold\n");
+        let run = fixture.run(&[verb]);
+        assert_eq!(run.code, 3, "{plant} {verb}: {}", run.combined());
+        assert!(run.stderr.contains(says), "{plant} {verb}: {}", run.stderr);
+    }
 }

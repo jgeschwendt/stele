@@ -35,10 +35,6 @@ use std::process::Command;
 /// The committed lock, relative to the repo root.
 const LOCK_DIR: &str = ".stele";
 const LOCK_FILE: &str = "graph.lock";
-/// Temp-name prefix a fresh lock is written to before the atomic rename (§5.3 build
-/// atomicity: never a partial lock on disk). A per-writer `.{pid}.{seq}` suffix is
-/// appended so concurrent builds never collide on one temp file.
-const LOCK_TEMP: &str = ".graph.lock.tmp";
 
 /// The message every read command emits when the committed lock is missing or
 /// stale (§5.3); tests assert on the `run stele build` substring.
@@ -146,33 +142,18 @@ const UNDERCOVER_MARKER: &str = ".stele/undercover";
 /// sources live under `<home>/.stele/tree/<dirpath>/AGENTS.md`, mirroring tree paths.
 const TREE_DIR: &str = ".stele/tree";
 
-/// The git common directory of the work tree at `work` (`git rev-parse --git-common-dir`),
-/// canonicalized — `<repo>/.git` in a normal checkout, the shared bare `.git` under a
-/// linked-worktree layout. Relative git output is joined onto `work` before canonicalizing.
-/// Returns `None` on ANY failure (a non-repo cwd, a git that will not spawn, an
-/// uncanonicalizable path) so [`resolve_workspace`] degrades to normal mode rather than
-/// erroring.
-fn git_common_dir(work: &Path) -> Option<PathBuf> {
-    let output = Command::new("git")
-        .args(["rev-parse", "--git-common-dir"])
-        .current_dir(work)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let raw = String::from_utf8_lossy(&output.stdout);
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let path = Path::new(trimmed);
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        work.join(path)
+/// `(common, home)` for the work tree at `work` (§3.5): the git common directory (`git
+/// rev-parse --git-common-dir`, joined onto `work` when relative, canonicalized) — `<repo>/.git`
+/// in a normal checkout, the shared bare `.git` under a linked-worktree layout — and its parent,
+/// the graph home. `None` on ANY failure (a non-repo cwd, a git that will not spawn, an
+/// uncanonicalizable or parentless path) so [`resolve_workspace`] degrades to normal mode.
+fn graph_home(work: &Path) -> Option<(PathBuf, PathBuf)> {
+    let common = match git_stdout(work, "--git-common-dir") {
+        out if out.is_empty() => return None,
+        out => work.join(out).canonicalize().ok()?,
     };
-    absolute.canonicalize().ok()
+    let home = common.parent()?.to_path_buf();
+    Some((common, home))
 }
 
 /// The top level of the work tree containing `cwd` (`git rev-parse --show-cdup` joined onto
@@ -224,29 +205,18 @@ fn rebase_on_cwd(prefix: &str, path: &str) -> String {
 /// a non-repo cwd falls through to the verbs' own exit-2 paths (`git ls-files` reports "not
 /// a git repository").
 pub fn resolve_workspace(cwd: &Path) -> Workspace {
-    let work = &work_tree_root(cwd);
-    let normal = || Workspace {
-        common: work.to_path_buf(),
-        home: work.to_path_buf(),
-        mode: Mode::Normal,
-        work: work.to_path_buf(),
-    };
-    let Some(common) = git_common_dir(work) else {
-        return normal();
-    };
-    let Some(home) = common.parent() else {
-        return normal();
-    };
-    if home.join(UNDERCOVER_MARKER).exists() {
-        let home = home.to_path_buf();
-        Workspace {
-            common,
-            home,
-            mode: Mode::Undercover,
-            work: work.to_path_buf(),
+    let work = work_tree_root(cwd);
+    let (common, home, mode) = match graph_home(&work) {
+        Some((common, home)) if home.join(UNDERCOVER_MARKER).exists() => {
+            (common, home, Mode::Undercover)
         }
-    } else {
-        normal()
+        _ => (work.clone(), work.clone(), Mode::Normal),
+    };
+    Workspace {
+        common,
+        home,
+        mode,
+        work,
     }
 }
 
@@ -293,18 +263,7 @@ pub fn run(args: &[String]) -> i32 {
                 let findings = output.findings.iter().map(Finding::to_json).collect();
                 print_envelope(command, exit == 0, exit, output.data, findings);
             } else {
-                if output.findings.is_empty() {
-                    if let Some(summary) = &output.summary {
-                        println!("{summary}");
-                    }
-                } else {
-                    print!("{}", assert::render_human(&output.findings));
-                }
-                // The `check --report` block trails the summary/findings on the human
-                // path (§4.2 reason-plus-visibility); under `--json` it rides in `data`.
-                if let Some(report) = &output.report {
-                    print!("{report}");
-                }
+                print!("{}", render_human(&output));
             }
             exit
         }
@@ -360,31 +319,30 @@ pub struct VerbRender {
     pub text: String,
 }
 
+/// A success's human-path stdout: its summary line (findings render instead when present),
+/// then any `check --report` block (§4.2 reason-plus-visibility; under `--json` it rides in
+/// `data`). Shared by [`run`] and [`serve_render`], so the two never diverge.
+fn render_human(output: &CommandOutput) -> String {
+    let mut text = match (&output.summary, output.findings.is_empty()) {
+        (Some(summary), true) => format!("{summary}\n"),
+        (None, true) => String::new(),
+        (_, false) => assert::render_human(&output.findings),
+    };
+    text.push_str(output.report.as_deref().unwrap_or(""));
+    text
+}
+
 /// Dispatch one verb and render it exactly as [`run`]'s human path would print to stdout —
 /// the single code path the CLI and `serve` share (§5.2: same engine, tools mirror the
-/// verbs, no duplicated rendering). A success prints its summary line (findings render
-/// instead when present) plus any `--report` block; an input/internal error becomes
-/// `text = <error message>` with the error's exit class. serve maps exit ≥ 2 to an
+/// verbs, no duplicated rendering): [`render_human`] on success; an input/internal error
+/// becomes `text = <error message>` with the error's exit class. serve maps exit ≥ 2 to an
 /// `isError` tool result (§5.2).
 pub fn serve_render(ws: &Workspace, argv: &[&str]) -> VerbRender {
     match dispatch(ws, argv) {
-        Ok(output) => {
-            let exit = if output.findings.is_empty() { 0 } else { 1 };
-            let mut text = String::new();
-            if output.findings.is_empty() {
-                if let Some(summary) = &output.summary {
-                    // `run` prints the summary with `println!`, appending one newline.
-                    text.push_str(summary);
-                    text.push('\n');
-                }
-            } else {
-                text.push_str(&assert::render_human(&output.findings));
-            }
-            if let Some(report) = &output.report {
-                text.push_str(report);
-            }
-            VerbRender { exit, text }
-        }
+        Ok(output) => VerbRender {
+            exit: if output.findings.is_empty() { 0 } else { 1 },
+            text: render_human(&output),
+        },
         Err(error) => VerbRender {
             exit: error.exit as i32,
             text: format!("{error}"),
@@ -396,7 +354,7 @@ pub fn serve_render(ws: &Workspace, argv: &[&str]) -> VerbRender {
 /// `serve` checks at startup before entering its MCP loop (a non-repo cwd surfaces as
 /// the same exit-2 input error the CLI verbs give). Reuses the tracked-file probe.
 pub fn ensure_git_repo(root: &Path) -> Result<()> {
-    git_tracked_files(root)?;
+    git_ls_files(root, &[])?;
     Ok(())
 }
 
@@ -479,8 +437,11 @@ fn build(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
         eprintln!("{UNBORN_HEAD_NOTICE}");
     }
     let lock = Lock::from_graph(&graph);
-    let bytes = lock::to_canonical_string(&lock);
-    write_lock_atomic(&ws.home, &bytes)?;
+    // Any input error has aborted above, so the lock lands whole or not at all (§5.3).
+    let dir = ws.home.join(LOCK_DIR);
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| SteleError::internal(format!("create {LOCK_DIR}: {e}")))?;
+    write_atomic(&dir.join(LOCK_FILE), &lock::to_canonical_string(&lock))?;
     let nodes = graph.nodes.len();
     Ok(CommandOutput::new(
         json!({ "lock": format!("{LOCK_DIR}/{LOCK_FILE}"), "nodes": nodes }),
@@ -771,21 +732,12 @@ fn emit_write(ws: &Workspace, lock: &Lock, claude_rules: bool) -> Result<Command
         }
     }
     for (target, updated) in &writes {
-        write_source_atomic(target, updated)?;
+        write_atomic(target, updated)?;
     }
 
-    write_under_root(
-        root,
-        INDEX_DIR,
-        INVARIANTS_INDEX,
-        &emit::render_invariants_index(lock),
-    )?;
-    write_under_root(
-        root,
-        INDEX_DIR,
-        HAZARDS_INDEX,
-        &emit::render_hazards_index(lock),
-    )?;
+    for (name, content) in indexes(lock) {
+        write_under_root(root, INDEX_DIR, name, &content)?;
+    }
     ensure_shim(ws, lock)?;
     if let Some(rules) = rules {
         write_claude_rules(root, &rules)?;
@@ -798,6 +750,14 @@ fn emit_write(ws: &Workspace, lock: &Lock, claude_rules: bool) -> Result<Command
             "stele emit: rendered {regions} region(s) and 2 index file(s)"
         )),
     ))
+}
+
+/// The two transpose indexes (§6.1) as `(file name under INDEX_DIR, rendered content)`.
+fn indexes(lock: &Lock) -> [(&'static str, String); 2] {
+    [
+        (INVARIANTS_INDEX, emit::render_invariants_index(lock)),
+        (HAZARDS_INDEX, emit::render_hazards_index(lock)),
+    ]
 }
 
 /// The LF that terminates the begin marker's line before `emit` fills a region for the
@@ -829,20 +789,9 @@ fn emit_check(ws: &Workspace, lock: &Lock, claude_rules: bool) -> Result<Command
             divergent.push(path.display().to_string());
         }
     }
-    check_file(
-        root,
-        INDEX_DIR,
-        INVARIANTS_INDEX,
-        &emit::render_invariants_index(lock),
-        &mut divergent,
-    );
-    check_file(
-        root,
-        INDEX_DIR,
-        HAZARDS_INDEX,
-        &emit::render_hazards_index(lock),
-        &mut divergent,
-    );
+    for (name, content) in indexes(lock) {
+        check_file(root, INDEX_DIR, name, &content, &mut divergent);
+    }
     if claude_rules {
         let rules = render_claude_rules(lock)?;
         for (name, (_, content)) in &rules {
@@ -898,15 +847,25 @@ fn node_source_root(ws: &Workspace) -> PathBuf {
     }
 }
 
+/// Read `path`: `None` when it is absent, any other IO failure a §5.3 internal error (exit 3)
+/// naming `shown`. Each caller decides what absence means.
+fn read_if_present(path: &Path, shown: &dyn std::fmt::Display) -> Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
+        read => read
+            .map(Some)
+            .map_err(|e| SteleError::internal(format!("read {shown}: {e}"))),
+    }
+}
+
 /// Read a node's AGENTS.md: a file gone since the build is a stale lock (exit 2), any
 /// other IO failure exit 3.
 fn read_node_agents(root: &Path, path: &Path) -> Result<String> {
-    std::fs::read_to_string(root.join(path)).map_err(|e| match e.kind() {
-        std::io::ErrorKind::NotFound => SteleError::input_msg(format!(
+    read_if_present(&root.join(path), &path.display())?.ok_or_else(|| {
+        SteleError::input_msg(format!(
             "lock names {} but it is gone; {RUN_BUILD_HINT}",
             path.display()
-        )),
-        _ => SteleError::internal(format!("read {}: {e}", path.display())),
+        ))
     })
 }
 
@@ -1262,11 +1221,10 @@ fn nodes(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
 /// unknown case listing near-miss candidates.
 fn resolve_node_id(lock: &Lock, query: &str) -> Result<String> {
     let canonical = normalize_id(query).unwrap_or_else(|_| query.to_string());
+    // Lock ids are normalized (§3.2 strict parse) and normalization is idempotent, so a raw
+    // query that is itself a lock id always normalizes to that id.
     if lock.nodes.contains_key(&canonical) {
         return Ok(canonical);
-    }
-    if lock.nodes.contains_key(query) {
-        return Ok(query.to_string());
     }
     let abbrev: Vec<&String> = lock
         .nodes
@@ -1353,20 +1311,17 @@ fn neighbours(node: &LockNode) -> Vec<String> {
 /// node reachable through the neighbour relation, nearest first, each node once.
 fn collect_hops<'a>(lock: &'a Lock, start: &str, depth: u32) -> Vec<(u32, &'a LockNode)> {
     let mut seen: BTreeSet<String> = BTreeSet::from([start.to_string()]);
-    let mut frontier = vec![start.to_string()];
+    let mut frontier = vec![&lock.nodes[start]];
     let mut hops = Vec::new();
     for d in 1..=depth {
         let mut next = Vec::new();
-        for id in &frontier {
-            let Some(node) = lock.nodes.get(id) else {
-                continue;
-            };
+        for node in frontier {
             for nb in neighbours(node) {
                 if seen.insert(nb.clone())
                     && let Some(neighbour) = lock.nodes.get(&nb)
                 {
                     hops.push((d, neighbour));
-                    next.push(nb);
+                    next.push(neighbour);
                 }
             }
         }
@@ -1744,13 +1699,10 @@ fn init_undercover(ws: &Workspace) -> Result<CommandOutput> {
     let work = &ws.work;
     // (1) Home = parent of the canonicalized git common dir (as [`resolve_workspace`] resolves
     // it); a non-repo cwd is the same exit-2 input error the tracked scan would give.
-    let common = git_common_dir(work).ok_or_else(|| {
+    let (common, home) = &graph_home(work).ok_or_else(|| {
         SteleError::input_msg(
             "not a git repository (stele undercover roots its private graph at the git common dir)",
         )
-    })?;
-    let home = common.parent().ok_or_else(|| {
-        SteleError::internal("git common dir has no parent to root the graph home".to_string())
     })?;
 
     // (2) Submodule refusal (§3.5): in a submodule the git common dir is
@@ -1773,10 +1725,11 @@ fn init_undercover(ws: &Workspace) -> Result<CommandOutput> {
     // it before the marker so that if `info/exclude` cannot be written (a read-only `.git/info`),
     // init aborts having created nothing: no marker, no overlay, nothing to leak into `git status`.
     // Gitignore entries for not-yet-existent paths are harmless. This is the ordering guarantee.
-    ensure_info_exclude(&common)?;
+    ensure_info_exclude(common)?;
 
     // (5) Marker — its presence is what selects undercover mode on every later invocation.
-    write_undercover_marker(home)?;
+    // `<home>/.stele/undercover` (= UNDERCOVER_MARKER), creating `.stele/`.
+    write_under_root(home, LOCK_DIR, "undercover", UNDERCOVER_MARKER_CONTENT)?;
 
     // (6) Overlay scaffold: reuse the normal-init proposal set verbatim against the tracked
     // roster. Post-guard `existing` is empty (no tracked node), so every top dir is proposed.
@@ -1817,18 +1770,6 @@ fn reject_shared_graph_conflict(work: &Path, tracked: &[PathBuf]) -> Result<()> 
     Ok(())
 }
 
-/// Write the `.stele/undercover` marker at the graph home (§3.5), creating `<home>/.stele/`.
-/// Content is the deterministic one-liner, so a re-run rewrites it byte-identically.
-fn write_undercover_marker(home: &Path) -> Result<()> {
-    let path = home.join(UNDERCOVER_MARKER);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| SteleError::internal(format!("create {LOCK_DIR}: {e}")))?;
-    }
-    std::fs::write(&path, UNDERCOVER_MARKER_CONTENT)
-        .map_err(|e| SteleError::internal(format!("write {UNDERCOVER_MARKER}: {e}")))
-}
-
 /// Scaffold one overlay node (§3.5) under `overlay_root`, leaving any existing overlay file
 /// untouched (the §7 idempotency/non-destructive discipline: a re-run finds every file present
 /// and rewrites nothing). An absent target takes [`scaffold_node`]'s new-file path.
@@ -1853,52 +1794,39 @@ fn ensure_info_exclude(common: &Path) -> Result<()> {
     std::fs::create_dir_all(&dir)
         .map_err(|e| SteleError::internal(format!("create {}: {e}", dir.display())))?;
     let path = dir.join("exclude");
-    let existing = match std::fs::read_to_string(&path) {
-        Ok(contents) => contents,
-        Err(e) if e.kind() == ErrorKind::NotFound => String::new(),
-        Err(e) => {
-            return Err(SteleError::internal(format!(
-                "read {}: {e}",
-                path.display()
-            )));
-        }
-    };
+    let existing = read_if_present(&path, &path.display())?.unwrap_or_default();
     let updated = rewrite_exclude_block(&existing);
     if updated != existing {
-        // Atomic (§3.5): temp file in the same directory then rename, mirroring
-        // [`write_lock_atomic`] — an interrupted write never leaves a half-rewritten exclude
-        // (which could unhide the overlay). The temp lives inside `.git/info/`, never the work
-        // tree, so it cannot itself surface in `git status`.
-        write_atomic(&dir, "exclude", &updated)?;
+        // Atomic (§3.5): an interrupted write never leaves a half-rewritten exclude (which
+        // could unhide the overlay). The temp lives inside `.git/info/`, never the work tree,
+        // so it cannot itself surface in `git status`.
+        write_atomic(&path, &updated)?;
     }
     Ok(())
 }
 
-/// Write `name` under `dir` via a unique temp file + rename (§3.5/§5.3 atomicity): an
-/// interrupted or partial write never replaces the live file. The temp name carries the
-/// pid + a process-local counter so concurrent writers never collide, and it is cleaned up
-/// best-effort if the rename fails. An existing target's permissions are carried onto the
-/// replacement (best-effort), so rewriting a source in place never strips an executable
-/// bit. Shared by the `info/exclude` install and `migrate`'s/`emit`'s source rewrites; the lock has
-/// its own [`write_lock_atomic`] (same discipline, its own create-dir step).
-fn write_atomic(dir: &Path, name: &str, bytes: &str) -> Result<()> {
+/// Replace `path` via a unique sibling temp file + rename (§3.5/§5.3 atomicity): an
+/// interrupted or partial write never replaces the live file — never a partial lock or a
+/// half-rewritten exclude on disk. The temp name (`.<name>.tmp.<pid>.<seq>`) carries the pid
+/// and a process-local counter so concurrent writers (two builds racing on the lock) never
+/// collide, and it is cleaned up best-effort if the rename fails. An existing target's
+/// permissions are carried onto the replacement (best-effort), so rewriting a source in
+/// place never strips an executable bit. Shared by the lock, the `info/exclude` install,
+/// and `migrate`'s/`emit`'s source rewrites.
+fn write_atomic(path: &Path, bytes: &str) -> Result<()> {
     static TEMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let seq = TEMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let temp_name = format!(".{name}.tmp.{}.{seq}", std::process::id());
-    let temp = dir.join(&temp_name);
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let temp = path.with_file_name(format!(".{name}.tmp.{}.{seq}", std::process::id()));
     std::fs::write(&temp, bytes)
         .map_err(|e| SteleError::internal(format!("write {}: {e}", temp.display())))?;
-    if let Ok(existing) = std::fs::metadata(dir.join(name)) {
+    if let Ok(existing) = std::fs::metadata(path) {
         let _ = std::fs::set_permissions(&temp, existing.permissions());
     }
-    if let Err(e) = std::fs::rename(&temp, dir.join(name)) {
+    std::fs::rename(&temp, path).map_err(|e| {
         let _ = std::fs::remove_file(&temp);
-        return Err(SteleError::internal(format!(
-            "rename into {}: {e}",
-            dir.join(name).display()
-        )));
-    }
-    Ok(())
+        SteleError::internal(format!("rename into {}: {e}", path.display()))
+    })
 }
 
 /// The `info/exclude` content with the managed block (§3.5) present exactly once. When the
@@ -1906,43 +1834,34 @@ fn write_atomic(dir: &Path, name: &str, bytes: &str) -> Result<()> {
 /// line is byte-preserved; otherwise the block is appended after a newline separator. The
 /// block itself is the two begin/end fence lines bracketing [`EXCLUDE_ENTRIES`].
 fn rewrite_exclude_block(existing: &str) -> String {
-    let block = {
-        let mut b = format!("{EXCLUDE_BEGIN}\n");
-        for entry in EXCLUDE_ENTRIES {
-            b.push_str(entry);
-            b.push('\n');
-        }
-        b.push_str(EXCLUDE_END);
-        b.push('\n');
-        b
-    };
+    let block = format!(
+        "{EXCLUDE_BEGIN}\n{}\n{EXCLUDE_END}\n",
+        EXCLUDE_ENTRIES.join("\n")
+    );
     let lines: Vec<&str> = existing.lines().collect();
     let begin = lines.iter().position(|l| *l == EXCLUDE_BEGIN);
     let end = lines.iter().position(|l| *l == EXCLUDE_END);
     if let (Some(b), Some(e)) = (begin, end)
         && b <= e
     {
-        let mut out = String::new();
-        for line in &lines[..b] {
-            out.push_str(line);
-            out.push('\n');
-        }
+        let mut out: String = lines[..b].iter().map(|l| format!("{l}\n")).collect();
         out.push_str(&block);
-        let tail = &lines[e + 1..];
-        for (i, line) in tail.iter().enumerate() {
-            out.push_str(line);
-            if i + 1 < tail.len() || existing.ends_with('\n') {
-                out.push('\n');
-            }
+        out.push_str(&lines[e + 1..].join("\n"));
+        if e + 1 < lines.len() && existing.ends_with('\n') {
+            out.push('\n');
         }
         return out;
     }
-    let mut out = existing.to_string();
-    if !out.is_empty() && !out.ends_with('\n') {
-        out.push('\n');
+    format!("{existing}{}{block}", append_separator(existing))
+}
+
+/// The newline that terminates a non-empty, unterminated `contents` before more is appended.
+fn append_separator(contents: &str) -> &'static str {
+    if contents.is_empty() || contents.ends_with('\n') {
+        ""
+    } else {
+        "\n"
     }
-    out.push_str(&block);
-    out
 }
 
 /// Whether `path` (a repo-root-relative POSIX path `init` is about to scaffold) is
@@ -2003,13 +1922,7 @@ fn ensure_region_for_block(root: &Path, rel: &Path, written: &mut Vec<String>) -
 /// `contents` plus a trailing empty region (§3.1): a blank-line separator then the router
 /// markers, authored bytes byte-preserved above.
 fn append_empty_region(contents: &str) -> String {
-    let mut out = contents.to_string();
-    if !out.is_empty() && !out.ends_with('\n') {
-        out.push('\n');
-    }
-    out.push('\n');
-    out.push_str(EMPTY_REGION);
-    out
+    format!("{contents}{}\n{EMPTY_REGION}", append_separator(contents))
 }
 
 /// The declaring directories of every tracked AGENTS.md that carries a stele block
@@ -2078,15 +1991,13 @@ fn scaffold_node(
         return Ok(());
     };
     let full = root.join(&target);
-    let contents = match std::fs::read_to_string(&full) {
-        Ok(existing) => prepend_skeleton(rel_path, &existing, kind)?,
-        Err(e) if e.kind() == ErrorKind::NotFound => new_skeleton_file(rel_path, root, kind),
-        Err(e) => return Err(SteleError::internal(format!("read {rel_path}: {e}"))),
+    let contents = match read_if_present(&full, &rel_path)? {
+        Some(existing) => prepend_skeleton(rel_path, &existing, kind)?,
+        None => new_skeleton_file(rel_path, root, kind),
     };
-    if let Some(parent) = full.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| SteleError::internal(format!("create dir for {rel_path}: {e}")))?;
-    }
+    // `full` is `root` joined with a file path, so it always has a parent.
+    std::fs::create_dir_all(full.parent().unwrap_or(root))
+        .map_err(|e| SteleError::internal(format!("create dir for {rel_path}: {e}")))?;
     std::fs::write(&full, contents)
         .map_err(|e| SteleError::internal(format!("write {rel_path}: {e}")))?;
     written.push(target.to_string_lossy().replace('\\', "/"));
@@ -2131,14 +2042,10 @@ fn prepend_skeleton(rel_path: &str, prose: &str, kind: NodeKind) -> Result<Strin
     out.push('\n');
     out.push_str(body);
     // Append an empty region only when the (now-combined) file has none.
-    if parse::find_region(Path::new(rel_path), &out)?.is_none() {
-        if !out.is_empty() && !out.ends_with('\n') {
-            out.push('\n');
-        }
-        out.push('\n');
-        out.push_str(EMPTY_REGION);
-    }
-    Ok(out)
+    Ok(match parse::find_region(Path::new(rel_path), &out)? {
+        Some(_) => out,
+        None => append_empty_region(&out),
+    })
 }
 
 /// Split a leading `# heading` line off the front of a file: `(Some(heading), rest)`
@@ -2147,18 +2054,13 @@ fn prepend_skeleton(rel_path: &str, prose: &str, kind: NodeKind) -> Result<Strin
 /// `rest` only to the extent the reassembler re-adds a single separator).
 fn split_leading_heading(prose: &str) -> (Option<&str>, &str) {
     let trimmed = prose.trim_start_matches(['\n', '\r']);
-    let Some(first_end) = trimmed.find('\n') else {
-        // Single line: a heading with no body, or bare prose.
-        return if trimmed.starts_with('#') {
-            (Some(trimmed.trim_end()), "")
-        } else {
-            (None, prose)
-        };
-    };
-    let first = trimmed[..first_end].trim_end();
+    // A single line is a heading with no body, or bare prose.
+    let (first, rest) = trimmed.split_once('\n').unwrap_or((trimmed, ""));
     if first.starts_with('#') {
-        let rest = trimmed[first_end + 1..].trim_start_matches(['\n', '\r']);
-        (Some(first), rest)
+        (
+            Some(first.trim_end()),
+            rest.trim_start_matches(['\n', '\r']),
+        )
     } else {
         (None, prose)
     }
@@ -2283,7 +2185,7 @@ fn migrate(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
     // Pass 2 — land them, each through the temp-file + rename discipline (§5.3), so an
     // interrupted run never leaves a half-written source.
     for (path, _, contents) in &rewritten {
-        write_source_atomic(path, contents)?;
+        write_atomic(path, contents)?;
     }
 
     let files: Vec<String> = rewritten
@@ -2345,18 +2247,18 @@ fn migrate_targets(ws: &Workspace) -> Result<Vec<MigrateTarget>> {
         .collect();
 
     if ws.mode == Mode::Undercover {
-        let tree_root = ws.home.join(TREE_DIR);
-        let mut overlay = Vec::new();
-        walk_overlay_sources(&tree_root, &tree_root, &mut overlay)?;
-        overlay.sort_by(|a, b| a.rel.cmp(&b.rel));
-        targets.extend(overlay.into_iter().map(|source| MigrateTarget {
-            display: format!(
-                "{TREE_DIR}/{}",
-                source.rel.to_string_lossy().replace('\\', "/")
-            ),
-            kind: legacy::SourceKind::Node,
-            path: source.source,
-        }));
+        targets.extend(
+            overlay_sources(&ws.home.join(TREE_DIR), Path::new(""))?
+                .into_iter()
+                .map(|source| MigrateTarget {
+                    display: format!(
+                        "{TREE_DIR}/{}",
+                        source.rel.to_string_lossy().replace('\\', "/")
+                    ),
+                    kind: legacy::SourceKind::Node,
+                    path: source.source,
+                }),
+        );
     }
     Ok(targets)
 }
@@ -2384,35 +2286,17 @@ fn read_migrate_source(target: &MigrateTarget) -> Result<Option<String>> {
 /// diagnostic — a `git` that cannot be spawned simply produces no warning, and neither
 /// case changes the exit code.
 fn warn_if_dirty(root: &Path) {
-    let Ok(output) = Command::new("git")
+    let dirty = Command::new("git")
         .args(["status", "--porcelain"])
         .current_dir(root)
         .output()
-    else {
-        return;
-    };
-    if output.status.success() && !output.stdout.is_empty() {
+        .is_ok_and(|out| out.status.success() && !out.stdout.is_empty());
+    if dirty {
         eprintln!(
             "warning: the work tree has uncommitted changes — stele migrate rewrites sources in \
              place and is meant to be reviewed as a diff (§5.1)"
         );
     }
-}
-
-/// Replace one source file atomically (§5.3), preserving its mode — a rewritten
-/// executable script must stay executable. Thin wrapper over [`write_atomic`] that splits
-/// the path into the directory + name it takes.
-fn write_source_atomic(path: &Path, contents: &str) -> Result<()> {
-    let dir = match path.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => parent,
-        _ => Path::new("."),
-    };
-    let name = path
-        .file_name()
-        .ok_or_else(|| SteleError::internal(format!("{} has no file name", path.display())))?
-        .to_string_lossy()
-        .into_owned();
-    write_atomic(dir, &name, contents)
 }
 
 // ─── the source pipeline (§5.1) ──────────────────────────────────────────────
@@ -2444,54 +2328,36 @@ fn node_sources(ws: &Workspace, tracked: &[PathBuf]) -> Result<Vec<NodeSource>> 
                 source: ws.work.join(rel),
             })
             .collect()),
-        Mode::Undercover => {
-            let tree_root = ws.home.join(TREE_DIR);
-            let mut sources = Vec::new();
-            walk_overlay_sources(&tree_root, &tree_root, &mut sources)?;
-            sources.sort_by(|a, b| a.rel.cmp(&b.rel));
-            Ok(sources)
-        }
+        Mode::Undercover => overlay_sources(&ws.home.join(TREE_DIR), Path::new("")),
     }
 }
 
-/// Recursively collect every `AGENTS.md` under the overlay `tree_root` (§3.5) as a
-/// [`NodeSource`] whose `rel` is the path with the `tree_root` prefix stripped (mirroring
-/// tree paths: `<tree_root>/apps/api/AGENTS.md` → `apps/api/AGENTS.md`). A missing overlay
-/// root is empty, not an error (an undercover repo with no scaffold yet builds an empty
-/// graph). Order is imposed by the caller's sort.
-fn walk_overlay_sources(dir: &Path, tree_root: &Path, out: &mut Vec<NodeSource>) -> Result<()> {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(()),
-        Err(e) => {
-            return Err(SteleError::internal(format!(
-                "read overlay {}: {e}",
-                dir.display()
-            )));
-        }
+/// Every `AGENTS.md` under `<tree_root>/<rel>` (the overlay `<home>/.stele/tree/`, §3.5) as a
+/// [`NodeSource`] whose `rel` mirrors the tree path (`<tree_root>/apps/api/AGENTS.md` →
+/// `apps/api/AGENTS.md`), sorted by `rel`. A missing overlay root is empty, not an error (an
+/// undercover repo with no scaffold yet builds an empty graph).
+fn overlay_sources(tree_root: &Path, rel: &Path) -> Result<Vec<NodeSource>> {
+    let dir = tree_root.join(rel);
+    let entries = match std::fs::read_dir(&dir) {
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        entries => entries
+            .map_err(|e| SteleError::internal(format!("read overlay {}: {e}", dir.display())))?,
     };
+    let mut sources = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|e| SteleError::internal(format!("read overlay entry: {e}")))?;
-        let path = entry.path();
+        let (rel, source) = (rel.join(entry.file_name()), entry.path());
         let file_type = entry
             .file_type()
-            .map_err(|e| SteleError::internal(format!("stat {}: {e}", path.display())))?;
+            .map_err(|e| SteleError::internal(format!("stat {}: {e}", source.display())))?;
         if file_type.is_dir() {
-            walk_overlay_sources(&path, tree_root, out)?;
-        } else if path.file_name().is_some_and(|name| name == "AGENTS.md") {
-            let rel = path
-                .strip_prefix(tree_root)
-                .map_err(|e| {
-                    SteleError::internal(format!(
-                        "overlay path outside tree {}: {e}",
-                        path.display()
-                    ))
-                })?
-                .to_path_buf();
-            out.push(NodeSource { rel, source: path });
+            sources.extend(overlay_sources(tree_root, &rel)?);
+        } else if rel.file_name().is_some_and(|name| name == "AGENTS.md") {
+            sources.push(NodeSource { rel, source });
         }
     }
-    Ok(())
+    sources.sort_by(|a, b| a.rel.cmp(&b.rel));
+    Ok(sources)
 }
 
 /// Sources → in-memory graph (§5.1): parse every node source (§3.5, [`node_sources`]) into
@@ -2540,15 +2406,14 @@ fn build_graph(ws: &Workspace) -> Result<Graph> {
 /// repo-out-of-spec condition, never silently dropped. A genuine IO failure stays a §5.3
 /// internal error.
 fn read_node_source(source: &Path, rel: &Path) -> Result<String> {
-    match std::fs::read(source) {
-        Ok(bytes) => String::from_utf8(bytes).map_err(|_| {
-            SteleError::input_msg(format!(
-                "{}: node source is not valid UTF-8 (§3.1)",
-                rel.display()
-            ))
-        }),
-        Err(e) => Err(SteleError::internal(format!("read {}: {e}", rel.display()))),
-    }
+    let bytes = std::fs::read(source)
+        .map_err(|e| SteleError::internal(format!("read {}: {e}", rel.display())))?;
+    String::from_utf8(bytes).map_err(|_| {
+        SteleError::input_msg(format!(
+            "{}: node source is not valid UTF-8 (§3.1)",
+            rel.display()
+        ))
+    })
 }
 
 /// Resolve every claim's anchor to a `file:line` (§2.4), recomputed every build. A
@@ -2584,8 +2449,8 @@ fn resolve_claim_anchors(
                     SymbolResolution::Unresolved => claim.resolution = Resolution::Unresolved,
                 }
             } else {
-                // derive_slug already accepted the anchor, so it is one of the two
-                // namespaces; this arm is unreachable in practice.
+                // In neither namespace (no `※`, no `#`): derive_slug accepts it as a bare
+                // symbol, but it binds nothing — §4.1 reports it unresolved.
                 claim.resolution = Resolution::Unresolved;
             }
         }
@@ -2646,37 +2511,10 @@ fn head_sha(root: &Path) -> Result<Option<String>> {
 /// and sorted for deterministic iteration.
 fn tracked_files(root: &Path) -> Result<Vec<PathBuf>> {
     let ignore = Steleignore::load(root)?;
-    Ok(git_tracked_files(root)?
+    Ok(git_ls_files(root, &[])?
         .into_iter()
         .filter(|rel| !ignore.is_ignored(&rel.to_string_lossy().replace('\\', "/")))
         .collect())
-}
-
-/// The untracked-but-not-gitignored file list (`git ls-files --others
-/// --exclude-standard`): files present in the work tree that are neither VCS-tracked nor
-/// matched by a `.gitignore`. Repo-root-relative and sorted, NUL-delimited to survive
-/// unusual filenames. Feeds only [`warn_untracked_node_files`] — a spawn or non-zero-exit
-/// failure is a §5.3 internal error.
-fn git_untracked_files(root: &Path) -> Result<Vec<PathBuf>> {
-    let output = Command::new("git")
-        .args(["ls-files", "--others", "--exclude-standard", "-z"])
-        .current_dir(root)
-        .output()
-        .map_err(|e| SteleError::internal(format!("run `git ls-files --others`: {e}")))?;
-    if !output.status.success() {
-        return Err(SteleError::internal(format!(
-            "`git ls-files --others` failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    let listing = String::from_utf8_lossy(&output.stdout);
-    let mut files: Vec<PathBuf> = listing
-        .split('\0')
-        .filter(|entry| !entry.is_empty())
-        .map(PathBuf::from)
-        .collect();
-    files.sort();
-    Ok(files)
 }
 
 /// Warn (stderr only) about work-tree AGENTS.md files that declare a stele node the build's
@@ -2693,7 +2531,8 @@ fn git_untracked_files(root: &Path) -> Result<Vec<PathBuf>> {
 fn warn_untracked_node_files(ws: &Workspace) -> Result<()> {
     let root = &ws.work;
     let ignore = Steleignore::load(root)?;
-    for rel in git_untracked_files(root)? {
+    // The untracked-but-not-gitignored files: present, neither tracked nor `.gitignore`d.
+    for rel in git_ls_files(root, &["--others", "--exclude-standard"])? {
         if rel.file_name().is_none_or(|name| name != "AGENTS.md") {
             continue;
         }
@@ -2701,12 +2540,11 @@ fn warn_untracked_node_files(ws: &Workspace) -> Result<()> {
         if ignore.is_ignored(&posix) {
             continue;
         }
-        // Non-UTF-8 bytes cannot carry a parseable stele block, so a read failure is a
-        // silent skip (never a node). `Ok(None)` = blockless; `Ok(Some)`/`Err` both mean
-        // a block is present (a malformed block still declares a node the scan omits).
-        let Ok(contents) = std::fs::read_to_string(root.join(&rel)) else {
-            continue;
-        };
+        // Non-UTF-8 bytes cannot carry a parseable stele block, so an unreadable file reads
+        // as empty — blockless, a silent skip (never a node). `Ok(None)` = blockless;
+        // `Ok(Some)`/`Err` both mean a block is present (a malformed block still declares a
+        // node the scan omits).
+        let contents = std::fs::read_to_string(root.join(&rel)).unwrap_or_default();
         if matches!(parse::parse_agents_file(&rel, &contents), Ok(None)) {
             continue;
         }
@@ -2724,11 +2562,13 @@ fn warn_untracked_node_files(ws: &Workspace) -> Result<()> {
     Ok(())
 }
 
-/// The raw VCS-tracked file list (§2.4), repo-root-relative and sorted. `git ls-files
-/// -z` is NUL-delimited to survive unusual filenames.
-fn git_tracked_files(root: &Path) -> Result<Vec<PathBuf>> {
+/// `git ls-files <args> -z` (§2.4): with no args the raw VCS-tracked file list.
+/// Repo-root-relative and sorted, NUL-delimited to survive unusual filenames.
+fn git_ls_files(root: &Path, args: &[&str]) -> Result<Vec<PathBuf>> {
     let output = Command::new("git")
-        .args(["ls-files", "-z"])
+        .arg("ls-files")
+        .args(args)
+        .arg("-z")
         .current_dir(root)
         .output()
         .map_err(|e| SteleError::internal(format!("run `git ls-files`: {e}")))?;
@@ -2801,10 +2641,8 @@ fn build_adr_index(root: &Path, tracked: &[PathBuf]) -> Result<Vec<AdrEntry>> {
 /// The zero-padded number of a tracked ADR file `<dir>/NNNN-*.md` (e.g. `"0007"`),
 /// or `None` when the path is not an ADR file directly under `dir`.
 fn adr_number<'a>(dir: &str, path: &'a str) -> Option<&'a str> {
-    let name = path.strip_prefix(dir)?.strip_prefix('/')?;
-    if name.contains('/') || !name.ends_with(".md") {
-        return None;
-    }
+    let name = (path.strip_prefix(dir)?.strip_prefix('/'))
+        .filter(|name| !name.contains('/') && name.ends_with(".md"))?;
     let digits = name.split('-').next().filter(|d| !d.is_empty())?;
     digits.bytes().all(|b| b.is_ascii_digit()).then_some(digits)
 }
@@ -2830,19 +2668,14 @@ fn adr_status(contents: &str) -> String {
 fn frontmatter_status(contents: &str) -> Option<String> {
     const FENCE: &str = "---";
     let mut lines = contents.lines();
-    if lines.next()?.trim_end() != FENCE {
-        return None;
-    }
-    for line in lines {
-        let trimmed = line.trim();
-        if trimmed == FENCE {
-            return None;
-        }
-        if let Some(value) = trimmed.strip_prefix("status:") {
-            return value.split_whitespace().next().map(str::to_ascii_lowercase);
-        }
-    }
-    None
+    (lines.next()?.trim_end() == FENCE).then_some(())?;
+    lines
+        .map(str::trim)
+        .take_while(|line| *line != FENCE)
+        .find_map(|line| line.strip_prefix("status:"))?
+        .split_whitespace()
+        .next()
+        .map(str::to_ascii_lowercase)
 }
 
 /// The inline `Status: X` form (adr-tools/Nygard, the original): the lowercased first
@@ -2899,40 +2732,10 @@ fn status_word(line: &str) -> Option<String> {
 /// 2 + `run stele build`) that `check`/`emit`/`node` share. A genuine IO failure
 /// is an internal error (exit 3).
 fn read_committed_lock(root: &Path) -> Result<String> {
-    let path = root.join(LOCK_DIR).join(LOCK_FILE);
-    std::fs::read_to_string(&path).map_err(|e| match e.kind() {
-        ErrorKind::NotFound => SteleError::input_msg(format!(
-            "no committed lock at {LOCK_DIR}/{LOCK_FILE}; {RUN_BUILD_HINT}"
-        )),
-        _ => SteleError::internal(format!("read {LOCK_DIR}/{LOCK_FILE}: {e}")),
+    let shown = format!("{LOCK_DIR}/{LOCK_FILE}");
+    read_if_present(&root.join(&shown), &shown)?.ok_or_else(|| {
+        SteleError::input_msg(format!("no committed lock at {shown}; {RUN_BUILD_HINT}"))
     })
-}
-
-/// Write the lock via temp-file + rename so an interrupted write never leaves a
-/// partial lock (§5.3). The caller has already produced the full byte string, so
-/// any input error has aborted before this point. The temp name is unique per
-/// writer (pid + process-local counter) in the SAME directory as the target, so two
-/// concurrent builds never share a temp file — otherwise the loser's rename races on
-/// a temp the winner already renamed away (ENOENT, exit 3). The temp is cleaned up
-/// best-effort if the rename fails.
-fn write_lock_atomic(root: &Path, bytes: &str) -> Result<()> {
-    static TEMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-    let dir = root.join(LOCK_DIR);
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| SteleError::internal(format!("create {LOCK_DIR}: {e}")))?;
-    let seq = TEMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let temp_name = format!("{LOCK_TEMP}.{}.{seq}", std::process::id());
-    let temp = dir.join(&temp_name);
-    std::fs::write(&temp, bytes)
-        .map_err(|e| SteleError::internal(format!("write {LOCK_DIR}/{temp_name}: {e}")))?;
-    if let Err(e) = std::fs::rename(&temp, dir.join(LOCK_FILE)) {
-        let _ = std::fs::remove_file(&temp);
-        return Err(SteleError::internal(format!(
-            "rename into {LOCK_DIR}/{LOCK_FILE}: {e}"
-        )));
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -2971,10 +2774,14 @@ mod tests {
 
     #[test]
     fn adr_status_reads_all_three_conventions() {
-        // MADR YAML frontmatter (F5).
+        // MADR YAML frontmatter (F5); a frontmatter block without `status:` defers.
         assert_eq!(
             adr_status("---\nstatus: superseded\ndate: 2026-01-01\n---\n# t\n"),
             "superseded"
+        );
+        assert_eq!(
+            adr_status("---\ndate: 2026-01-01\n---\nStatus: Proposed\n"),
+            "proposed"
         );
         // Inline `Status: X` — the original form still works, unchanged.
         assert_eq!(

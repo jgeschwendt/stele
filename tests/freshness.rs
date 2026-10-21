@@ -192,7 +192,8 @@ fn parserless_churn_disabled_without_a_threshold() {
 }
 
 // §5.1 `stele blame`: an up-to-date claim on a clean tree reports fresh (exit 0). An
-// uncommitted edit then stales it with no staling commit (`null` under `--json`); a lock
+// uncommitted edit then stales it with no staling commit (`null` under `--json`) — unless the
+// watermark names no commit; a lock
 // stamped over that dirty tree, with the edit reverted, diverges from no committed
 // version and no working-tree edit — the honest answer is "history unavailable".
 #[test]
@@ -216,6 +217,20 @@ fn blame_reports_up_to_date_on_clean_tree() {
         .run(&["blame", "billing/refund-cap", "--json"])
         .stdout;
     assert!(json.contains("\"staling_commit\":null"), "{json}");
+    // A watermark naming no commit (a hand-edited `"sha": ""`) is history unavailable, never
+    // the working-tree edit an empty `..HEAD` range would suggest.
+    let lock = fixture.read(".stele/graph.lock");
+    let mut shas = lock.split("\"sha\": \"");
+    let head = shas.next().unwrap().to_string();
+    fixture.write(
+        ".stele/graph.lock",
+        &shas.fold(head, |out, rest| out + "\"sha\": \"" + &rest[40..]),
+    );
+    let out = fixture.run(&["blame", "billing/refund-cap"]).combined();
+    assert!(
+        out.contains("history unavailable (shallow clone?)"),
+        "{out}"
+    );
 
     assert_eq!(fixture.run(&["build"]).code, 0);
     fixture.write(refund, &clean);

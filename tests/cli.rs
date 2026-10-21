@@ -94,22 +94,25 @@ fn node_unknown_id_exits_two_with_candidates() {
     fixture.commit("a second node whose final segment is `store`");
     assert_eq!(fixture.run(&["build"]).code, 0);
     for (query, says, absent) in [
-        ("does-not-exist", "candidates: /, apps/web,", ""),
+        (
+            "does-not-exist",
+            "no node \"does-not-exist\"; candidates: /, apps/web,",
+            "",
+        ),
         (
             "web/lib",
-            "candidates: apps/web/lib/billing, apps/web/lib/store\n",
+            "no node \"web/lib\"; candidates: apps/web/lib/billing, apps/web/lib/store\n",
             "/,",
         ),
         (
             "store",
-            "ambiguous — it abbreviates apps/web/lib/store, packages/shared/store",
+            "node \"store\" is ambiguous — it abbreviates apps/web/lib/store, packages/shared/store",
             "candidates",
         ),
     ] {
         let node = fixture.run(&["node", query]);
         let out = node.combined();
         assert_eq!(node.code, 2, "{query}: {out}");
-        assert!(out.contains(&format!("node {query:?}")), "{out}");
         assert!(out.contains(says), "{out}");
         assert!(absent.is_empty() || !out.contains(absent), "{out}");
     }

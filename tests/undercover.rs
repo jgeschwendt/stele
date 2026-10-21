@@ -213,29 +213,31 @@ fn init_undercover_installs_exclude_block_before_artifacts() {
 fn undercover_build_self_heals_exclude_block() {
     let fixture = undercover_built();
 
-    // Simulate a lost block: `info/exclude` holds only a teammate's unterminated line (the block
-    // never installed, or their tooling clobbered it), leaving the marker in place.
-    fixture.write(".git/info/exclude", "*.log");
-    // Sanity: with the block gone and host config isolated, the overlay WOULD show.
-    assert!(
-        git_stdout(&fixture, &["status", "--porcelain"]).contains(".stele"),
-        "precondition: a missing block should expose the overlay"
-    );
-
-    let build = fixture.run(&["build"]);
-    assert_eq!(build.code, 0, "build:\n{}", build.combined());
-
+    // Simulate a lost block: `info/exclude` is empty, or holds only a teammate's unterminated
+    // line (the block never installed, or their tooling clobbered it), leaving the marker in place.
     let block = "# stele:begin undercover\n/.stele/\n/CLAUDE.local.md\n# stele:end undercover\n";
-    assert_eq!(
-        fixture.read(".git/info/exclude"),
-        format!("*.log\n{block}"),
-        "build did not re-install the exclude block after the teammate's line"
-    );
-    assert_eq!(
-        git_stdout(&fixture, &["status", "--porcelain"]),
-        "",
-        "self-heal left the work tree dirty"
-    );
+    for (teammate, kept) in [("", ""), ("*.log", "*.log\n")] {
+        fixture.write(".git/info/exclude", teammate);
+        // Sanity: with the block gone and host config isolated, the overlay WOULD show.
+        assert!(
+            git_stdout(&fixture, &["status", "--porcelain"]).contains(".stele"),
+            "precondition: a missing block should expose the overlay"
+        );
+
+        let build = fixture.run(&["build"]);
+        assert_eq!(build.code, 0, "build:\n{}", build.combined());
+
+        assert_eq!(
+            fixture.read(".git/info/exclude"),
+            format!("{kept}{block}"),
+            "build did not re-install the exclude block after {teammate:?}"
+        );
+        assert_eq!(
+            git_stdout(&fixture, &["status", "--porcelain"]),
+            "",
+            "self-heal left the work tree dirty"
+        );
+    }
 
     // A stale block is rewritten in place; the lines around it are byte-preserved.
     fixture.write(
@@ -248,19 +250,23 @@ fn undercover_build_self_heals_exclude_block() {
         format!("keep\n{block}after\n")
     );
 
-    // An overlay root that is not a directory, or an unreadable exclude, is exit 3.
+    // An overlay root that is not a directory, or an unreadable exclude, is exit 3 naming it.
     for (held, plant, says) in [
         (".stele/tree", ".stele/tree", "read overlay "),
         (".git/info/exclude", ".git/info/exclude/x", "read "),
     ] {
-        let held = fixture.path(held);
-        std::fs::remove_dir_all(&held)
-            .or_else(|_| std::fs::remove_file(&held))
+        let path = fixture.path(held);
+        std::fs::remove_dir_all(&path)
+            .or_else(|_| std::fs::remove_file(&path))
             .unwrap();
         fixture.write(plant, "");
         let build = fixture.run(&["build"]);
         assert_eq!(build.code, 3, "{plant}: {}", build.combined());
-        assert!(build.stderr.starts_with(says), "{plant}: {}", build.stderr);
+        assert!(
+            build.stderr.starts_with(says) && build.stderr.contains(&format!("/{held}: ")),
+            "{plant}: {}",
+            build.stderr
+        );
     }
 }
 

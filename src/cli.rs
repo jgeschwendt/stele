@@ -441,7 +441,11 @@ fn build(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
     let dir = ws.home.join(LOCK_DIR);
     std::fs::create_dir_all(&dir)
         .map_err(|e| SteleError::internal(format!("create {LOCK_DIR}: {e}")))?;
-    write_atomic(&dir.join(LOCK_FILE), &lock::to_canonical_string(&lock))?;
+    write_atomic(
+        &dir.join(LOCK_FILE),
+        &lock::to_canonical_string(&lock),
+        Some(&ws.home),
+    )?;
     let nodes = graph.nodes.len();
     Ok(CommandOutput::new(
         json!({ "lock": format!("{LOCK_DIR}/{LOCK_FILE}"), "nodes": nodes }),
@@ -732,7 +736,7 @@ fn emit_write(ws: &Workspace, lock: &Lock, claude_rules: bool) -> Result<Command
         }
     }
     for (target, updated) in &writes {
-        write_atomic(target, updated)?;
+        write_atomic(target, updated, None)?;
     }
 
     for (name, content) in indexes(lock) {
@@ -1800,7 +1804,7 @@ fn ensure_info_exclude(common: &Path) -> Result<()> {
         // Atomic (§3.5): an interrupted write never leaves a half-rewritten exclude (which
         // could unhide the overlay). The temp lives inside `.git/info/`, never the work tree,
         // so it cannot itself surface in `git status`.
-        write_atomic(&path, &updated)?;
+        write_atomic(&path, &updated, None)?;
     }
     Ok(())
 }
@@ -1809,23 +1813,31 @@ fn ensure_info_exclude(common: &Path) -> Result<()> {
 /// interrupted or partial write never replaces the live file — never a partial lock or a
 /// half-rewritten exclude on disk. The temp name (`.<name>.tmp.<pid>.<seq>`) carries the pid
 /// and a process-local counter so concurrent writers (two builds racing on the lock) never
-/// collide, and it is cleaned up best-effort if the rename fails. An existing target's
+/// collide, and it is cleaned up best-effort if the rename fails. Shared by the lock, the
+/// `info/exclude` install, and `migrate`'s/`emit`'s source rewrites. The lock passes its
+/// `lock_home`: its messages name paths relative to it (`.stele/graph.lock`), and it lands as
+/// a fresh file — a build never inherits the old lock's mode. Every other target's
 /// permissions are carried onto the replacement (best-effort), so rewriting a source in
-/// place never strips an executable bit. Shared by the lock, the `info/exclude` install,
-/// and `migrate`'s/`emit`'s source rewrites.
-fn write_atomic(path: &Path, bytes: &str) -> Result<()> {
+/// place never strips an executable bit.
+fn write_atomic(path: &Path, bytes: &str, lock_home: Option<&Path>) -> Result<()> {
     static TEMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let seq = TEMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     let temp = path.with_file_name(format!(".{name}.tmp.{}.{seq}", std::process::id()));
+    let shown = |p: &Path| {
+        let rel = lock_home.and_then(|home| p.strip_prefix(home).ok());
+        rel.unwrap_or(p).display().to_string()
+    };
     std::fs::write(&temp, bytes)
-        .map_err(|e| SteleError::internal(format!("write {}: {e}", temp.display())))?;
-    if let Ok(existing) = std::fs::metadata(path) {
+        .map_err(|e| SteleError::internal(format!("write {}: {e}", shown(&temp))))?;
+    if lock_home.is_none()
+        && let Ok(existing) = std::fs::metadata(path)
+    {
         let _ = std::fs::set_permissions(&temp, existing.permissions());
     }
     std::fs::rename(&temp, path).map_err(|e| {
         let _ = std::fs::remove_file(&temp);
-        SteleError::internal(format!("rename into {}: {e}", path.display()))
+        SteleError::internal(format!("rename into {}: {e}", shown(path)))
     })
 }
 
@@ -2185,7 +2197,7 @@ fn migrate(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
     // Pass 2 — land them, each through the temp-file + rename discipline (§5.3), so an
     // interrupted run never leaves a half-written source.
     for (path, _, contents) in &rewritten {
-        write_atomic(path, contents)?;
+        write_atomic(path, contents, None)?;
     }
 
     let files: Vec<String> = rewritten
@@ -2337,7 +2349,8 @@ fn node_sources(ws: &Workspace, tracked: &[PathBuf]) -> Result<Vec<NodeSource>> 
 /// `apps/api/AGENTS.md`), sorted by `rel`. A missing overlay root is empty, not an error (an
 /// undercover repo with no scaffold yet builds an empty graph).
 fn overlay_sources(tree_root: &Path, rel: &Path) -> Result<Vec<NodeSource>> {
-    let dir = tree_root.join(rel);
+    // Collected through its components so the root itself (`rel` empty) has no trailing `/`.
+    let dir: PathBuf = tree_root.join(rel).components().collect();
     let entries = match std::fs::read_dir(&dir) {
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
         entries => entries
@@ -2565,25 +2578,29 @@ fn warn_untracked_node_files(ws: &Workspace) -> Result<()> {
 /// `git ls-files <args> -z` (§2.4): with no args the raw VCS-tracked file list.
 /// Repo-root-relative and sorted, NUL-delimited to survive unusual filenames.
 fn git_ls_files(root: &Path, args: &[&str]) -> Result<Vec<PathBuf>> {
+    // Messages name the command by its first flag: `git ls-files`, `git ls-files --others`.
+    let cmd = ["git ls-files"].into_iter().chain(args.first().copied());
+    let cmd = cmd.collect::<Vec<_>>().join(" ");
     let output = Command::new("git")
         .arg("ls-files")
         .args(args)
         .arg("-z")
         .current_dir(root)
         .output()
-        .map_err(|e| SteleError::internal(format!("run `git ls-files`: {e}")))?;
+        .map_err(|e| SteleError::internal(format!("run `{cmd}`: {e}")))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         // Outside a work tree git prints "fatal: not a git repository …" — a user
         // mistake (§5.3 input, exit 2), not an internal fault. Surface a one-liner
-        // instead of the raw git text so `stele <verb>` outside a repo fails cleanly.
-        if stderr.contains("not a git repository") {
+        // instead of the raw git text so `stele <verb>` outside a repo fails cleanly. Only the
+        // tracked scan (no args) is that probe; a later listing failing is internal.
+        if args.is_empty() && stderr.contains("not a git repository") {
             return Err(SteleError::input_msg(
                 "not a git repository (stele scans VCS-tracked files; run inside a git repo)",
             ));
         }
         return Err(SteleError::internal(format!(
-            "`git ls-files` failed: {}",
+            "`{cmd}` failed: {}",
             stderr.trim()
         )));
     }

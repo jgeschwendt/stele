@@ -331,19 +331,25 @@ fn stele_verb_outside_a_git_repo_is_a_clean_input_error() {
 // ─── an IO failure is exit 3, naming what failed (§5.3) ───────────────────────
 
 // Each row plants one unreadable or unwritable path — a directory where a file belongs, a
-// corrupt git index — and runs the verb that trips on it.
+// corrupt git index — and runs the verb that trips on it. An exclude file git cannot read
+// passes `git ls-files` and fails only the untracked-file listing.
 #[test]
 fn io_failures_are_exit_3() {
     for (plant, verb, says) in [
         (
             ".stele/graph.lock/x",
             "build",
-            "rename into ./.stele/graph.lock: ",
+            "rename into .stele/graph.lock: ",
         ),
         (".stele/graph.lock/x", "check", "read .stele/graph.lock: "),
         ("apps/AGENTS.md/x", "init", "read apps/AGENTS.md: "),
         ("AGENTS.md/x", "emit", "read AGENTS.md: "),
         (".git/index", "build", "`git ls-files` failed: "),
+        (
+            ".git/info/exclude/x",
+            "build",
+            "`git ls-files --others` failed: fatal: cannot use .git/info/exclude as an exclude file",
+        ),
     ] {
         let fixture = Fixture::bare();
         fixture.write("AGENTS.md", "```stele\nkind: system\n```\n");
@@ -351,8 +357,9 @@ fn io_failures_are_exit_3() {
         fixture.commit("a root node and one top-level dir");
         if verb == "emit" {
             assert_eq!(fixture.run(&["build"]).code, 0);
-            fixture.delete_file("AGENTS.md");
         }
+        // The file the plant's directory replaces, if any (`AGENTS.md`, `info/exclude`).
+        let _ = std::fs::remove_file(fixture.path(plant).parent().unwrap());
         fixture.write(plant, "not what this path should hold\n");
         let run = fixture.run(&[verb]);
         assert_eq!(run.code, 3, "{plant} {verb}: {}", run.combined());

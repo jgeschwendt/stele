@@ -15,15 +15,21 @@ const LOCK_PATH: &str = ".stele/graph.lock";
 // ─── determinism ──────────────────────────────────────────────────────────────
 
 // Two consecutive builds of identical sources produce byte-identical locks
-// (§3.2 canonical serialization is a pure function of the graph).
+// (§3.2 canonical serialization is a pure function of the graph). The second build lands a
+// fresh file, never inheriting a read-only lock's mode.
 #[test]
 fn build_is_deterministic_across_runs() {
+    use std::os::unix::fs::PermissionsExt;
     let fixture = Fixture::acme();
+    let mode = |rel| fixture.path(rel).metadata().unwrap().permissions().mode() & 0o777;
     assert_eq!(fixture.run(&["build"]).code, 0);
     let first = fixture.read(LOCK_PATH);
+    std::fs::set_permissions(fixture.path(LOCK_PATH), PermissionsExt::from_mode(0o444)).unwrap();
     assert_eq!(fixture.run(&["build"]).code, 0);
     let second = fixture.read(LOCK_PATH);
     assert_eq!(first, second, "second build diverged from the first");
+    fixture.write("fresh", "");
+    assert_eq!(mode(LOCK_PATH), mode("fresh"));
 }
 
 // A freshly built lock survives a check against itself: the on-disk bytes equal

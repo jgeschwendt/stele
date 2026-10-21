@@ -223,8 +223,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join(".stele/config.toml")).unwrap();
         std::fs::create_dir(dir.path().join(STELEIGNORE_FILE)).unwrap();
-        assert!(Steleignore::load(dir.path()).is_err());
-        assert!(crate::config::load(dir.path()).is_err());
+        let internal = Some(crate::model::ExitCode::Internal);
+        assert_eq!(
+            Steleignore::load(dir.path()).err().map(|e| e.exit),
+            internal
+        );
+        assert_eq!(
+            crate::config::load(dir.path()).err().map(|e| e.exit),
+            internal
+        );
     }
 
     #[test]

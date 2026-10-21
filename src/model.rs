@@ -78,7 +78,6 @@ impl fmt::Display for SteleError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match (&self.file, self.line) {
             (Some(p), Some(l)) => write!(f, "{}:{}: {}", p.display(), l, self.message),
-            (Some(p), None) => write!(f, "{}: {}", p.display(), self.message),
             _ => write!(f, "{}", self.message),
         }
     }
@@ -114,12 +113,10 @@ pub type Result<T> = std::result::Result<T, SteleError>;
 
 // ─── the typed graph (§2) ───────────────────────────────────────────────────
 
-/// Node kinds. §2.1 primary altitudes plus the auxiliary kinds later phases
-/// compile (never authored in a `stele` block).
+/// Node kinds: the §2.1 primary altitudes. The auxiliary `adr`/`anchor` kinds compile
+/// into the lock's `adrs{}`/`landmarks{}` maps, never into a node.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NodeKind {
-    Adr,
-    Anchor,
     Component,
     Container,
     System,
@@ -129,8 +126,6 @@ impl NodeKind {
     /// Lowercase wire form (the lock's `kind` string, §3.2).
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Adr => "adr",
-            Self::Anchor => "anchor",
             Self::Component => "component",
             Self::Container => "container",
             Self::System => "system",
@@ -378,38 +373,27 @@ impl Graph {
             node_part
         };
 
-        // An exact id match wins outright (ids are unique after dedup).
-        if let Some(node) = self.nodes.iter().find(|n| n.id == node_part) {
-            return match find_claim(node, slug) {
-                Some(claim) => ClaimLookup::Found(ClaimRef {
-                    node_id: &node.id,
-                    claim,
-                }),
-                None => ClaimLookup::NotFound,
-            };
-        }
-
-        // Otherwise treat node_part as a final-segment abbreviation; it resolves only
-        // when it names exactly one node (§2.4 "unambiguous across the graph").
+        // An exact id match wins outright (ids are unique after dedup); otherwise node_part
+        // is a final-segment abbreviation, resolved only when it names exactly one node
+        // (§2.4 "unambiguous across the graph").
         let mut matches = self
             .nodes
             .iter()
             .filter(|n| last_segment(&n.id) == node_part);
-        let (Some(node), None) = (matches.next(), matches.next()) else {
-            // Zero matches → NotFound; two or more → the abbreviation is ambiguous.
-            return if self.nodes.iter().any(|n| last_segment(&n.id) == node_part) {
-                ClaimLookup::Ambiguous
-            } else {
-                ClaimLookup::NotFound
-            };
+        let node = match self.nodes.iter().find(|n| n.id == node_part) {
+            Some(node) => node,
+            None => match (matches.next(), matches.next()) {
+                (Some(node), None) => node,
+                (None, _) => return ClaimLookup::NotFound,
+                _ => return ClaimLookup::Ambiguous,
+            },
         };
-        match find_claim(node, slug) {
-            Some(claim) => ClaimLookup::Found(ClaimRef {
+        find_claim(node, slug).map_or(ClaimLookup::NotFound, |claim| {
+            ClaimLookup::Found(ClaimRef {
                 node_id: &node.id,
                 claim,
-            }),
-            None => ClaimLookup::NotFound,
-        }
+            })
+        })
     }
 }
 
@@ -904,10 +888,13 @@ mod tests {
     #[test]
     fn resolve_claim_missing_slug_is_not_found() {
         let graph = acme_graph();
-        assert!(matches!(
-            graph.resolve_claim("apps/web/nonexistent"),
-            ClaimLookup::NotFound
-        ));
+        // A missing slug, an unknown abbreviation, and a slash-free address.
+        for addr in ["apps/web/nonexistent", "nowhere/x", "noslash"] {
+            assert!(
+                matches!(graph.resolve_claim(addr), ClaimLookup::NotFound),
+                "{addr}"
+            );
+        }
     }
 
     // ─── intra-node duplicate slug (§2.4) via the parse layer is covered in parse.rs;

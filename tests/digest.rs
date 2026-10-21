@@ -105,17 +105,20 @@ fn comment_churn_inside_bound_region_is_stable() {
     assert_eq!(base, elixir_cap_digest(&churned).unwrap());
 }
 
-/// A parser-less language (markdown) yields no digest — the §2.4 churn-count
-/// fallback (Phase D5), a different mechanism from the (d) AST binding fallback
-/// below.
+/// A parser-less language (markdown) or a binary blob yields no digest — the §2.4
+/// churn-count fallback (Phase D5), a different mechanism from the (d) AST binding
+/// fallback below.
 #[test]
 fn parserless_language_has_no_digest() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("NOTES.md"), "# ※ doc\ntext\n").unwrap();
-    assert_eq!(
-        digest_for_claim(dir.path(), "※ doc", "NOTES.md:1").unwrap(),
-        None,
-    );
+    fs::write(dir.path().join("blob.rs"), b"\xff\xfe").unwrap();
+    for resolved in ["NOTES.md:1", "blob.rs:1"] {
+        assert_eq!(
+            digest_for_claim(dir.path(), "※ doc", resolved).unwrap(),
+            None
+        );
+    }
 }
 
 /// The landmark binds the NEXT definition (`changeset/1`), not the enclosing module
@@ -139,6 +142,14 @@ fn landmark_binds_only_the_immediately_following_definition() {
         base,
         elixir_cap_digest(&inside).unwrap(),
         "inside did not fire"
+    );
+
+    // A landmark over the `defmodule` binds the whole module: the sibling edit fires.
+    let module = |src: &str| digest_inline("m.ex", &format!("# ※ cap\n{src}"), "※ cap", "m.ex:1");
+    assert_ne!(
+        module(ELIXIR),
+        module(&sibling),
+        "module missed its sibling"
     );
 }
 
@@ -215,6 +226,8 @@ const B: u32 = 2;
         rust_landmark_digest(&file_edit, 4).unwrap(),
         "file-level edit did not fire — fallback did not reach the whole file"
     );
+    // A landmark line holding no comment (a hand-edited lock) binds the whole file too.
+    assert_eq!(rust_landmark_digest(TOP_LEVEL, 1), Some(file_base));
 }
 
 /// A `<path>#<symbol>` anchor digests exactly the resolved symbol's definition node:

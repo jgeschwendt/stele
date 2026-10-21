@@ -60,7 +60,10 @@ fn elixir_records_cross_node_drops_same_node_ignores_external() {
         "apps/web/lib/refund.ex",
         "defmodule AcmeWeb.Refund do\n  alias AcmeShared.Money\n  def g, do: Money.new(2)\nend\n",
     );
+    // A tracked source gone from the working tree is skipped, never read.
+    fixture.write("apps/web/lib/gone.ex", "");
     fixture.commit("elixir fixture");
+    fixture.delete_file("apps/web/lib/gone.ex");
 
     let imports = imports_of(&fixture);
     assert_eq!(imports["apps/web"], vec!["packages/shared"]);
@@ -73,9 +76,10 @@ fn elixir_records_cross_node_drops_same_node_ignores_external() {
 
 // ─── TypeScript / JavaScript ──────────────────────────────────────────────────
 
-// TS/JS: a relative import crossing a node boundary resolves by extension-probing
-// and is recorded; a bare specifier naming no workspace package is external and
-// ignored; a workspace package-name import resolves through `package.json`.
+// TS/JS: a relative import or `require` crossing a node boundary resolves by
+// extension- or index-probing and is recorded; a bare specifier naming no workspace
+// package is external and ignored; a workspace package-name (or subpath) import
+// resolves through `package.json`, an unreadable one naming nothing.
 #[test]
 fn ts_records_relative_cross_node_and_workspace_package() {
     let fixture = Fixture::bare();
@@ -91,14 +95,22 @@ fn ts_records_relative_cross_node_and_workspace_package() {
         "shared/src/money.ts",
         "export function money(c: number) {\n  return c;\n}\n",
     );
-    // web imports shared two ways (relative + workspace name → deduped to one edge)
-    // plus an external package and a same-node relative import (dropped).
+    // web imports shared every way (relative, workspace name, subpath, require → deduped
+    // to one edge) plus an external package and same-node imports (dropped).
     fixture.write(
         "web/index.ts",
-        "import { money } from \"../shared/src/money\";\nimport { money as m } from \"@acme/shared\";\nimport express from \"express\";\nimport { local } from \"./helper\";\nexport { money, m, express, local };\n",
+        "import { money } from \"../shared/src/money\";\nimport { money as m } from \"@acme/shared\";\nimport { money as s } from \"@acme/shared/src/money\";\nimport express from \"express\";\nimport { local } from \"./helper\";\nimport { lib } from \"./lib\";\nimport { gone } from \"./gone\";\nexport { money, m, s, express, local, lib, gone };\n",
     );
-    fixture.write("web/helper.ts", "export const local = 1;\n");
+    fixture.write("web/helper.tsx", "export const local = 1;\n");
+    fixture.write("web/lib/index.ts", "export const lib = 1;\n");
+    fixture.write(
+        "web/legacy.js",
+        "require(\"../shared/src/money\");\nrequire(\"\");\n",
+    );
+    fixture.write("web/package.json", "not json\n");
+    fixture.write("gone/package.json", "");
     fixture.commit("ts fixture");
+    fixture.delete_file("gone/package.json");
 
     let imports = imports_of(&fixture);
     assert_eq!(imports["web"], vec!["shared"]);
@@ -107,13 +119,16 @@ fn ts_records_relative_cross_node_and_workspace_package() {
 
 // ─── Rust ─────────────────────────────────────────────────────────────────────
 
-// Rust: a `use` whose head segment is another workspace member's crate name is a
-// cross-node import (hyphens folded to underscores); `crate::`/`std::` never cross;
-// duplicate `use`s of the same crate collapse.
+// Rust: a `use` or `extern crate` whose head is another workspace member's crate name
+// is a cross-node import (hyphens folded to underscores); `crate::`/`std::` never
+// cross; duplicate `use`s of the same crate collapse; a virtual-workspace or unreadable
+// `Cargo.toml` names no crate.
 #[test]
 fn rust_records_workspace_member_use_ignores_std_and_intra_crate() {
     let fixture = Fixture::bare();
     fixture.write("AGENTS.md", ROOT_BLOCK);
+    fixture.write("Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n");
+    fixture.write("crates/gone/Cargo.toml", "");
     fixture.write("crates/web/AGENTS.md", &node_block("web"));
     fixture.write("crates/shared/AGENTS.md", &node_block("shared"));
 
@@ -129,9 +144,10 @@ fn rust_records_workspace_member_use_ignores_std_and_intra_crate() {
     // web uses acme_shared twice (deduped), plus std and its own crate (dropped).
     fixture.write(
         "crates/web/src/lib.rs",
-        "use acme_shared::money;\nuse acme_shared::money as m;\nuse std::collections::BTreeMap;\nuse crate::helper;\nmod helper {}\n",
+        "extern crate acme_shared;\nuse acme_shared::money;\nuse acme_shared::money as m;\nuse std::collections::BTreeMap;\nuse crate::helper;\nmod helper {}\n",
     );
     fixture.commit("rust fixture");
+    fixture.delete_file("crates/gone/Cargo.toml");
 
     let imports = imports_of(&fixture);
     assert_eq!(imports["crates/web"], vec!["crates/shared"]);
@@ -142,23 +158,26 @@ fn rust_records_workspace_member_use_ignores_std_and_intra_crate() {
 
 // Python: an `import`/`from`-`import` naming a dotted module another node defines
 // is a cross-node import; a same-node module reference is dropped; a stdlib/pip
-// module that maps to no tracked file is ignored; duplicates collapse.
+// module that maps to no tracked file is ignored; duplicates collapse. With no system
+// node, a file outside every territory imports nothing.
 #[test]
 fn python_records_dotted_module_drops_same_node_ignores_stdlib() {
     let fixture = Fixture::bare();
-    fixture.write("AGENTS.md", ROOT_BLOCK);
     fixture.write("web/AGENTS.md", &node_block("web"));
     fixture.write("shared/AGENTS.md", &node_block("shared"));
 
     fixture.write("shared/money.py", "def money(c):\n    return c\n");
-    // web imports shared.money two ways (deduped), a stdlib module (ignored), and a
+    // web imports shared.money three ways (deduped), a stdlib module (ignored), and a
     // sibling web module (same node → dropped).
     fixture.write(
         "web/app.py",
-        "import shared.money\nfrom shared.money import money\nimport os\nimport web.helper\n",
+        "import shared.money\nimport shared.money as sm\nfrom shared.money import money\nimport os\nimport web.helper\n",
     );
     fixture.write("web/helper.py", "helper = 1\n");
+    fixture.write("web/gone.py", "");
+    fixture.write("top.py", "import shared.money\n");
     fixture.commit("python fixture");
+    fixture.delete_file("web/gone.py");
 
     let imports = imports_of(&fixture);
     assert_eq!(imports["web"], vec!["shared"]);

@@ -521,8 +521,13 @@ mod tests {
 
     #[test]
     fn a_region_marker_inside_a_fence_is_quoted_code() {
-        let src = format!("```markdown\n{REGION_BEGIN} router -->\n```\n");
-        assert!(rewrite(SourceKind::Node, &src).is_none(), "{}", node(&src));
+        // So are a glued word and a marker with no `-->`.
+        for src in [
+            format!("```markdown\n{REGION_BEGIN} router -->\n```\n"),
+            format!("{REGION_BEGIN}ish -->\n{REGION_BEGIN} router\n"),
+        ] {
+            assert!(rewrite(SourceKind::Node, &src).is_none(), "{}", node(&src));
+        }
     }
 
     // ─── authored block fields (§2.2/§2.6) ───────────────────────────────────
@@ -535,35 +540,36 @@ mod tests {
 
     #[test]
     fn a_symbol_anchor_is_untouched() {
-        let src = "```stele\ninvariants:\n  - claim: x\n    anchor: money.ts#Money\n```\n";
-        assert!(rewrite(SourceKind::Node, src).is_none());
+        // As is an `anchor:` glued to its value.
+        for anchor in ["anchor: money.ts#Money", "anchor:lm:refund-cap"] {
+            let src = format!("```stele\ninvariants:\n  - claim: x\n    {anchor}\n```\n");
+            assert!(rewrite(SourceKind::Node, &src).is_none(), "{anchor}");
+        }
     }
 
     #[test]
     fn a_quoted_anchor_keeps_its_quotes() {
-        let src = "```stele\ninvariants:\n  - claim: x\n    anchor: \"lm:refund-cap\"\n```\n";
-        assert!(
-            node(src).contains("anchor: \"※ refund-cap\""),
-            "{}",
-            node(src)
-        );
+        let out = node("```stele\ninvariants:\n  - claim: x\n    anchor: \"lm:refund-cap\"\n```\n");
+        assert!(out.contains("anchor: \"※ refund-cap\""), "{out}");
     }
 
     #[test]
     fn decided_by_flow_entries_take_the_decision_glyph() {
-        let src = "```stele\nedges:\n  decided_by: [adr/0007, docs/adr/0012]\n```\n";
-        assert!(
-            node(src).contains("decided_by: [§ 0007, § 0012]"),
-            "{}",
-            node(src)
-        );
+        // The flow list, and a bare scalar.
+        for (value, want) in [
+            ("[adr/0007, docs/adr/0012]", "[§ 0007, § 0012]"),
+            ("adr/0007", "§ 0007"),
+        ] {
+            let out = node(&format!("```stele\nedges:\n  decided_by: {value}\n```\n"));
+            assert!(out.contains(&format!("decided_by: {want}\n")), "{out}");
+        }
     }
 
     #[test]
     fn decided_by_block_entries_take_the_decision_glyph() {
-        let src = "```stele\nedges:\n  decided_by:\n    - doc/adr/0007\n    - adr/0012\n  allow: []\n```\n";
+        let src = "```stele\nedges:\n  decided_by:\n    - doc/adr/0007\n\n    - adr/0012\n  allow: []\n```\n";
         let out = node(src);
-        assert!(out.contains("    - § 0007\n    - § 0012\n"), "{out}");
+        assert!(out.contains("    - § 0007\n\n    - § 0012\n"), "{out}");
         assert!(out.contains("  allow: []"), "{out}");
     }
 
@@ -578,7 +584,8 @@ mod tests {
 
     #[test]
     fn an_already_migrated_decision_is_untouched() {
-        let src = "```stele\nedges:\n  decided_by: [§ 0007]\n```\n";
+        // Nor is an entry missing its directory, its number, or with a non-path directory.
+        let src = "```stele\nedges:\n  decided_by: [§ 0007, /0007, adr/x, a b/0007]\n```\n";
         assert!(rewrite(SourceKind::Node, src).is_none());
     }
 
@@ -590,11 +597,10 @@ mod tests {
 
     #[test]
     fn a_comment_in_the_block_survives_the_field_rewrite() {
-        let src = "```stele\nedges:\n  decided_by: [adr/0007] # integer cents\n```\n";
+        let out = node("```stele\nedges:\n  decided_by: [adr/0007] # integer cents\n```\n");
         assert!(
-            node(src).contains("decided_by: [§ 0007] # integer cents"),
-            "{}",
-            node(src)
+            out.contains("decided_by: [§ 0007] # integer cents"),
+            "{out}"
         );
     }
 }

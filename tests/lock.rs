@@ -45,7 +45,9 @@ fn check_matches_a_freshly_built_lock() {
 fn round_trip_is_a_fixpoint() {
     let lock = Lock::from_graph(&adversarial_graph());
     let once = lock::to_canonical_string(&lock);
-    let reparsed = lock::parse_lock(&once).expect("canonical output must re-parse");
+    let mut reparsed = lock::parse_lock(&once).expect("canonical output must re-parse");
+    // A committed lock lacking every node carries no watermark over (§4.5).
+    reparsed.carry_over_verified(&lock::parse_lock("{\"version\": 3}").unwrap());
     let twice = lock::to_canonical_string(&reparsed);
     assert_eq!(once, twice, "serialization is not a fixpoint");
 }
@@ -67,8 +69,9 @@ fn canonical_bytes_obey_the_escaping_contract() {
         );
     }
 
-    assert!(out.contains("\\n"), "newline not escaped");
-    assert!(out.contains("\\t"), "tab not escaped");
+    for named in ["\\b", "\\f", "\\n", "\\r", "\\t"] {
+        assert!(out.contains(named), "{named} not used");
+    }
     assert!(out.contains("\\\""), "quote not escaped");
     assert!(out.contains("\\\\"), "backslash not escaped");
     assert!(out.contains("\\u0001"), "C0 control not escaped as \\u00xx");
@@ -133,11 +136,11 @@ fn acme_lock_derives_the_containment_tree() {
 }
 
 // A one-char id ties the system id `/` on length; the real ancestor still wins, so
-// `A/b` nests under `A` whatever the tracked-file order.
+// `A/b` nests under `A` whatever the tracked-file order — and component `A` routes to it.
 #[test]
 fn one_char_parent_outranks_the_system_node() {
     let fixture = Fixture::bare();
-    for (path, kind) in [("", "system"), ("A/", "container"), ("A/b/", "component")] {
+    for (path, kind) in [("", "system"), ("A/", "component"), ("A/b/", "component")] {
         fixture.write(
             &format!("{path}AGENTS.md"),
             &format!("```stele\nkind: {kind}\n```\n"),
@@ -147,6 +150,11 @@ fn one_char_parent_outranks_the_system_node() {
     assert_eq!(fixture.run(&["build"]).code, 0);
     let lock = lock::parse_lock(&fixture.read(LOCK_PATH)).unwrap();
     assert_eq!(lock.nodes["A"].contains, vec!["A/b"]);
+    let region = stele::emit::render_region(&lock, &lock.nodes["A"]);
+    assert!(
+        region.contains("## Router") && region.contains("`stele unfold A/b`"),
+        "{region}"
+    );
 }
 
 // build stamps a non-null structural digest (§4.5) on a resolved claim in a
@@ -214,8 +222,10 @@ fn root_node() -> Node {
     Node {
         kind: NodeKind::System,
         id: "/".to_string(),
-        // Quote, backslash, newline, tab, C0 control, and non-ASCII in one string.
-        purpose: Some("quote \" back \\ nl \n tab \t ctrl \u{01} unicode é 世 🚀".to_string()),
+        // Quote, backslash, every named escape, a C0 control, and non-ASCII in one string.
+        purpose: Some(
+            "quote \" back \\ \u{08}\u{0c}\n\r\t ctrl \u{01} unicode é 世 🚀".to_string(),
+        ),
         commands,
         invariants: vec![Claim::authored(
             ClaimKind::Invariant,

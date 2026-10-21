@@ -36,14 +36,18 @@ TARGET="${arch}-${os}"
 # also reports. CI stamps it from the tag before calling this script (release.yaml).
 VERSION=$(grep -m1 '^version = ' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
 
-echo "release: building stele ($VERSION, $TARGET)"
-cargo build --release --bin stele
+# STELE_BIN packages a prebuilt binary instead: tests/install_smoke.sh passes cargo
+# test's own, so the suite never pays for a release build.
+if [ -z "${STELE_BIN:-}" ]; then
+  echo "release: building stele ($VERSION, $TARGET)"
+  cargo build --release --bin stele
+fi
 
 # Stage the one binary and tar it at the archive root (extract → ./stele). The
 # release profile strips symbols (Cargo.toml [profile.release]).
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
-cp target/release/stele "$STAGE/stele"
+cp "${STELE_BIN:-target/release/stele}" "$STAGE/stele"
 chmod +x "$STAGE/stele"
 
 OUT="$DIST/$VERSION"

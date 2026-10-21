@@ -158,18 +158,29 @@ fn exit_2_on_duplicate_node_id() {
     }
 }
 
-// Two `stele` blocks in one file → exit 2 (§3.1 item 1).
+// Two `stele` blocks in one file → exit 2 (§3.1 item 1); so is an ADR number past i64 (§2.6).
 #[test]
-fn exit_2_on_two_stele_blocks_in_one_file() {
-    let fixture = Fixture::acme();
-    fixture.append(
-        "apps/worker/AGENTS.md",
-        "\n```stele\nkind: container\n```\n",
-    );
-    fixture.commit("add a second stele block to apps/worker");
-
-    let build = fixture.run(&["build"]);
-    assert_eq!(build.code, 2, "{}", build.combined());
+fn exit_2_on_two_stele_blocks_or_an_unnumberable_adr() {
+    for (file, contents, says) in [
+        (
+            "apps/worker/AGENTS.md",
+            "\n```stele\nkind: container\n```\n",
+            "",
+        ),
+        (
+            "adr/99999999999999999999-overflow.md",
+            "# overflow\n",
+            "ADR number \"99999999999999999999\" is not an integer",
+        ),
+    ] {
+        let fixture = Fixture::acme();
+        let existing = std::fs::read_to_string(fixture.path(file)).unwrap_or_default();
+        fixture.write(file, &(existing + contents));
+        fixture.commit("an unbuildable source");
+        let build = fixture.run(&["build"]);
+        assert_eq!(build.code, 2, "{}", build.combined());
+        assert!(build.stderr.contains(says), "{}", build.stderr);
+    }
 }
 
 // Unknown lock `version` → exit 2, never best-effort parse (§3.2).
@@ -209,7 +220,8 @@ fn exit_2_on_lock_id_outside_the_lexeme() {
 }
 
 // A read command with no committed lock → exit 2 + "run stele build" (§5.3). `build` is
-// the only writer of the lock; check/emit/query refuse without one.
+// the only writer of the lock; check/emit/query refuse without one — and `check` refuses a
+// lock the sources have moved past.
 #[test]
 fn exit_2_without_a_lock_says_run_stele_build() {
     let fixture = Fixture::acme();
@@ -219,6 +231,21 @@ fn exit_2_without_a_lock_says_run_stele_build() {
         assert_eq!(result.code, 2, "{args:?}: {out}");
         assert!(out.contains("run stele build"), "{args:?}: {out}");
     }
+    assert_eq!(fixture.run(&["build"]).code, 0);
+    fixture.replace(
+        "apps/worker/AGENTS.md",
+        "kind: container\n",
+        "kind: component\n",
+    );
+    let stale = fixture.run(&["check"]);
+    assert_eq!(stale.code, 2, "{}", stale.combined());
+    assert!(
+        stale
+            .stderr
+            .contains("does not match the freshly-built graph; run stele build"),
+        "{}",
+        stale.stderr
+    );
 }
 
 // Clean acme: build → check → exit 0 (§5.3 "0 success (check clean)").
@@ -250,21 +277,38 @@ fn assertion_failure_is_exit_1_not_2() {
 // A reader that closes early (`stele root | head -1`) is EPIPE on stdout, not a §5.3
 // internal error: the process ends by SIGPIPE like any Unix filter — no exit 3, no panic
 // text. The read end is dropped before spawn, so the first write fails deterministically.
+// Any OTHER stdout failure still panics in println!, and that panic is the §5.3 internal
+// error: exit 3 with a one-line notice. A full non-blocking socket fails the write with
+// EAGAIN while its peer stays open (no SIGPIPE).
 #[test]
-fn epipe_on_stdout_ends_by_sigpipe_quietly() {
+fn stdout_failure_is_sigpipe_on_epipe_else_exit_3() {
+    use std::io::Write;
     use std::os::unix::process::ExitStatusExt;
     let fixture = Fixture::acme();
     assert_eq!(fixture.run(&["build"]).code, 0);
     let (reader, writer) = std::io::pipe().expect("pipe");
     drop(reader);
-    let out = common::isolate_git(
-        std::process::Command::new(common::BIN)
-            .arg("root")
-            .current_dir(&fixture.root),
-    )
-    .stdout(writer)
-    .output()
-    .expect("spawn stele binary");
+    let root = |stdout: std::process::Stdio| {
+        common::isolate_git(
+            std::process::Command::new(common::BIN)
+                .arg("root")
+                .current_dir(&fixture.root),
+        )
+        .stdout(stdout)
+        .output()
+        .expect("spawn stele binary")
+    };
+    let out = root(writer.into());
     assert_eq!(out.status.signal(), Some(13), "{out:?}");
     assert!(out.stderr.is_empty(), "{out:?}");
+
+    let (mut full, _peer) = std::os::unix::net::UnixStream::pair().expect("socketpair");
+    full.set_nonblocking(true).expect("non-blocking");
+    while full.write(&[0; 4096]).is_ok() {}
+    let out = root(std::os::fd::OwnedFd::from(full).into());
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("stele: internal error (unexpected panic)"),
+        "{out:?}"
+    );
 }

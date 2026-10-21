@@ -179,7 +179,7 @@ fn build_rejects_an_anchor_holding_a_newline() {
 
 // A path outside the id lexeme still renders: a `|` in a declaring directory (rejected as a
 // derived id, legal under an override), an anchor, or a command is escaped in every table cell; a
-// multi-line allow reason prints on one line.
+// multi-line allow reason prints on one line, in `node` and in the `check --report` section.
 #[test]
 fn paths_commands_and_reasons_render_on_one_line_and_cell() {
     let fixture = Fixture::acme();
@@ -209,9 +209,13 @@ fn paths_commands_and_reasons_render_on_one_line_and_cell() {
     assert!(root.contains("or read `pi\\|pe/AGENTS.md`"), "{root}");
     let index = fixture.read(".stele/index/invariants.md");
     assert!(index.contains("| c | pipe | pi\\|pe/x.md#h |"), "{index}");
-    let cli = fixture.run(&["root"]).stdout + &fixture.run(&["node", "pipe"]).stdout;
+    let cli = fixture.run(&["root"]).stdout
+        + &fixture.run(&["node", "pipe"]).stdout
+        + &fixture.run(&["check", "--report"]).stdout;
     assert!(
-        cli.contains("| setup | a \\| b |") && cli.contains("allow: apps/web — a b\n"),
+        cli.contains("| setup | a \\| b |")
+            && cli.contains("allow: apps/web — a b\n")
+            && cli.contains("\nallow entries (1):\n  pipe · apps/web · a b\n"),
         "{cli}"
     );
 }

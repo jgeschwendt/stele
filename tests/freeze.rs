@@ -20,7 +20,9 @@ fn introduce_store_imports_billing(fixture: &Fixture) {
 }
 
 // A baselined violation is suppressed: `--freeze` records it, and the next `check`
-// passes even though the violating import is still present.
+// passes even though the violating import is still present. A malformed baseline is an
+// input error (exit 2); one that cannot be read or written (here a directory) is an
+// internal error (exit 3), never "no baseline".
 #[test]
 fn freeze_baseline_suppresses_the_frozen_violation() {
     let fixture = Fixture::acme();
@@ -37,6 +39,15 @@ fn freeze_baseline_suppresses_the_frozen_violation() {
     assert_eq!(freeze.code, 0, "{}", freeze.combined());
     let check = fixture.run(&["check"]);
     assert_eq!(check.code, 0, "{}", check.combined());
+
+    fixture.write(".stele/freeze.json", "not json");
+    assert_eq!(fixture.run(&["check"]).code, 2);
+    fixture.delete_file(".stele/freeze.json");
+    std::fs::create_dir(fixture.path(".stele/freeze.json")).expect("baseline dir");
+    for args in [&["check"][..], &["check", "--freeze"]] {
+        let unusable = fixture.run(args);
+        assert_eq!(unusable.code, 3, "{args:?}: {}", unusable.combined());
+    }
 }
 
 // A violation that appears AFTER the baseline still fails; the baselined one stays

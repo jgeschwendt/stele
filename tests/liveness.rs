@@ -75,11 +75,16 @@ fn probe3_env_assignment_skipped_and_unknown_mix_task() {
 }
 
 // Probe 4 — shell operators split a command into segments resolved independently: only
-// the `mix bogus` segment fails; the `mise install` and `true` segments resolve.
+// the `mix bogus` segment fails; the `mise install`, `true`, `echo …` and `cat` segments
+// resolve. Quoting and escapes keep `"a\"b"`, `x\;y` and `'c|d'` single words, never
+// split points.
 #[test]
 fn probe4_shell_operators_split_segments() {
     let fixture = Fixture::acme();
-    add_root_commands(&fixture, "  chain: mise install && mix bogus || true\n");
+    add_root_commands(
+        &fixture,
+        "  chain: mise install && mix bogus || true; echo \"a\\\"b\" x\\;y 'c|d' | cat\n",
+    );
 
     assert_eq!(fixture.run(&["build"]).code, 0);
     let check = fixture.run(&["check", "--only", "liveness"]);
@@ -87,7 +92,7 @@ fn probe4_shell_operators_split_segments() {
     assert_eq!(check.code, 1, "{out}");
     assert!(out.contains("command / :chain → `mix bogus`"), "{out}");
     assert!(out.contains("task not found in mix.exs"), "{out}");
-    // Exactly one segment failed — the clean `mise install` / `true` segments do not.
+    // Exactly one segment failed — the clean segments do not.
     assert_eq!(liveness_lines(&out), 1, "{out}");
 }
 
@@ -181,11 +186,12 @@ fn probe6_run_commands_executes_and_reports_nonzero() {
 fn probe7_run_commands_json_keeps_stdout_a_single_object() {
     let fixture = Fixture::acme();
     // The child's OUTPUT token is computed (`LEAK_$((21+21))` → `LEAK_42`), so it appears
-    // only if the child's stdout actually leaked — never merely because the command text
-    // (which the finding message echoes) contains it.
+    // only if the child's output actually leaked — never merely because the command text
+    // (which the finding message echoes) contains it. 5000 zeros on stdout ahead of the
+    // token on stderr overflow the 4096-byte cap, whose kept tail still holds the token.
     add_root_commands(
         &fixture,
-        "  noisy: sh -c \"echo LEAK_$((21+21)); exit 3\"\n",
+        "  noisy: sh -c \"printf %05000d 0; echo LEAK_$((21+21)) >&2; exit 3\"\n",
     );
     assert_eq!(fixture.run(&["build"]).code, 0);
 
@@ -212,8 +218,8 @@ fn probe7_run_commands_json_keeps_stdout_a_single_object() {
     // preserved, just never on the pure-JSON stdout.
     let human = fixture.run(&["check", "--run-commands"]);
     assert!(
-        human.combined().contains("LEAK_42"),
-        "captured output must fold into the finding:\n{}",
+        human.combined().contains("…000") && human.combined().contains("0\nLEAK_42"),
+        "captured output must fold into the finding, tail-capped:\n{}",
         human.combined()
     );
 }

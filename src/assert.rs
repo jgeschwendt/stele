@@ -18,12 +18,15 @@ use crate::model::{
     Claim, ClaimAnchor, ClaimLookup, Graph, LANDMARK_ANCHOR_PREFIX, Node, NodeKind, Resolution,
     Result, SYSTEM_ID, SteleError,
 };
-use serde::Deserialize;
+use crate::parse::{
+    self, MARKER_CLOSE, REGION_BEGIN_PREFIX, REGION_DEFAULT_NAME, REGION_END_MARKER, STELE_INFO,
+};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::sync::OnceLock;
 
 /// The claim comment token (§2.5) — the glyph plus its single space — quoted ahead of
@@ -144,28 +147,10 @@ impl Finding {
         self
     }
 
-    fn location(mut self, file: impl Into<String>, line: usize) -> Self {
-        self.locations.push(Location {
-            file: file.into(),
-            line,
-            text: None,
-        });
-        self
-    }
-
-    /// A location carrying the reference's own source line (§4.2 structural), printed
-    /// after `file:line` in the human render; the JSON envelope still omits `text`.
-    fn location_text(
-        mut self,
-        file: impl Into<String>,
-        line: usize,
-        text: impl Into<String>,
-    ) -> Self {
-        self.locations.push(Location {
-            file: file.into(),
-            line,
-            text: Some(text.into()),
-        });
+    /// A location; `text` is the reference's own source line (§4.2 structural), printed
+    /// after `file:line` in the human render; the JSON envelope still omits it.
+    fn location(mut self, file: String, line: usize, text: Option<String>) -> Self {
+        self.locations.push(Location { file, line, text });
         self
     }
 
@@ -378,7 +363,7 @@ fn referential(ctx: &Context) -> Result<Vec<Finding>> {
                 ),
             );
             for occ in occurrences {
-                finding = finding.location(occ.file.clone(), occ.line);
+                finding = finding.location(occ.file.clone(), occ.line, None);
             }
             findings.push(finding);
         }
@@ -446,8 +431,11 @@ fn anchor_ambiguous(node: &Node, claim: &Claim) -> Finding {
 
 /// A §4.1(e) dangling claim-comment finding, anchored at the comment's `file:line`.
 fn claim_comment_dangling(anchor: &ClaimAnchor, message: String) -> Finding {
-    Finding::error(AssertionClass::Referential, None, message)
-        .location(anchor.file.clone(), anchor.line)
+    Finding::error(AssertionClass::Referential, None, message).location(
+        anchor.file.clone(),
+        anchor.line,
+        None,
+    )
 }
 
 /// The "claim … is now unanchored" detail line (EXAMPLE 8.3a).
@@ -467,8 +455,6 @@ fn split_symbol(anchor: &str) -> (&str, &str) {
 // ─── structural (§4.2) ─────────────────────────────────────────────────────────
 
 /// The committed structural baseline, relative to the repo root (§4.2 `--freeze`).
-const FREEZE_DIR: &str = ".stele";
-const FREEZE_FILE: &str = "freeze.json";
 const FREEZE_PATH: &str = ".stele/freeze.json";
 /// The freeze-file format version this engine reads and writes.
 const FREEZE_VERSION: u32 = 1;
@@ -492,9 +478,10 @@ impl Direction {
     }
 }
 
-/// One structural violation's identity (§4.2 freeze key `{node, direction, target}`).
-/// Field order is the canonical baseline sort (node, then direction, then target).
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+/// One structural violation's identity (§4.2 freeze key `{node, direction, target}`) —
+/// also a `.stele/freeze.json` entry. Field order is the canonical baseline sort (node,
+/// then direction, then target); the file's key order is the JSON map's (alphabetical).
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 struct FreezeKey {
     node: String,
     direction: String,
@@ -562,14 +549,14 @@ fn forward_violation(ctx: &Context, node: &Node, target: &str) -> StructuralViol
         Some(node.id.clone()),
         format!("{} imports {target} — edge not declared", node.id),
     );
-    if let Some(occurrences) = ctx
+    for occ in ctx
         .graph
         .import_edges
         .get(&(node.id.clone(), target.to_string()))
+        .into_iter()
+        .flatten()
     {
-        for occ in occurrences {
-            finding = finding.location_text(occ.file.clone(), occ.line, occ.text.clone());
-        }
+        finding = finding.location(occ.file.clone(), occ.line, Some(occ.text.clone()));
     }
     finding = finding
         .detail(format!(
@@ -624,35 +611,20 @@ fn freeze_key(node: &Node, direction: Direction, target: &str) -> FreezeKey {
 #[derive(Deserialize)]
 struct FreezeFile {
     #[serde(default)]
-    violations: Vec<FreezeEntry>,
-}
-
-#[derive(Deserialize)]
-struct FreezeEntry {
-    direction: String,
-    node: String,
-    target: String,
+    violations: Vec<FreezeKey>,
 }
 
 /// Read the committed baseline (§4.2). An absent file is an empty baseline; malformed
 /// content is an input error (exit 2); a genuine IO failure is internal (exit 3).
 fn read_freeze_baseline(home: &Path) -> Result<BTreeSet<FreezeKey>> {
-    let text = match std::fs::read_to_string(home.join(FREEZE_DIR).join(FREEZE_FILE)) {
+    let text = match std::fs::read_to_string(home.join(FREEZE_PATH)) {
         Ok(text) => text,
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(BTreeSet::new()),
         Err(e) => return Err(SteleError::internal(format!("read {FREEZE_PATH}: {e}"))),
     };
     let parsed: FreezeFile = serde_json::from_str(&text)
         .map_err(|e| SteleError::input_msg(format!("malformed {FREEZE_PATH}: {e}")))?;
-    Ok(parsed
-        .violations
-        .into_iter()
-        .map(|entry| FreezeKey {
-            node: entry.node,
-            direction: entry.direction,
-            target: entry.target,
-        })
-        .collect())
+    Ok(parsed.violations.into_iter().collect())
 }
 
 /// `stele check --freeze` (§4.2): baseline every CURRENT structural violation (both
@@ -660,59 +632,17 @@ fn read_freeze_baseline(home: &Path) -> Result<BTreeSet<FreezeKey>> {
 /// return the count. Every later `check` suppresses exactly these; new violations
 /// still fail.
 pub fn write_freeze(ctx: &Context) -> Result<usize> {
-    let mut keys: Vec<FreezeKey> = structural_violations(ctx)
+    let keys: BTreeSet<FreezeKey> = structural_violations(ctx)
         .into_iter()
         .map(|violation| violation.key)
         .collect();
-    keys.sort();
-    keys.dedup();
-    let dir = ctx.home.join(FREEZE_DIR);
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| SteleError::internal(format!("create {FREEZE_DIR}: {e}")))?;
-    std::fs::write(dir.join(FREEZE_FILE), freeze_to_canonical_string(&keys))
+    // The canonical bytes (§4.2): 2-space pretty-print, keys in Unicode-scalar order (the
+    // `Value` map is a BTreeMap), one trailing LF — a byte-stable, committed-friendly file.
+    // `.stele/` exists: `check` has just read the lock from it.
+    let canonical = json!({ "version": FREEZE_VERSION, "violations": keys });
+    std::fs::write(ctx.home.join(FREEZE_PATH), format!("{canonical:#}\n"))
         .map_err(|e| SteleError::internal(format!("write {FREEZE_PATH}: {e}")))?;
     Ok(keys.len())
-}
-
-/// Serialize the baseline to its canonical bytes (§4.2): 2-space pretty-print, keys
-/// in Unicode-scalar order, one trailing LF — a byte-stable, committed-friendly file.
-fn freeze_to_canonical_string(keys: &[FreezeKey]) -> String {
-    let mut out = String::from("{\n");
-    out.push_str(&format!("  \"version\": {FREEZE_VERSION},\n"));
-    if keys.is_empty() {
-        out.push_str("  \"violations\": []\n");
-    } else {
-        out.push_str("  \"violations\": [\n");
-        for (i, key) in keys.iter().enumerate() {
-            let comma = if i + 1 < keys.len() { "," } else { "" };
-            out.push_str("    {\n");
-            out.push_str(&format!(
-                "      \"direction\": {},\n",
-                json_string(&key.direction)
-            ));
-            out.push_str(&format!("      \"node\": {},\n", json_string(&key.node)));
-            out.push_str(&format!("      \"target\": {}\n", json_string(&key.target)));
-            out.push_str(&format!("    }}{comma}\n"));
-        }
-        out.push_str("  ]\n");
-    }
-    out.push_str("}\n");
-    out
-}
-
-/// A JSON string literal with the minimal escaping the baseline's content can need
-/// (normalized ids and fixed direction words carry no control characters).
-fn json_string(value: &str) -> String {
-    let mut out = String::from("\"");
-    for c in value.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
 }
 
 // ─── exhaustiveness (§4.3) ─────────────────────────────────────────────────────
@@ -802,32 +732,27 @@ fn uncovered_finding(dir: &str, files: usize) -> Finding {
 /// The directories that cover a subtree for §4.3: the declared location (parent of the
 /// AGENTS.md) of every non-root `container`/`component` node, plus the detected ADR
 /// dir. SPEC §4.3 bullet 4 lists `adr` among the covering node kinds; the ADR index
-/// (§2.6) knows the dir, so a clean repo with a bare `adr/` (no AGENTS.md) passes.
+/// (§2.6) knows the dir, so a clean repo with a bare `adr/` (no AGENTS.md) passes. A
+/// node's declared location is the repo-root-relative parent of its AGENTS.md; the root
+/// (`""`, whatever its kind) never covers — it would swallow every directory.
 fn covering_dirs(ctx: &Context) -> BTreeSet<String> {
-    let mut dirs = BTreeSet::new();
-    for node in &ctx.graph.nodes {
-        if node.kind == NodeKind::System {
-            continue;
-        }
-        if let Some(dir) = declared_location(&node.source) {
-            dirs.insert(dir);
-        }
-    }
-    for adr in &ctx.graph.adrs {
-        if let Some((dir, _)) = adr.path.rsplit_once('/') {
-            dirs.insert(dir.to_string());
-        }
-    }
-    dirs
-}
-
-/// A node's declared location (§4.3): the repo-root-relative parent of its AGENTS.md,
-/// or `None` for a root-declared node (the system node, already excluded).
-fn declared_location(source: &Path) -> Option<String> {
-    match source.parent() {
-        Some(dir) if !dir.as_os_str().is_empty() => Some(dir.to_string_lossy().replace('\\', "/")),
-        _ => None,
-    }
+    let nodes = ctx
+        .graph
+        .nodes
+        .iter()
+        .filter(|n| n.kind != NodeKind::System);
+    let node_dirs = nodes
+        .filter_map(|n| n.source.parent())
+        .map(|dir| dir.to_string_lossy().replace('\\', "/"));
+    let adr_dirs = ctx
+        .graph
+        .adrs
+        .iter()
+        .filter_map(|adr| adr.path.rsplit_once('/'));
+    node_dirs
+        .chain(adr_dirs.map(|(dir, _)| dir.to_string()))
+        .filter(|dir| !dir.is_empty())
+        .collect()
 }
 
 /// Whether `dir` lies within a covering node's territory (§4.3(a)): it equals a
@@ -842,11 +767,9 @@ fn is_pass_through(covering: &BTreeSet<String>, dir: &str) -> bool {
 }
 
 /// Whether `ancestor` is a strict path-segment ancestor of `descendant` (`apps`
-/// precedes `apps/web` but not `apps` itself nor `appswide`).
+/// precedes `apps/web` but not `apps` itself nor `appswide`). Both sides are non-empty:
+/// covering dirs filter `""` out and scanned dirs are built from path segments.
 fn is_strict_ancestor(ancestor: &str, descendant: &str) -> bool {
-    if ancestor.is_empty() {
-        return !descendant.is_empty();
-    }
     descendant
         .strip_prefix(ancestor)
         .is_some_and(|rest| rest.starts_with('/'))
@@ -939,16 +862,6 @@ const BYTES_PER_KIB: usize = 1024;
 /// Thousands-grouping width for the §4.4 token render (`1,410 tokens`).
 const THOUSANDS_GROUP: usize = 3;
 
-// Markdown structure tokens, reused from the §3.1 scanner (parse.rs owns the authored
-// path; the budget segmenter re-derives them locally rather than widen that module).
-const STELE_INFO: &str = "stele";
-const FENCE_MIN_LEN: usize = 3;
-const FENCE_MAX_INDENT: usize = 3;
-const BEGIN_MARKER: &str = "<!-- @stele";
-const MARKER_CLOSE: &str = "-->";
-const DEFAULT_REGION_NAME: &str = "router";
-const END_MARKER: &str = "<!-- @end -->";
-
 /// The budget class (§4.4): three profiles over materialized AGENTS.md content, each
 /// finding tagged with its profile (the class stays `budget` for `--only`/`disable`).
 /// `claude` counts the root's always-loaded set in TOKENS against `budget.claude_root`;
@@ -967,29 +880,30 @@ fn budget(ctx: &Context) -> Result<Vec<Finding>> {
 /// `claude` profile (§4.4): the root node's always-loaded set — the root AGENTS.md
 /// alone, since the root has no ancestors — counted in TOKENS against
 /// `budget.claude_root` (default 2000). The always-loaded set generalizes to a node's
-/// file plus its ancestors' (§4.4), but the ceiling is calibrated for the root.
+/// file plus its ancestors' (§4.4), but the ceiling is calibrated for the root. A graph
+/// with no root AGENTS.md has no always-loaded set.
 fn budget_claude(ctx: &Context) -> Result<Vec<Finding>> {
-    let Some(root) = ctx.graph.nodes.iter().find(|n| n.id == SYSTEM_ID) else {
-        return Ok(Vec::new());
-    };
-    let tokens = count_tokens(&emit::materialized_content(ctx.source_root, root)?);
     let ceiling = ctx.config.budget.claude_root as usize;
-    if tokens <= ceiling {
-        return Ok(Vec::new());
+    let mut findings = Vec::new();
+    for root in ctx.graph.nodes.iter().filter(|n| n.id == SYSTEM_ID) {
+        let tokens = count_tokens(&emit::materialized_content(ctx.source_root, root)?);
+        if tokens > ceiling {
+            findings.push(
+                Finding::error(
+                    AssertionClass::Budget,
+                    Some(root.id.clone()),
+                    format!(
+                        "always-loaded set for {} renders {} tokens > claude_root {}",
+                        root.id,
+                        fmt_thousands(tokens),
+                        fmt_thousands(ceiling),
+                    ),
+                )
+                .profile("claude"),
+            );
+        }
     }
-    Ok(vec![
-        Finding::error(
-            AssertionClass::Budget,
-            Some(root.id.clone()),
-            format!(
-                "always-loaded set for {} renders {} tokens > claude_root {}",
-                root.id,
-                fmt_thousands(tokens),
-                fmt_thousands(ceiling),
-            ),
-        )
-        .profile("claude"),
-    ])
+    Ok(findings)
 }
 
 /// `codex` profile (§4.4): for every node the root→node concatenation chain, counted
@@ -1136,60 +1050,28 @@ fn flush_prose(prose: &mut String, segs: &mut Vec<(String, String)>) {
     segs.push((descriptor, std::mem::take(prose)));
 }
 
-/// If line `i` opens the authored `stele` fence, the index of its closing fence (or the
-/// last line for an unterminated block); else `None`.
+/// If line `i` opens the authored `stele` fence (the §3.1 scanner's own fence rules), the
+/// index of its closing fence (or the last line for an unterminated block); else `None`.
 fn stele_block_end(lines: &[&str], i: usize) -> Option<usize> {
-    let (fence_char, fence_len) = open_stele_fence(lines[i])?;
-    let close = (i + 1..lines.len()).find(|&j| is_close_fence(lines[j], fence_char, fence_len));
+    let (fence_char, fence_len, _) = parse::open_fence(lines[i]).filter(|f| f.2 == STELE_INFO)?;
+    let close =
+        (i + 1..lines.len()).find(|&j| parse::is_close_fence(lines[j], fence_char, fence_len));
     Some(close.unwrap_or(lines.len() - 1))
-}
-
-/// The `(fence_char, run_length)` of an opening ` ```stele ` fence (§3.1 item 1), or
-/// `None` when line is not a stele-info fence.
-fn open_stele_fence(line: &str) -> Option<(char, usize)> {
-    let indent = line.len() - line.trim_start_matches(' ').len();
-    if indent > FENCE_MAX_INDENT {
-        return None;
-    }
-    let rest = &line[indent..];
-    let fence_char = rest.chars().next().filter(|&c| c == '`' || c == '~')?;
-    let run = rest.chars().take_while(|&c| c == fence_char).count();
-    if run < FENCE_MIN_LEN {
-        return None;
-    }
-    let info = rest[run..].split_whitespace().next().unwrap_or("");
-    (info == STELE_INFO).then_some((fence_char, run))
-}
-
-/// A closing fence: the fence character, run length ≥ the opener's, no trailing info.
-fn is_close_fence(line: &str, fence_char: char, open_len: usize) -> bool {
-    let indent = line.len() - line.trim_start_matches(' ').len();
-    if indent > FENCE_MAX_INDENT {
-        return false;
-    }
-    let rest = &line[indent..];
-    let run = rest.chars().take_while(|&c| c == fence_char).count();
-    run >= open_len && rest[run..].trim().is_empty()
 }
 
 /// If line `i` opens a generated region (`<!-- @stele [name] … -->`), its name and the
 /// index of the line carrying `<!-- @end -->` (or the last line if unterminated); else
-/// `None`. The name is optional (§3.1 item 2), defaulting to [`DEFAULT_REGION_NAME`];
-/// a single-line `@stele`…`@end` region closes on its own line.
+/// `None`. The name is optional (§3.1 item 2), defaulting to `router`; a single-line
+/// `@stele`…`@end` region closes on its own line.
 fn generated_region(lines: &[&str], i: usize) -> Option<(String, usize)> {
-    let after = lines[i].split(BEGIN_MARKER).nth(1)?;
-    let name = match after
-        .split(MARKER_CLOSE)
-        .next()
-        .unwrap_or("")
+    let after = lines[i].split(REGION_BEGIN_PREFIX).nth(1)?;
+    let name = after.split(MARKER_CLOSE).next().unwrap_or_default();
+    let name = name
         .split_whitespace()
         .next()
-    {
-        Some(name) => name.to_string(),
-        None => DEFAULT_REGION_NAME.to_string(),
-    };
-    let end = (i..lines.len()).find(|&j| lines[j].contains(END_MARKER));
-    Some((name, end.unwrap_or(lines.len() - 1)))
+        .unwrap_or(REGION_DEFAULT_NAME);
+    let end = (i..lines.len()).find(|&j| lines[j].contains(REGION_END_MARKER));
+    Some((name.to_string(), end.unwrap_or(lines.len() - 1)))
 }
 
 /// The first ATX heading line in `text` (leading `#`), trimmed, for a §4.4 free-prose
@@ -1279,10 +1161,8 @@ fn freshness(ctx: &Context) -> Result<Vec<Finding>> {
 /// unwatermarked, exempt, or (parser-less) below/without a churn threshold.
 fn freshness_claim(ctx: &Context, node: &Node, claim: &Claim) -> Result<Option<Finding>> {
     // Unresolved/ambiguous anchors are §4.1's finding, never freshness's.
-    if claim.resolution != Resolution::Resolved {
-        return Ok(None);
-    }
-    let Some(resolved) = &claim.resolved else {
+    let resolved = claim.resolved.as_ref();
+    let Some(resolved) = resolved.filter(|_| claim.resolution == Resolution::Resolved) else {
         return Ok(None);
     };
     // The watermark lives only in the committed lock on the check path (§4.5).
@@ -1298,14 +1178,10 @@ fn freshness_claim(ctx: &Context, node: &Node, claim: &Claim) -> Result<Option<F
             if claim.enforced_by.is_some() {
                 return Ok(None);
             }
-            let Some(current) =
-                anchors::region_digest_for_claim(ctx.root, &claim.anchor, resolved)?
-            else {
+            let current = anchors::region_digest_for_claim(ctx.root, &claim.anchor, resolved)?;
+            let Some(current) = current.filter(|c| &c.digest != old_digest) else {
                 return Ok(None);
             };
-            if &current.digest == old_digest {
-                return Ok(None);
-            }
             let staling = staling_commit(ctx.root, file, &claim.anchor, &verified.sha, old_digest)?;
             Ok(Some(digest_drift_finding(
                 ctx.graph, node, claim, verified, old_digest, &current, staling,
@@ -1506,8 +1382,8 @@ impl Staling {
 /// digest at each (`git show <sha>:<file>` → parse → digest), and return the FIRST
 /// (oldest) whose digest diverges from `verified_digest`. When no committed version
 /// diverges the drift is a working-tree edit — but ONLY when the tree actually differs
-/// from HEAD; a `verified_sha` absent from history (shallow clone) yields
-/// `HistoryUnavailable`, never a false "uncommitted" attribution (F12).
+/// from HEAD; a `verified_sha` absent from history (shallow clone) fails the `rev-list`
+/// and yields `HistoryUnavailable`, never a false "uncommitted" attribution (F12).
 fn staling_commit(
     root: &Path,
     file: &str,
@@ -1515,24 +1391,18 @@ fn staling_commit(
     verified_sha: &str,
     verified_digest: &str,
 ) -> Result<Staling> {
-    if !sha_reachable(root, verified_sha)? {
-        return Ok(Staling::HistoryUnavailable);
-    }
     let Some(commits) = commits_touching(root, file, verified_sha)? else {
         return Ok(Staling::HistoryUnavailable);
     };
     // `git rev-list` is newest-first; the staling commit is the OLDEST divergence.
     for sha in commits.iter().rev() {
-        let diverges = match git_show(root, sha, file)? {
-            // File absent at this commit → the region did not exist → divergent.
-            None => true,
-            Some(contents) => {
-                anchors::region_digest_of_source(anchor, file, &contents)
-                    .map(|region| region.digest)
-                    .as_deref()
-                    != Some(verified_digest)
-            }
-        };
+        // File absent at this commit → the region did not exist → divergent.
+        let diverges = git_show(root, sha, file)?.is_none_or(|contents| {
+            anchors::region_digest_of_source(anchor, file, &contents)
+                .map(|region| region.digest)
+                .as_deref()
+                != Some(verified_digest)
+        });
         if diverges {
             return Ok(Staling::Commit(commit_meta(root, sha)?));
         }
@@ -1546,101 +1416,65 @@ fn staling_commit(
     }
 }
 
+/// Run `git <args>` from the repo root (§4.5). A spawn failure is a §5.3 internal error.
+fn git(root: &Path, args: &[&str]) -> Result<Output> {
+    let output = Command::new("git").args(args).current_dir(root).output();
+    output.map_err(|e| SteleError::internal(format!("run `git {}`: {e}", args.join(" "))))
+}
+
 /// Whether the watermark commit `sha` is present in this repo's object database (§4.5).
 /// A shallow / `fetch-depth: 1` clone prunes ancestor commits, so a watermark from before
-/// the shallow boundary is absent — freshness must then report "history unavailable"
-/// honestly, never silently pass a churn claim (F11) nor misattribute a digest drift to
-/// an uncommitted edit (F12). A spawn failure is a §5.3 internal error.
+/// the shallow boundary is absent — the churn paths must then report "history
+/// unavailable" honestly, never silently pass a churn claim (F11).
 fn sha_reachable(root: &Path, sha: &str) -> Result<bool> {
-    let output = Command::new("git")
-        .args(["cat-file", "-e", sha])
-        .current_dir(root)
-        .output()
-        .map_err(|e| SteleError::internal(format!("run `git cat-file -e`: {e}")))?;
-    Ok(output.status.success())
+    Ok(git(root, &["cat-file", "-e", sha])?.status.success())
 }
 
 /// Whether `file`'s working-tree bytes differ from HEAD (§4.5), via `git diff --quiet
 /// HEAD -- <file>`: exit 1 = differ, exit 0 = identical. Any other status (e.g. unborn
 /// HEAD) is treated as "no diff" so the caller does not assert a local edit it cannot
-/// prove. A spawn failure is a §5.3 internal error.
+/// prove.
 fn working_tree_differs(root: &Path, file: &str) -> Result<bool> {
-    let output = Command::new("git")
-        .args(["diff", "--quiet", "HEAD", "--", file])
-        .current_dir(root)
-        .output()
-        .map_err(|e| SteleError::internal(format!("run `git diff --quiet`: {e}")))?;
+    let output = git(root, &["diff", "--quiet", "HEAD", "--", file])?;
     Ok(output.status.code() == Some(1))
 }
 
 /// The commits touching `file` in `(verified_sha, HEAD]`, newest first (§4.5); `None`
-/// when `verified_sha` is unreachable. Callers now pre-check reachability via
-/// [`sha_reachable`] and map both this `None` and an unreachable sha to
-/// `Staling::HistoryUnavailable`, so an unreachable watermark is reported honestly rather
-/// than silently swallowed.
+/// when `rev-list` fails — `verified_sha` unreachable (a shallow clone) or not a commit —
+/// which the caller reports as `Staling::HistoryUnavailable`, never silently swallowed.
 fn commits_touching(root: &Path, file: &str, verified_sha: &str) -> Result<Option<Vec<String>>> {
-    let output = Command::new("git")
-        .args(["rev-list", &format!("{verified_sha}..HEAD"), "--", file])
-        .current_dir(root)
-        .output()
-        .map_err(|e| SteleError::internal(format!("run `git rev-list`: {e}")))?;
-    if !output.status.success() {
-        return Ok(None);
-    }
-    Ok(Some(
-        String::from_utf8_lossy(&output.stdout)
-            .split_whitespace()
-            .map(str::to_string)
-            .collect(),
-    ))
+    let range = format!("{verified_sha}..HEAD");
+    let output = git(root, &["rev-list", &range, "--", file])?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(output
+        .status
+        .success()
+        .then(|| stdout.split_whitespace().map(str::to_string).collect()))
 }
 
 /// The count of commits touching `file` since `verified_sha` (§4.5 churn fallback),
-/// via `git rev-list --count`; an unreachable `verified_sha` counts 0.
+/// via `git rev-list --count`; a failed `rev-list` counts 0. Callers gate on
+/// [`sha_reachable`] first, so an unreachable watermark never reads as zero churn.
 fn churn_count(root: &Path, file: &str, verified_sha: &str) -> Result<usize> {
-    let output = Command::new("git")
-        .args([
-            "rev-list",
-            "--count",
-            &format!("{verified_sha}..HEAD"),
-            "--",
-            file,
-        ])
-        .current_dir(root)
-        .output()
-        .map_err(|e| SteleError::internal(format!("run `git rev-list --count`: {e}")))?;
-    if !output.status.success() {
-        return Ok(0);
-    }
-    Ok(String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse()
-        .unwrap_or(0))
+    let range = format!("{verified_sha}..HEAD");
+    let output = git(root, &["rev-list", "--count", &range, "--", file])?;
+    let count = String::from_utf8_lossy(&output.stdout).trim().parse().ok();
+    Ok(count.filter(|_| output.status.success()).unwrap_or(0))
 }
 
 /// The blob of `file` at commit `sha` (`git show <sha>:<file>`), or `None` when the
 /// path did not exist at that commit.
 fn git_show(root: &Path, sha: &str, file: &str) -> Result<Option<String>> {
-    let output = Command::new("git")
-        .args(["show", &format!("{sha}:{file}")])
-        .current_dir(root)
-        .output()
-        .map_err(|e| SteleError::internal(format!("run `git show`: {e}")))?;
-    if !output.status.success() {
-        return Ok(None);
-    }
-    Ok(Some(String::from_utf8_lossy(&output.stdout).into_owned()))
+    let output = git(root, &["show", &format!("{sha}:{file}")])?;
+    let contents = String::from_utf8_lossy(&output.stdout).into_owned();
+    Ok(output.status.success().then_some(contents))
 }
 
 /// A commit's short sha + subject line (`git show -s --format=%s`) for the §4.5 render.
 fn commit_meta(root: &Path, sha: &str) -> Result<StalingCommit> {
-    let output = Command::new("git")
-        .args(["show", "-s", "--format=%s", sha])
-        .current_dir(root)
-        .output()
-        .map_err(|e| SteleError::internal(format!("run `git show -s`: {e}")))?;
+    let output = git(root, &["show", "-s", "--format=%s", sha])?;
     Ok(StalingCommit {
-        short: sha.get(..SHORT_SHA_LEN).unwrap_or(sha).to_string(),
+        short: short_sha(sha).to_string(),
         subject: String::from_utf8_lossy(&output.stdout).trim().to_string(),
     })
 }
@@ -1966,26 +1800,21 @@ fn execute_command(root: &Path, command: &str) -> Result<Option<CommandFailure>>
 /// trimmed and capped to the trailing [`CAPTURED_OUTPUT_CAP`] bytes so a noisy command
 /// cannot bloat the finding.
 fn fold_captured(stdout: &[u8], stderr: &[u8]) -> String {
-    let mut out = String::new();
-    for stream in [stdout, stderr] {
-        let text = String::from_utf8_lossy(stream);
-        let text = text.trim();
-        if !text.is_empty() {
-            if !out.is_empty() {
-                out.push('\n');
-            }
-            out.push_str(text);
-        }
+    let streams = [stdout, stderr].map(String::from_utf8_lossy);
+    let texts: Vec<&str> = streams
+        .iter()
+        .map(|s| s.trim())
+        .filter(|t| !t.is_empty())
+        .collect();
+    let out = texts.join("\n");
+    if out.len() <= CAPTURED_OUTPUT_CAP {
+        return out;
     }
-    if out.len() > CAPTURED_OUTPUT_CAP {
-        let start = out.len() - CAPTURED_OUTPUT_CAP;
-        // Snap to a char boundary so the truncation never splits a UTF-8 sequence.
-        let start = (start..out.len())
-            .find(|&i| out.is_char_boundary(i))
-            .unwrap_or(out.len());
-        out = format!("…{}", &out[start..]);
-    }
-    out
+    // Snap up to a char boundary so the truncation never splits a UTF-8 sequence.
+    format!(
+        "…{}",
+        &out[out.ceil_char_boundary(out.len() - CAPTURED_OUTPUT_CAP)..]
+    )
 }
 
 /// Runner manifests detected at the repo root (§4.6). `Some(set)` means the runner is
@@ -2128,30 +1957,24 @@ fn resolves_as_executable(root: &Path, path_env: Option<&std::ffi::OsStr>, first
 /// Whether `name` is an executable file in some `PATH` directory (§4.6). An unset PATH
 /// resolves nothing.
 fn on_path(path_env: Option<&std::ffi::OsStr>, name: &str) -> bool {
-    let Some(path_env) = path_env else {
-        return false;
-    };
-    std::env::split_paths(path_env).any(|dir| is_executable_file(&dir.join(name)))
+    path_env
+        .into_iter()
+        .flat_map(std::env::split_paths)
+        .any(|dir| is_executable_file(&dir.join(name)))
 }
 
 /// Whether `path` is a regular file with an executable bit set. On non-Unix the bit is
 /// unobservable, so any existing regular file counts (§4.6).
 fn is_executable_file(path: &Path) -> bool {
-    let Ok(meta) = std::fs::metadata(path) else {
-        return false;
-    };
-    if !meta.is_file() {
-        return false;
-    }
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        meta.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).is_ok_and(|meta| {
+        #[cfg(unix)]
+        let executable = meta.permissions().mode() & 0o111 != 0;
+        #[cfg(not(unix))]
+        let executable = true;
+        meta.is_file() && executable
+    })
 }
 
 // ─── command tokenizer (§4.6) ──────────────────────────────────────────────────
@@ -2312,20 +2135,16 @@ fn is_env_assignment(token: &str) -> bool {
 /// head of a list entry; deleting the `"ecto.reset":` line un-resolves `mix ecto.reset`
 /// (EXAMPLE 8.6b).
 fn parse_mix_aliases(source: &str) -> BTreeSet<String> {
-    let mut aliases = BTreeSet::new();
-    let Some(start) = source.find("aliases do") else {
-        return aliases;
-    };
-    for line in source[start..].lines().skip(1) {
-        let trimmed = line.trim();
-        if trimmed == "end" {
-            break;
-        }
-        if let Some(key) = mix_alias_key(trimmed) {
-            aliases.insert(key);
-        }
-    }
-    aliases
+    let block = source
+        .find("aliases do")
+        .map_or("", |start| &source[start..]);
+    block
+        .lines()
+        .skip(1)
+        .map(str::trim)
+        .take_while(|line| *line != "end")
+        .filter_map(mix_alias_key)
+        .collect()
 }
 
 /// The alias key a `mix.exs` line declares, if any (§4.6): the `<key>` of a leading
@@ -2366,52 +2185,34 @@ fn parse_npm_scripts(source: &str) -> BTreeSet<String> {
 /// (§4.6). Called only when `Cargo.toml` exists; a missing/malformed config yields the
 /// empty set (builtins still resolve via [`CARGO_BUILTINS`]).
 fn parse_cargo_aliases(root: &Path) -> BTreeSet<String> {
-    for name in [".cargo/config.toml", ".cargo/config"] {
-        let Some(text) = read_manifest(root, name) else {
-            continue;
-        };
-        return toml::from_str::<toml::Value>(&text)
-            .ok()
-            .and_then(|value| {
-                value
-                    .get("alias")
-                    .and_then(toml::Value::as_table)
-                    .map(|table| table.keys().cloned().collect())
-            })
-            .unwrap_or_default();
-    }
-    BTreeSet::new()
+    [".cargo/config.toml", ".cargo/config"]
+        .into_iter()
+        .find_map(|name| read_manifest(root, name))
+        .and_then(|text| toml::from_str::<toml::Value>(&text).ok())
+        .and_then(|value| {
+            let table = value.get("alias")?.as_table()?;
+            Some(table.keys().cloned().collect())
+        })
+        .unwrap_or_default()
 }
 
-/// Extract recipe names from a justfile (§4.6): an unindented, non-comment line whose
-/// name (up to its `:`) is a recipe head. `name := value` assignments and `set …`
-/// directives are skipped; recipe parameters after the name are ignored.
+/// Extract recipe names from a justfile (§4.6): an unindented line whose name (up to its
+/// first `:`) is a recipe head. `name := value` assignments are skipped; recipe
+/// parameters after the name are ignored. Blank lines, `set …` directives and `#`
+/// comments need no rule: they carry no `:`, or a head that is not a recipe name.
 fn parse_just_recipes(source: &str) -> BTreeSet<String> {
-    let mut recipes = BTreeSet::new();
-    for line in source.lines() {
-        if line.starts_with([' ', '\t']) {
-            continue;
-        }
-        let line = line.trim_end();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let Some(colon) = line.find(':') else {
-            continue;
-        };
-        if line[colon..].starts_with(":=") {
-            continue;
-        }
-        let name = line[..colon].split_whitespace().next().unwrap_or("");
-        if !name.is_empty()
-            && name
-                .chars()
+    source
+        .lines()
+        .filter(|line| !line.starts_with([' ', '\t']))
+        .filter_map(|line| line.split_once(':'))
+        .filter(|(_, rest)| !rest.starts_with('='))
+        .filter_map(|(head, _)| head.split_whitespace().next())
+        .filter(|name| {
+            name.chars()
                 .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
-        {
-            recipes.insert(name.to_string());
-        }
-    }
-    recipes
+        })
+        .map(str::to_string)
+        .collect()
 }
 
 #[cfg(test)]
@@ -2479,5 +2280,26 @@ mod tests {
                 .as_deref()
                 .is_some_and(|f| f.contains("fetch-depth: 0"))
         );
+    }
+
+    /// §4.4 render edges: a heading-less prose span is `(untitled)`; a nameless region is
+    /// `router`; a line the §3.1 scanner rejects as a fence (indent 4, a 2-run, a backtick
+    /// in a backtick fence's info) is prose, never the authored block; a non-whole KiB cap
+    /// keeps one decimal.
+    #[test]
+    fn budget_segments_and_cap_render() {
+        let content = "plain\n    ```stele\n``stele\n```stele `\n<!-- @stele -->\n<!-- @end -->\n";
+        let names: Vec<String> = segments(content)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "unmanaged prose block (untitled)",
+                "generated router region"
+            ]
+        );
+        assert_eq!(fmt_kib_cap(1536), "1.5 KiB");
     }
 }

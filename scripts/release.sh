@@ -4,9 +4,14 @@
 # can be built and smoke-tested (tests/install_smoke.sh) without CI or network.
 #
 # Under $DIST/<version>/:
-#   stele-<target>.tar.gz         the single stripped `stele` binary (release build)
+#   stele-<target>.tar.gz         the single `stele` binary
 #   stele-<target>.tar.gz.sha256  bare-hash checksum sidecar scripts/install.sh verifies
 # and $DIST/latest names the version.
+#
+# The binary is a stripped release build, unless STELE_BIN names a prebuilt one to
+# package as-is: tests/install.rs passes cargo test's debug binary through
+# tests/install_smoke.sh, so the suite never pays for a release build. Relative DIST
+# and STELE_BIN resolve from the repo root.
 #
 # There is no ERTS bundle and no bootstrap CLI (grove's model): stele ships one static
 # executable, so the artifact is exactly that one binary in a tarball.
@@ -36,15 +41,13 @@ TARGET="${arch}-${os}"
 # also reports. CI stamps it from the tag before calling this script (release.yaml).
 VERSION=$(grep -m1 '^version = ' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
 
-# STELE_BIN packages a prebuilt binary instead: tests/install_smoke.sh passes cargo
-# test's own, so the suite never pays for a release build.
 if [ -z "${STELE_BIN:-}" ]; then
   echo "release: building stele ($VERSION, $TARGET)"
   cargo build --release --bin stele
 fi
 
-# Stage the one binary and tar it at the archive root (extract → ./stele). The
-# release profile strips symbols (Cargo.toml [profile.release]).
+# Stage the one binary and tar it at the archive root (extract → ./stele). A release
+# build is stripped (Cargo.toml [profile.release]).
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 cp "${STELE_BIN:-target/release/stele}" "$STAGE/stele"

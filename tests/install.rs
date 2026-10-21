@@ -10,7 +10,10 @@ use std::process::Command;
 #[test]
 fn install_scripts_round_trip() {
     let output = Command::new("sh")
-        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/install_smoke.sh"))
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/install_smoke.sh"
+        ))
         .env("STELE_BIN", env!("CARGO_BIN_EXE_stele"))
         .output()
         .expect("spawn install_smoke.sh");

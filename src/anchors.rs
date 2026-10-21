@@ -522,7 +522,10 @@ pub fn region_digest_for_claim(
     anchor: &str,
     resolved: &str,
 ) -> Result<Option<RegionDigest>> {
-    let (file, line) = split_resolved(resolved);
+    // `resolved` is build's `file:line`; a colon-free one (never produced) degrades to line 0.
+    let (file, line) = resolved
+        .rsplit_once(':')
+        .map_or((resolved, 0), |(file, n)| (file, n.parse().unwrap_or(0)));
     let path = Path::new(file);
     let Some(lang) = extension(path).as_deref().and_then(lang_for_extension) else {
         return Ok(None);
@@ -613,23 +616,16 @@ fn landmark_line(src: &[u8], slug: &str) -> Option<usize> {
 /// `def`/`defmodule` renders `name/arity` or the module alias; every other language's
 /// definition renders its `name` field; a whole-file fallback renders the base name.
 fn region_name(node: Node, src: &[u8], lang: Lang, file: &str) -> String {
-    match lang {
-        Lang::Elixir if is_definition_node(lang, node, src) => {
-            if let Some(name) = elixir_def_name(node, src) {
-                return name;
-            }
-        }
-        _ if is_definition_kind(lang, node.kind()) => {
-            if let Some(name) = node
+    is_definition_node(lang, node, src)
+        .then(|| match lang {
+            Lang::Elixir => elixir_def_name(node, src),
+            _ => node
                 .child_by_field_name(NAME_FIELD)
                 .and_then(|n| n.utf8_text(src).ok())
-            {
-                return name.to_string();
-            }
-        }
-        _ => {}
-    }
-    file.rsplit('/').next().unwrap_or(file).to_string()
+                .map(str::to_string),
+        })
+        .flatten()
+        .unwrap_or_else(|| file.rsplit('/').next().unwrap_or(file).to_string())
 }
 
 /// The `name/arity` of an Elixir function def, or the alias of a `defmodule` (§4.5).
@@ -655,16 +651,6 @@ fn elixir_def_name(call: Node, src: &[u8]) -> Option<String> {
         Some(format!("{name}/{arity}"))
     } else {
         Some(format!("{}/0", head.utf8_text(src).ok()?))
-    }
-}
-
-/// Split a claim's `resolved` `file:line` into its parts. The `file:line` was
-/// produced by build from repo-relative paths, so the tail past the last `:` is the
-/// 1-based line; a colon-free string (never produced today) degrades to line 0.
-fn split_resolved(resolved: &str) -> (&str, usize) {
-    match resolved.rsplit_once(':') {
-        Some((file, num)) => (file, num.parse().unwrap_or(0)),
-        None => (resolved, 0),
     }
 }
 
@@ -1032,6 +1018,20 @@ mod tests {
             resolve_symbol(dir.path(), "m.py", "baz").unwrap(),
             SymbolResolution::Unresolved,
         );
+        // Every other grammar; Elixir defines by macro call, a parser-less file not at all.
+        for (file, src, want) in [
+            ("m.js", "function bar() {}\n", SymbolResolution::Resolved(1)),
+            ("m.tsx", "class bar {}\n", SymbolResolution::Resolved(1)),
+            ("m.ex", "def bar, do: 1\n", SymbolResolution::Unresolved),
+            ("m.txt", "bar\n", SymbolResolution::Unresolved),
+        ] {
+            std::fs::write(dir.path().join(file), src).unwrap();
+            assert_eq!(
+                resolve_symbol(dir.path(), file, "bar").unwrap(),
+                want,
+                "{file}"
+            );
+        }
     }
 
     #[test]
@@ -1040,6 +1040,12 @@ mod tests {
         assert_eq!(
             resolve_symbol(dir.path(), "gone.rs", "whatever").unwrap(),
             SymbolResolution::Unresolved,
+        );
+        // A path the OS refuses to read is a §5.3 internal error, never a silent skip.
+        let long = format!("{}.rs", "a".repeat(300));
+        assert_eq!(
+            resolve_symbol(dir.path(), &long, "x").unwrap_err().exit,
+            crate::model::ExitCode::Internal
         );
     }
 
@@ -1056,7 +1062,8 @@ mod tests {
              body\n\
              ## C10: some other claim entirely\n\
              ## C11: yet another\n\
-             ## Decision log\n",
+             ## Decision log\n\
+             #c99 is no heading\n",
         )
         .unwrap();
     }

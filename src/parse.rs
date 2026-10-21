@@ -354,28 +354,22 @@ pub fn find_region(rel_path: &Path, contents: &str) -> Result<Option<Region>> {
     // boundary — otherwise `emit` would overwrite authored bytes between them (§3.1).
     let mut fence: Option<(char, usize)> = None;
     let mut offset = 0;
-    for (index, raw_line) in contents.split_inclusive('\n').enumerate() {
+    // A line keeps its `\n`/`\r\n`: every test below trims trailing whitespace anyway.
+    for (index, raw) in contents.split_inclusive('\n').enumerate() {
         let line_no = index + 1;
         let line_start = offset;
-        offset += raw_line.len();
-        let mut stripped = raw_line;
-        if let Some(s) = stripped.strip_suffix('\n') {
-            stripped = s;
-        }
-        if let Some(s) = stripped.strip_suffix('\r') {
-            stripped = s;
-        }
+        offset += raw.len();
         if let Some((fence_char, open_len)) = fence {
-            if is_close_fence(stripped, fence_char, open_len) {
+            if is_close_fence(raw, fence_char, open_len) {
                 fence = None;
             }
             continue;
         }
-        if let Some((fence_char, open_len, _)) = open_fence(stripped) {
+        if let Some((fence_char, open_len, _)) = open_fence(raw) {
             fence = Some((fence_char, open_len));
             continue;
         }
-        let line = stripped.trim();
+        let line = raw.trim();
         if let Some((name, consumed)) = parse_begin_marker(line) {
             if open.is_some() || region.is_some() {
                 return Err(SteleError::input(
@@ -388,7 +382,7 @@ pub fn find_region(rel_path: &Path, contents: &str) -> Result<Option<Region>> {
                 // The one-line empty form (§3.1/§7): begin immediately followed by end on
                 // one line. The region owns no bytes — content_start == content_end sits
                 // just past the begin marker, so `emit` reproduces the whole line verbatim.
-                let lead = stripped.len() - stripped.trim_start().len();
+                let lead = raw.len() - raw.trim_start().len();
                 let after_begin = line_start + lead + consumed;
                 region = Some(Region {
                     content_end: after_begin,
@@ -654,12 +648,6 @@ mod tests {
     }
 
     #[test]
-    fn decided_by_with_a_non_numeric_payload_is_exit_2() {
-        let err = parse("kind: component\nedges:\n  decided_by: [§ seven]\n").unwrap_err();
-        assert_eq!(err.exit, ExitCode::Input);
-    }
-
-    #[test]
     fn edge_target_with_parent_segment_is_exit_2_naming_the_field() {
         let err = parse("kind: component\nedges:\n  depends: [../escape]\n").unwrap_err();
         assert_eq!(err.exit, ExitCode::Input);
@@ -686,10 +674,10 @@ mod tests {
 
     #[test]
     fn bare_begin_marker_defaults_to_the_router_region() {
-        assert_eq!(
-            region_name("# n\n\n<!-- @stele -->\nbody\n<!-- @end -->\n").as_deref(),
-            Some("router")
-        );
+        for eol in ["\n", "\r\n"] {
+            let contents = format!("# n{eol}{eol}<!-- @stele -->{eol}body{eol}<!-- @end -->{eol}");
+            assert_eq!(region_name(&contents).as_deref(), Some("router"), "{eol:?}");
+        }
     }
 
     #[test]
@@ -717,6 +705,16 @@ mod tests {
     fn an_extended_at_stele_word_is_not_a_marker() {
         // `@stele` must be followed by whitespace, so `@steleish` opens no region.
         assert_eq!(region_name("<!-- @steleish -->\nbody\n"), None);
+        // Neither a 4-space indent nor a backtick in the info string opens a fence, so
+        // the markers after either are real.
+        for lookalike in ["    ```", "```x`"] {
+            let contents = format!("{lookalike}\n<!-- @stele -->\n<!-- @end -->\n");
+            assert_eq!(
+                region_name(&contents).as_deref(),
+                Some("router"),
+                "{lookalike}"
+            );
+        }
     }
 
     #[test]
@@ -730,12 +728,54 @@ mod tests {
     }
 
     #[test]
-    fn malformed_derived_slug_is_exit_2() {
-        let err = parse(
-            "kind: component\n\
-             invariants:\n  - claim: a\n    anchor: ※ Bad_Slug\n",
+    fn every_block_gate_is_exit_2_at_its_line() {
+        let long = format!("kind: component\npurpose: {}\n", "x".repeat(201));
+        for (body, line, needle) in [
+            ("kind: [\n", 4, "kind"),
+            (long.as_str(), 3, "ceiling"),
+            (
+                "kind: component\ninvariants:\n  - claim: a\n    anchor: ※ Bad_Slug\n",
+                3,
+                "slug",
+            ),
+            (
+                "kind: component\ninvariants:\n  - claim: ' '\n    anchor: x#y\n",
+                3,
+                "text",
+            ),
+            (
+                "kind: component\nhazards:\n  - claim: a\n    anchor: ' '\n",
+                3,
+                "hearsay",
+            ),
+            (
+                "kind: component\nedges:\n  allow:\n    - edge: ' '\n      reason: r\n",
+                3,
+                "edge",
+            ),
+            (
+                "kind: component\nedges:\n  allow:\n    - edge: x\n      reason: ' '\n",
+                3,
+                "reason",
+            ),
+            (
+                "kind: component\nedges:\n  decided_by: [§ seven]\n",
+                3,
+                "§ <NNNN>",
+            ),
+        ] {
+            let err = parse(body).unwrap_err();
+            assert_eq!(err.exit, ExitCode::Input, "{body}");
+            assert_eq!(err.line, Some(line), "{body}: {err}");
+            assert!(err.message.contains(needle), "{body}: {err}");
+        }
+        // A later stele block is not the authored one: exit 2 naming the earlier fence.
+        let err = parse_agents_file(
+            Path::new("AGENTS.md"),
+            "```sh\nx\n```\n```stele\nkind: system\n```\n",
         )
         .unwrap_err();
-        assert_eq!(err.exit, ExitCode::Input);
+        assert_eq!(err.line, Some(4));
+        assert!(err.message.contains("line 1"), "{err}");
     }
 }

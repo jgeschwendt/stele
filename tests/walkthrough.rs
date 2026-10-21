@@ -16,49 +16,56 @@ const ACME_AGENTS: [&str; 6] = [
     "packages/shared/AGENTS.md",
 ];
 
-// (a) On a bare two-directory tree with only prose AGENTS.md files, the full adoption path is
-// green: a proposed node's prose keeps its own region, or gains one after an unterminated last
-// line; a nested blockless file is no proposal and stays byte-identical.
+// (a) On a bare two-directory tree — with no AGENTS.md at all, then with only prose AGENTS.md
+// files — the full adoption path is green: a proposed node's prose keeps its own region, or
+// gains one after an unterminated last line; a nested blockless file is no proposal and stays
+// byte-identical.
 #[test]
 fn walkthrough_bare_tree_init_build_check() {
-    let fixture = Fixture::bare();
-    let region = "<!-- @stele --><!-- @end -->\n";
-    let lib_notes = "# lib notes\n";
-    fixture.write("apps/AGENTS.md", &format!("Apps prose.\n\n{region}"));
-    fixture.write("apps/web/lib/AGENTS.md", lib_notes);
-    fixture.write("packages/AGENTS.md", "# packages\nshared code");
-    fixture.write(
-        "apps/web/lib/app.ex",
-        "defmodule Acme.App do\n  def hello, do: :world\nend\n",
-    );
-    fixture.write(
-        "apps/web/lib/router.ex",
-        "defmodule Acme.Router do\n  def route(_conn), do: :ok\nend\n",
-    );
-    fixture.write(
-        "packages/shared/src/index.ts",
-        "export const version = 1;\n",
-    );
-    fixture.commit("materialize a bare two-directory tree");
+    for prose in [false, true] {
+        let fixture = Fixture::bare();
+        let region = "<!-- @stele --><!-- @end -->\n";
+        let lib_notes = "# lib notes\n";
+        if prose {
+            fixture.write("apps/AGENTS.md", &format!("Apps prose.\n\n{region}"));
+            fixture.write("apps/web/lib/AGENTS.md", lib_notes);
+            fixture.write("packages/AGENTS.md", "# packages\nshared code");
+        }
+        fixture.write(
+            "apps/web/lib/app.ex",
+            "defmodule Acme.App do\n  def hello, do: :world\nend\n",
+        );
+        fixture.write(
+            "apps/web/lib/router.ex",
+            "defmodule Acme.Router do\n  def route(_conn), do: :ok\nend\n",
+        );
+        fixture.write(
+            "packages/shared/src/index.ts",
+            "export const version = 1;\n",
+        );
+        fixture.commit("materialize a bare two-directory tree");
 
-    assert_eq!(fixture.run(&["init"]).code, 0);
-    let apps = fixture.read("apps/AGENTS.md");
-    assert!(
-        apps.starts_with("```stele\nkind: container\n")
-            && apps.ends_with(&format!("```\n\nApps prose.\n\n{region}")),
-        "{apps}"
-    );
-    let packages = fixture.read("packages/AGENTS.md");
-    assert!(
-        packages.starts_with("# packages\n\n```stele\nkind: container\n")
-            && packages.ends_with(&format!("```\n\nshared code\n\n{region}")),
-        "{packages}"
-    );
-    assert_eq!(fixture.read("apps/web/lib/AGENTS.md"), lib_notes);
-    assert_eq!(fixture.run(&["build"]).code, 0);
-    assert_eq!(fixture.run(&["check", "--freeze"]).code, 0);
-    let check = fixture.run(&["check"]);
-    assert_eq!(check.code, 0, "{}", check.combined());
+        assert_eq!(fixture.run(&["init"]).code, 0);
+        if prose {
+            let apps = fixture.read("apps/AGENTS.md");
+            assert!(
+                apps.starts_with("```stele\nkind: container\n")
+                    && apps.ends_with(&format!("```\n\nApps prose.\n\n{region}")),
+                "{apps}"
+            );
+            let packages = fixture.read("packages/AGENTS.md");
+            assert!(
+                packages.starts_with("# packages\n\n```stele\nkind: container\n")
+                    && packages.ends_with(&format!("```\n\nshared code\n\n{region}")),
+                "{packages}"
+            );
+            assert_eq!(fixture.read("apps/web/lib/AGENTS.md"), lib_notes);
+        }
+        assert_eq!(fixture.run(&["build"]).code, 0);
+        assert_eq!(fixture.run(&["check", "--freeze"]).code, 0);
+        let check = fixture.run(&["check"]);
+        assert_eq!(check.code, 0, "{}", check.combined());
+    }
 }
 
 // (b) On acme, init leaves every existing AGENTS.md byte-identical, then build → check.

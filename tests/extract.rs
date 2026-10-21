@@ -175,7 +175,8 @@ fn python_records_dotted_module_drops_same_node_ignores_stdlib() {
     );
     fixture.write("web/helper.py", "helper = 1\n");
     fixture.write("web/gone.py", "");
-    fixture.write("top.py", "import shared.money\n");
+    // Outside every territory: misattributed to shared, top.py would make shared import web.
+    fixture.write("top.py", "import web.helper\n");
     fixture.commit("python fixture");
     fixture.delete_file("web/gone.py");
 

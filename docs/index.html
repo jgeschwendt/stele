@@ -283,6 +283,7 @@ stele blame payments/idempotent-charges     <span class="snippet-note"># provena
     <li><code class="code">--run-commands</code> has no timeout, so a background child holding the pipe hangs <code class="code">check</code>. This needs a SPEC knob first.</li>
     <li>Sparse checkouts: index-tracked paths outside the cone (skip-worktree) read as absent — anchors there go unresolved and a lock outside the cone reads as missing. Needs a call: read those paths from the index, or refuse a sparse tree; the owner's thread is <code class="code">proposal:jgeschwendt/stele:sparse-checkout</code>.</li>
     <li><code class="code">serve</code> silently drops undeclared or ill-typed tool arguments, but MCP requires servers to validate inputs. Needs a §5.2 sentence first: <code class="code">proposal:jgeschwendt/stele:serve-input-validation</code>. §5.2's list of unexposed mutating verbs also omits <code class="code">migrate</code>.</li>
+    <li>Two edge cases the spec leaves open: <code class="code">anchor: refund-cap</code> (no <code class="code">※</code>, no <code class="code">#</code>) builds clean, then <code class="code">check</code> reports <code class="code">0 definitions of ""</code>. A tracked AGENTS.md deleted without staging is exit 3, but a deleted code file is skipped.</li>
   </ul>
 </section>
 

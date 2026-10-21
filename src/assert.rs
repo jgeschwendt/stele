@@ -1382,8 +1382,8 @@ impl Staling {
 /// digest at each (`git show <sha>:<file>` → parse → digest), and return the FIRST
 /// (oldest) whose digest diverges from `verified_digest`. When no committed version
 /// diverges the drift is a working-tree edit — but ONLY when the tree actually differs
-/// from HEAD; a `verified_sha` absent from history (shallow clone) fails the `rev-list`
-/// and yields `HistoryUnavailable`, never a false "uncommitted" attribution (F12).
+/// from HEAD; a `verified_sha` absent from history (shallow clone) yields
+/// `HistoryUnavailable`, never a false "uncommitted" attribution (F12).
 fn staling_commit(
     root: &Path,
     file: &str,
@@ -1416,18 +1416,23 @@ fn staling_commit(
     }
 }
 
-/// Run `git <args>` from the repo root (§4.5). A spawn failure is a §5.3 internal error.
-fn git(root: &Path, args: &[&str]) -> Result<Output> {
-    let output = Command::new("git").args(args).current_dir(root).output();
-    output.map_err(|e| SteleError::internal(format!("run `git {}`: {e}", args.join(" "))))
+/// Run `git <cmd> <args>` from the repo root (§4.5). A spawn failure is a §5.3 internal
+/// error naming `git <cmd>`.
+fn git(root: &Path, cmd: &str, args: &[&str]) -> Result<Output> {
+    let output = Command::new("git")
+        .args(cmd.split(' ').chain(args.iter().copied()))
+        .current_dir(root)
+        .output();
+    output.map_err(|e| SteleError::internal(format!("run `git {cmd}`: {e}")))
 }
 
 /// Whether the watermark commit `sha` is present in this repo's object database (§4.5).
 /// A shallow / `fetch-depth: 1` clone prunes ancestor commits, so a watermark from before
-/// the shallow boundary is absent — the churn paths must then report "history
-/// unavailable" honestly, never silently pass a churn claim (F11).
+/// the shallow boundary is absent — freshness must then report "history unavailable"
+/// honestly, never silently pass a churn claim (F11) nor misattribute a digest drift to
+/// an uncommitted edit (F12).
 fn sha_reachable(root: &Path, sha: &str) -> Result<bool> {
-    Ok(git(root, &["cat-file", "-e", sha])?.status.success())
+    Ok(git(root, "cat-file -e", &[sha])?.status.success())
 }
 
 /// Whether `file`'s working-tree bytes differ from HEAD (§4.5), via `git diff --quiet
@@ -1435,16 +1440,20 @@ fn sha_reachable(root: &Path, sha: &str) -> Result<bool> {
 /// HEAD) is treated as "no diff" so the caller does not assert a local edit it cannot
 /// prove.
 fn working_tree_differs(root: &Path, file: &str) -> Result<bool> {
-    let output = git(root, &["diff", "--quiet", "HEAD", "--", file])?;
+    let output = git(root, "diff --quiet", &["HEAD", "--", file])?;
     Ok(output.status.code() == Some(1))
 }
 
 /// The commits touching `file` in `(verified_sha, HEAD]`, newest first (§4.5); `None`
-/// when `rev-list` fails — `verified_sha` unreachable (a shallow clone) or not a commit —
-/// which the caller reports as `Staling::HistoryUnavailable`, never silently swallowed.
+/// when `verified_sha` is unreachable ([`sha_reachable`]: a shallow clone, or a hand-edited
+/// `""` whose `..HEAD` range lists nothing) or not a commit, which the caller reports as
+/// `Staling::HistoryUnavailable` — never silently swallowed, never read as "no commits".
 fn commits_touching(root: &Path, file: &str, verified_sha: &str) -> Result<Option<Vec<String>>> {
+    if !sha_reachable(root, verified_sha)? {
+        return Ok(None);
+    }
     let range = format!("{verified_sha}..HEAD");
-    let output = git(root, &["rev-list", &range, "--", file])?;
+    let output = git(root, "rev-list", &[&range, "--", file])?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     Ok(output
         .status
@@ -1457,7 +1466,7 @@ fn commits_touching(root: &Path, file: &str, verified_sha: &str) -> Result<Optio
 /// [`sha_reachable`] first, so an unreachable watermark never reads as zero churn.
 fn churn_count(root: &Path, file: &str, verified_sha: &str) -> Result<usize> {
     let range = format!("{verified_sha}..HEAD");
-    let output = git(root, &["rev-list", "--count", &range, "--", file])?;
+    let output = git(root, "rev-list --count", &[&range, "--", file])?;
     let count = String::from_utf8_lossy(&output.stdout).trim().parse().ok();
     Ok(count.filter(|_| output.status.success()).unwrap_or(0))
 }
@@ -1465,14 +1474,14 @@ fn churn_count(root: &Path, file: &str, verified_sha: &str) -> Result<usize> {
 /// The blob of `file` at commit `sha` (`git show <sha>:<file>`), or `None` when the
 /// path did not exist at that commit.
 fn git_show(root: &Path, sha: &str, file: &str) -> Result<Option<String>> {
-    let output = git(root, &["show", &format!("{sha}:{file}")])?;
+    let output = git(root, "show", &[&format!("{sha}:{file}")])?;
     let contents = String::from_utf8_lossy(&output.stdout).into_owned();
     Ok(output.status.success().then_some(contents))
 }
 
 /// A commit's short sha + subject line (`git show -s --format=%s`) for the §4.5 render.
 fn commit_meta(root: &Path, sha: &str) -> Result<StalingCommit> {
-    let output = git(root, &["show", "-s", "--format=%s", sha])?;
+    let output = git(root, "show -s", &["--format=%s", sha])?;
     Ok(StalingCommit {
         short: short_sha(sha).to_string(),
         subject: String::from_utf8_lossy(&output.stdout).trim().to_string(),

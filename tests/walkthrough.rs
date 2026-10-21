@@ -139,30 +139,35 @@ fn init_never_proposes_the_dot_stele_dir_as_a_node() {
 }
 
 // `stele init --json` (the sole flag a mutating verb accepts, §5.3) still runs and prints
-// exactly one success envelope to stdout — even when staging fails (a held index lock): that
-// is a stderr warning naming the `git add` to run by hand, never an abort.
+// exactly one success envelope to stdout — whether staging succeeds or fails (a held index
+// lock): a failure is a stderr warning naming the `git add` to run by hand, never an abort.
 #[test]
 fn init_json_still_scaffolds_and_prints_one_envelope() {
-    let fixture = Fixture::bare();
-    fixture.write("apps/web/app.ex", "defmodule Acme.App do\nend\n");
-    fixture.commit("bare tree for a --json init");
-    fixture.write(".git/index.lock", "");
+    for held in [false, true] {
+        let fixture = Fixture::bare();
+        fixture.write("apps/web/app.ex", "defmodule Acme.App do\nend\n");
+        fixture.commit("bare tree for a --json init");
+        if held {
+            fixture.write(".git/index.lock", "");
+        }
 
-    let init = fixture.run(&["init", "--json"]);
-    assert_eq!(init.code, 0, "{}", init.combined());
-    assert!(
-        init.stderr.contains("stele init: `git add` failed: ")
-            && init
-                .stderr
-                .contains("stage the scaffold yourself so stele build sees it: git add -- AGENTS.md apps/AGENTS.md"),
-        "{}",
-        init.stderr
-    );
-    let value: serde_json::Value =
-        serde_json::from_str(init.stdout.trim()).expect("init --json stdout is one JSON object");
-    assert_eq!(value["ok"], true, "{}", init.stdout);
-    assert!(
-        fixture.path("AGENTS.md").exists() && fixture.path("apps/AGENTS.md").exists(),
-        "init --json did not scaffold the expected nodes"
-    );
+        let init = fixture.run(&["init", "--json"]);
+        assert_eq!(init.code, 0, "{}", init.combined());
+        assert_eq!(
+            init.stderr.contains("stele init: `git add` failed: ")
+                && init
+                    .stderr
+                    .contains("stage the scaffold yourself so stele build sees it: git add -- AGENTS.md apps/AGENTS.md"),
+            held,
+            "{}",
+            init.stderr
+        );
+        let value: serde_json::Value = serde_json::from_str(init.stdout.trim())
+            .expect("init --json stdout is one JSON object");
+        assert_eq!(value["ok"], true, "{}", init.stdout);
+        assert!(
+            fixture.path("AGENTS.md").exists() && fixture.path("apps/AGENTS.md").exists(),
+            "init --json did not scaffold the expected nodes"
+        );
+    }
 }

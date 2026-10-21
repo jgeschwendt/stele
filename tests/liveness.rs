@@ -185,22 +185,22 @@ fn probe6_run_commands_executes_and_reports_nonzero() {
 #[test]
 fn probe7_run_commands_json_keeps_stdout_a_single_object() {
     let fixture = Fixture::acme();
-    // The child's OUTPUT token is computed (`LEAK_$((21+21))` → `LEAK_42`), so it appears
+    // The child's OUTPUT tokens are computed (`OUT_$((21+21))` → `OUT_42`), so they appear
     // only if the child's output actually leaked — never merely because the command text
-    // (which the finding message echoes) contains it. 5000 zeros on stdout ahead of the
-    // token on stderr overflow the 4096-byte cap, whose kept tail still holds the token.
+    // (which the finding message echoes) contains them. 5000 zeros on stdout ahead of the
+    // stdout and stderr tokens overflow the 4096-byte cap, whose kept tail still holds both.
     add_root_commands(
         &fixture,
-        "  noisy: sh -c \"printf %05000d 0; echo LEAK_$((21+21)) >&2; exit 3\"\n",
+        "  noisy: sh -c \"printf %05000d 0; echo OUT_$((21+21)); echo ERR_$((21+21)) >&2; exit 3\"\n",
     );
     assert_eq!(fixture.run(&["build"]).code, 0);
 
     let run = fixture.run(&["check", "--json", "--run-commands"]);
     assert_eq!(run.code, 1, "{}", run.combined());
-    // The child's stdout is captured — it must not corrupt the envelope.
+    // The child's output is captured — it must not corrupt the envelope.
     assert!(
-        !run.stdout.contains("LEAK_42"),
-        "child stdout leaked onto the engine stdout:\n{}",
+        !run.stdout.contains("OUT_42") && !run.stdout.contains("ERR_42"),
+        "child output leaked onto the engine stdout:\n{}",
         run.stdout
     );
     let value: Value =
@@ -218,7 +218,7 @@ fn probe7_run_commands_json_keeps_stdout_a_single_object() {
     // preserved, just never on the pure-JSON stdout.
     let human = fixture.run(&["check", "--run-commands"]);
     assert!(
-        human.combined().contains("…000") && human.combined().contains("0\nLEAK_42"),
+        human.combined().contains("…000") && human.combined().contains("0OUT_42\nERR_42"),
         "captured output must fold into the finding, tail-capped:\n{}",
         human.combined()
     );

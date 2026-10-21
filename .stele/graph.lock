@@ -8,7 +8,7 @@
     },
     "refund-cap": {
       "file": "tests/gallery.rs",
-      "line": 79,
+      "line": 85,
       "node": "tests"
     }
   },
@@ -25,7 +25,7 @@
           "text": "every [Cn] citation must stay licensed by research/claims.md's status for that claim — never state a `reported` claim as settled fact",
           "verified": {
             "digest": null,
-            "sha": "df73b2972790c3448144a7d52df0ff7810422b25"
+            "sha": "96a0f638b13a658bbdc4781263e0272a5789f174"
           }
         },
         {
@@ -37,7 +37,7 @@
           "text": "docs/spec.html outranks everything here — code and examples conform to it; changing behavior means revising the spec (and its decision log) first",
           "verified": {
             "digest": null,
-            "sha": "df73b2972790c3448144a7d52df0ff7810422b25"
+            "sha": "96a0f638b13a658bbdc4781263e0272a5789f174"
           }
         }
       ],

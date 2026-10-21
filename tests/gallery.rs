@@ -51,6 +51,12 @@ fn gallery_8_1_structural_forward_violation() {
         "{out}"
     );
     assert!(out.contains("edge not declared"), "{out}");
+    // `--json` carries each location as `{file, line}` (§5.3).
+    let json = fixture.run(&["check", "--json"]).stdout;
+    assert!(
+        json.contains("{\"file\":\"apps/web/lib/store/subscription.ex\",\"line\":9}"),
+        "{json}"
+    );
 }
 
 // 8.2 Structural / vestigial (reverse): billing declares depends on store, but no longer
@@ -77,7 +83,10 @@ fn gallery_8_2_structural_reverse_vestigial() {
 }
 
 // 8.3 Referential: (a) a renamed landmark comment leaves ※ refund-cap unresolved;
-// (b) a copy-paste refactor duplicates the money-type landmark (cardinality 2).
+// (b) a copy-paste refactor duplicates the money-type landmark (cardinality 2). Beyond
+// the gallery, every other §4.1 sub-check fires once: (a) for `<path>#<symbol>` anchors
+// (0 and >1 definitions), (c) a superseded ADR, (d) an untracked enforced_by, (e) a
+// claim comment whose abbreviation a twin `billing` node makes ambiguous.
 #[test]
 fn gallery_8_3_referential() {
     let fixture = Fixture::acme();
@@ -87,6 +96,22 @@ fn gallery_8_3_referential() {
         "※ refund-cap-v2",
     );
     fixture.write("packages/shared/src/legacy/money.ts", LEGACY_MONEY_TS);
+    fixture.write(
+        "packages/shared/src/dup.ts",
+        "export function dup() {}\nexport function dup() {}\n// ⊨ billing/refund-cap\n",
+    );
+    fixture.write(
+        "packages/billing/AGENTS.md",
+        "# billing\n\n```stele\nkind: container\npurpose: twin final segment\n```\n",
+    );
+    fixture.replace(
+        "AGENTS.md",
+        "invariants:\n",
+        "invariants:\n  - claim: one dup\n    anchor: packages/shared/src/dup.ts#dup\n  \
+         - claim: one gone\n    anchor: packages/shared/src/dup.ts#gone\n",
+    );
+    fixture.replace("AGENTS.md", "money.test.ts", "missing.test.ts");
+    fixture.replace("adr/0007-integer-cents.md", "Accepted", "Superseded");
     fixture.commit("rename refund-cap landmark; duplicate money-type in a legacy copy");
 
     assert_eq!(
@@ -97,8 +122,17 @@ fn gallery_8_3_referential() {
     let check = fixture.run(&["check"]);
     let out = check.combined();
     assert_eq!(check.code, 1, "{out}");
-    assert!(out.contains("unresolved"), "{out}");
-    assert!(out.contains("cardinality 2"), "{out}");
+    for fragment in [
+        "unresolved (0 occurrences",
+        "cardinality 2",
+        "ambiguous (>1 definitions of \"dup\"",
+        "unresolved (0 definitions of \"gone\"",
+        "names a superseded ADR",
+        "missing.test.ts is not a VCS-tracked file",
+        "⊨ billing/refund-cap is an ambiguous abbreviation",
+    ] {
+        assert!(out.contains(fragment), "{fragment}\n{out}");
+    }
 }
 
 // 8.4 Freshness: a semantic edit INSIDE changeset/2 (the digested region) with the claim
@@ -164,6 +198,9 @@ fn gallery_8_5_budget() {
     assert!(out.contains("project_doc_max_bytes"), "{out}");
     // budget[node]: the root node's declared budget, now overflowed by the prose block.
     assert!(out.contains("900"), "{out}");
+    // `--json` keeps the class `budget` and carries the profile as a message tag (§5.3).
+    let json = fixture.run(&["check", "--json"]).stdout;
+    assert!(json.contains("\"[codex] root chain"), "{json}");
 }
 
 // 8.6a Exhaustiveness: a new apps/api/ directory with 14 files and no AGENTS.md is
@@ -189,6 +226,14 @@ fn gallery_8_6a_exhaustiveness_uncovered_dir() {
     assert_eq!(check.code, 1, "{out}");
     assert!(out.contains("exhaustiveness"), "{out}");
     assert!(out.contains("apps/api"), "{out}");
+
+    // The fix's second branch: an `exhaustiveness.exclude` glob matching the segment.
+    fixture.write(
+        ".stele/config.toml",
+        "[exhaustiveness]\nexclude = [\"a?i*\"]\n",
+    );
+    let excluded = fixture.run(&["check", "--only", "exhaustiveness"]);
+    assert_eq!(excluded.code, 0, "{}", excluded.combined());
 }
 
 // 8.6b Liveness: the db-reset command points at `mix ecto.reset`, whose alias is deleted

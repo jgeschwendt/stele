@@ -96,6 +96,20 @@ fn formatting_change_does_not_stale() {
     let out = check.combined();
     assert_eq!(check.code, 0, "{out}");
     assert!(!out.contains("freshness"), "{out}");
+
+    // A later semantic edit stales the claim; the walk steps past the comment-only commit
+    // (its digest still matches) and names the semantic one.
+    fixture.replace(
+        "apps/web/lib/billing/refund.ex",
+        "|> cast(attrs, @castable_fields)",
+        "|> cast(attrs, [:amount_cents])",
+    );
+    fixture.commit("narrow the cast");
+    let out = fixture.run(&["check"]).combined();
+    assert!(
+        out.contains("staling commit: ") && out.contains("\"narrow the cast\""),
+        "{out}"
+    );
 }
 
 // §4.5 fallback: a parser-less anchor (no bundled parser → no digest) stales on a churn
@@ -124,9 +138,11 @@ fn parserless_churn_fallback_fires_past_threshold() {
     assert_eq!(fixture.run(&["build"]).code, 0);
     fixture.commit("baseline graph.lock");
 
-    // Two commits touching the anchored file — one over the threshold of 1.
+    // Two commits touching the anchored file — the first is AT the threshold of 1 (fresh),
+    // the second over it.
     fixture.append("notes.txt", "line three\n");
     fixture.commit("edit notes 1");
+    assert_eq!(fixture.run(&["check"]).code, 0);
     fixture.append("notes.txt", "line four\n");
     fixture.commit("edit notes 2");
 
@@ -136,10 +152,17 @@ fn parserless_churn_fallback_fires_past_threshold() {
     assert!(out.contains("freshness"), "{out}");
     assert!(out.contains("notes.txt"), "{out}");
     assert!(out.contains("2 commits"), "{out}");
+    // `blame` reports the same churn count for the parser-less anchor.
+    let blame = fixture.run(&["blame", "/notes-mark"]).combined();
+    assert!(
+        blame.contains("notes.txt touched by 2 commit(s)"),
+        "{blame}"
+    );
 }
 
-// §4.5 fallback disabled: with no `freshness.churn_threshold` configured, a parser-less
-// anchor never stales however much its file churns (unset threshold → fallback off).
+// §4.5 fallback disabled: with neither `freshness.churn_threshold` nor (for the
+// `enforced_by`-backed claim) `freshness.enforced_leash` configured, a parser-less anchor
+// never stales however much its file churns (unset threshold → fallback off).
 #[test]
 fn parserless_churn_disabled_without_a_threshold() {
     let fixture = Fixture::bare();
@@ -151,9 +174,12 @@ fn parserless_churn_disabled_without_a_threshold() {
          invariants:\n\
          \x20 - claim: the notes stay accurate to the code\n\
          \x20   anchor: ※ notes-mark\n\
+         \x20 - claim: the guarded notes stay accurate\n\
+         \x20   anchor: ※ notes-guard\n\
+         \x20   enforced_by: notes.txt\n\
          ```\n",
     );
-    fixture.write("notes.txt", "# ※ notes-mark\nline one\n");
+    fixture.write("notes.txt", "# ※ notes-mark\n# ※ notes-guard\nline one\n");
     fixture.commit("import churn fixture (no config)");
 
     assert_eq!(fixture.run(&["build"]).code, 0);
@@ -165,7 +191,10 @@ fn parserless_churn_disabled_without_a_threshold() {
     assert_eq!(check.code, 0, "{}", check.combined());
 }
 
-// §5.1 `stele blame`: an up-to-date claim on a clean tree reports fresh (exit 0).
+// §5.1 `stele blame`: an up-to-date claim on a clean tree reports fresh (exit 0). An
+// uncommitted edit then stales it with no staling commit (`null` under `--json`); a lock
+// stamped over that dirty tree, with the edit reverted, diverges from no committed
+// version and no working-tree edit — the honest answer is "history unavailable".
 #[test]
 fn blame_reports_up_to_date_on_clean_tree() {
     let fixture = Fixture::acme();
@@ -177,6 +206,24 @@ fn blame_reports_up_to_date_on_clean_tree() {
     assert_eq!(blame.code, 0, "{out}");
     assert!(out.contains("up to date"), "{out}");
     assert!(out.contains("changeset/2"), "{out}");
+
+    let refund = "apps/web/lib/billing/refund.ex";
+    let clean = fixture.read(refund);
+    fixture.replace(refund, "@castable_fields)", "[:amount_cents])");
+    let out = fixture.run(&["blame", "billing/refund-cap"]).combined();
+    assert!(out.contains("(uncommitted working-tree change)"), "{out}");
+    let json = fixture
+        .run(&["blame", "billing/refund-cap", "--json"])
+        .stdout;
+    assert!(json.contains("\"staling_commit\":null"), "{json}");
+
+    assert_eq!(fixture.run(&["build"]).code, 0);
+    fixture.write(refund, &clean);
+    let out = fixture.run(&["blame", "billing/refund-cap"]).combined();
+    assert!(
+        out.contains("STALE") && out.contains("history unavailable"),
+        "{out}"
+    );
 }
 
 // §5.1 `stele blame`: a drifted claim reports STALE and names the staling commit; the
@@ -191,21 +238,46 @@ fn blame_reports_staling_commit_on_drift() {
     assert!(out.contains("loosen cap for partial captures"), "{out}");
 }
 
-// §5.1 `stele blame`: an address naming no claim is an input error (exit 2).
+// §5.1 `stele blame`: an address naming no claim, or an abbreviation a twin `billing`
+// node makes ambiguous, is an input error (exit 2); a claim whose anchor stopped
+// resolving since the last build says so.
 #[test]
 fn blame_on_unknown_claim_is_exit_2() {
     let fixture = Fixture::acme();
+    fixture.write(
+        "packages/billing/AGENTS.md",
+        "# billing\n\n```stele\nkind: container\npurpose: twin final segment\n```\n",
+    );
     assert_eq!(fixture.run(&["build"]).code, 0);
     fixture.commit("baseline graph.lock");
 
-    let blame = fixture.run(&["blame", "billing/nonexistent"]);
+    let blame = fixture.run(&["blame", "store/nonexistent"]);
     assert_eq!(blame.code, 2, "{}", blame.combined());
+    let blame = fixture.run(&["blame", "billing/refund-cap"]);
+    assert_eq!(blame.code, 2, "{}", blame.combined());
+    assert!(
+        blame.combined().contains("is ambiguous"),
+        "{}",
+        blame.combined()
+    );
+
+    fixture.replace(
+        "apps/web/lib/billing/refund.ex",
+        "※ refund-cap",
+        "※ refund-cap-v2",
+    );
+    let out = fixture
+        .run(&["blame", "apps/web/lib/billing/refund-cap"])
+        .combined();
+    assert!(out.contains("anchor no longer resolves"), "{out}");
 }
 
 // P5 (F11/F12): in a depth-1 shallow clone the watermark commit is unreachable, so churn
 // is uncountable. `check` must surface an honest freshness finding — "history unavailable
 // (shallow clone?)" — never silently pass a possibly-staled parser-less claim (F11), and
-// `blame` must say the same rather than reporting "0 commit(s)".
+// `blame` must say the same rather than reporting "0 commit(s)". A parser-backed claim's
+// digest drift likewise names no staling commit. Before any commit (unborn HEAD) nothing
+// is watermarked, so freshness has nothing to compare and `blame` says "not verified".
 #[test]
 fn shallow_clone_reports_history_unavailable_not_silent_pass() {
     let src = Fixture::bare();
@@ -214,17 +286,34 @@ fn shallow_clone_reports_history_unavailable_not_silent_pass() {
     src.write(".stele/config.toml", "[freshness]\nchurn_threshold = 0\n");
     src.write("notes.txt", "intro\n# ※ doc-rule\nmore\n");
     src.write(
+        "code.ts",
+        "// ※ code-rule\nexport function f() { return 1; }\n",
+    );
+    src.write(
         "AGENTS.md",
         "# proj\n\n```stele\nkind: system\npurpose: shallow-clone probe\ninvariants:\n\
-         \x20 - claim: the documented rule holds\n    anchor: ※ doc-rule\n```\n\n\
+         \x20 - claim: the documented rule holds\n    anchor: ※ doc-rule\n\
+         \x20 - claim: the code rule holds\n    anchor: ※ code-rule\n```\n\n\
          <!-- @stele -->\n<!-- @end -->\n",
+    );
+    src.stage_all();
+    assert_eq!(src.run(&["build"]).code, 0); // unborn HEAD: verified stays null
+    assert_eq!(src.run(&["check"]).code, 0);
+    let unborn = src.run(&["blame", "/doc-rule"]).combined();
+    assert!(
+        unborn.contains("not verified in the committed lock"),
+        "{unborn}"
     );
     src.commit("c1: author the node + config");
     assert_eq!(src.run(&["build"]).code, 0); // stamps verified.sha = c1
 
-    // Churn the anchored file and commit (the lock rides along); HEAD is now c2, but the
+    // Churn the anchored files and commit (the lock rides along); HEAD is now c2, but the
     // lock's watermark still points at c1.
     src.write("notes.txt", "intro\n# ※ doc-rule\nmore\nEDIT\n");
+    src.write(
+        "code.ts",
+        "// ※ code-rule\nexport function f() { return 2; }\n",
+    );
     src.commit("c2: churn the anchored file");
 
     // depth-1 clone: only c2 is present, so the c1 watermark is unreachable.
@@ -238,6 +327,12 @@ fn shallow_clone_reports_history_unavailable_not_silent_pass() {
     assert!(
         out.contains("history unavailable (shallow clone?)"),
         "check must name the honest failure:\n{out}"
+    );
+    assert!(out.contains("staling commit: history unavailable"), "{out}");
+    let json = clone.run(&["blame", "/code-rule", "--json"]).stdout;
+    assert!(
+        json.contains("{\"status\":\"history-unavailable\"}"),
+        "{json}"
     );
 
     let blame = clone.run(&["blame", "/doc-rule"]);

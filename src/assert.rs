@@ -980,7 +980,8 @@ fn budget_node(ctx: &Context) -> Result<Vec<Finding>> {
 
 /// The bundled cl100k_base-class tokenizer (§4.4), built once and reused. Its identity
 /// is folded into the lock version (`lock::LOCK_VERSION`), so a swap is a visible bump.
-fn tokenizer() -> &'static tiktoken_rs::CoreBPE {
+/// Decoding the vocab costs ~20 ms, so `check` warms it on a thread beside the graph build.
+pub fn tokenizer() -> &'static tiktoken_rs::CoreBPE {
     static TOKENIZER: OnceLock<tiktoken_rs::CoreBPE> = OnceLock::new();
     TOKENIZER.get_or_init(|| tiktoken_rs::cl100k_base().expect("bundled cl100k vocab decodes"))
 }

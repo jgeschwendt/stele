@@ -417,14 +417,15 @@ fn build(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
     // exit 2. Runs BEFORE `build_graph` and the lock write so no partial lock is ever left on
     // disk (§5.3 build atomicity) — an undercover repo that later adopts a shared committed
     // graph fails fast rather than rewriting the private lock. Normal mode never reaches here.
+    let tracked = tracked_files(&ws.work)?;
     if ws.mode == Mode::Undercover {
         // Self-heal (§3.5): re-install the `info/exclude` block before writing any artifact, so a
         // historically-partial or hand-deleted block is repaired and the lock never surfaces in
         // `git status`. No-ops when the block is already present.
         ensure_info_exclude(&ws.common)?;
-        reject_shared_graph_conflict(&ws.work, &tracked_files(&ws.work)?)?;
+        reject_shared_graph_conflict(&ws.work, &tracked)?;
     }
-    let mut graph = build_graph(ws)?;
+    let mut graph = build_graph(ws, &tracked)?;
     // Diagnostic only (§2.4/§3.5): flag AGENTS.md nodes the build's node roster will never
     // read. stderr-only — the lock, stdout, and exit code below stay byte-identical. Normal:
     // an untracked stele-block AGENTS.md the tracked scan misses. Undercover: an untracked
@@ -463,6 +464,9 @@ fn build(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
 /// (§4.6). A clean repo exits 0.
 fn check(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
     let only = parse_only(args)?;
+    if only.is_none_or(|class| class == AssertionClass::Budget) {
+        std::thread::spawn(assert::tokenizer);
+    }
     let freeze = args.contains(&FREEZE_FLAG);
     let run_commands = args.contains(&RUN_COMMANDS_FLAG);
     let config = config::load(&ws.home)?;
@@ -481,7 +485,7 @@ fn check(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
         ensure_info_exclude(&ws.common)?;
         reject_shared_graph_conflict(&ws.work, &tracked)?;
     }
-    let graph = build_graph(ws)?;
+    let graph = build_graph(ws, &tracked)?;
     // Diagnostic only (§2.4/§3.5): flag AGENTS.md nodes the build's node roster will never
     // read — an omitted node leaves the committed lock in-spec, so the byte-compare below would
     // pass while silently short a node. stderr-only; findings/exit are untouched. Normal: an
@@ -591,7 +595,7 @@ fn blame(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
     require_lock_version(&on_disk)?;
     let committed = lock::parse_lock(&on_disk)?;
     let tracked = tracked_files(&ws.work)?;
-    let graph = build_graph(ws)?;
+    let graph = build_graph(ws, &tracked)?;
     let source_root = node_source_root(ws);
     let ctx = Context {
         committed: &committed,
@@ -2380,27 +2384,30 @@ fn overlay_sources(tree_root: &Path, rel: &Path) -> Result<Vec<NodeSource>> {
 /// identically on both paths. Node discovery is mode-aware (normal: tracked `AGENTS.md`;
 /// undercover: the overlay walk); every other scan runs over `ws.work` + tracked
 /// unchanged. `verified` is stamped only by `build` afterward (§4.5).
-fn build_graph(ws: &Workspace) -> Result<Graph> {
+fn build_graph(ws: &Workspace, tracked: &[PathBuf]) -> Result<Graph> {
     let root = &ws.work;
-    let tracked = tracked_files(root)?;
-
     let mut graph = Graph::default();
-    for source in node_sources(ws, &tracked)? {
+    for source in node_sources(ws, tracked)? {
         let contents = read_node_source(&source.source, &source.rel)?;
         if let Some(node) = parse::parse_agents_file(&source.rel, &contents)? {
             graph.insert(node)?;
         }
     }
 
-    graph.anchors = anchors::scan(root, &tracked)?;
-    resolve_claim_anchors(root, &mut graph.nodes, &graph.anchors)?;
-    graph.adrs = build_adr_index(root, &tracked)?;
-
     // Import extraction (§2.3/§4.2): attribute each cross-boundary reference to its
     // owning node via the territory index, then fill each node's `extracted.imports`
     // and retain the per-edge reference occurrences for the structural class (§4.2).
+    // Territory reads only the node roster, so extraction runs beside the anchor scan —
+    // the two tree-sitter passes dominate a build — and its error still surfaces last.
     let territory = graph.territory();
-    let extraction = extract::extract_imports(root, &tracked, &territory)?;
+    let (anchors, extraction) = std::thread::scope(|scope| {
+        let extraction = scope.spawn(|| extract::extract_imports(root, tracked, &territory));
+        (anchors::scan(root, tracked), extraction.join().unwrap())
+    });
+    graph.anchors = anchors?;
+    resolve_claim_anchors(root, &mut graph.nodes, &graph.anchors)?;
+    graph.adrs = build_adr_index(root, tracked)?;
+    let extraction = extraction?;
     for node in &mut graph.nodes {
         node.extracted_imports = extraction
             .per_node

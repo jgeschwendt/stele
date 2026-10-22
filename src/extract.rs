@@ -560,14 +560,14 @@ fn collect_python_modules(root: Node, src: &[u8], out: &mut Vec<(String, usize)>
 
 // ─── shared helpers ───────────────────────────────────────────────────────────
 
+/// A walker's `(key, 0-based row)` output, the input [`file_refs`] resolves.
+type Keys = Vec<(String, usize)>;
+
 /// The references the tracked `exts` files draw, in sorted file order: each file is
 /// read, parsed, walked by `collect` into `(key, 0-based row)` pairs and resolved to its
 /// defining file on one of up to one thread per core — parsing dominates extraction, and a
 /// tree never outlives its file. A file [`Ctx::read`] skips draws none; the first failure
 /// in file order wins, as a serial loop would report it.
-/// A walker's `(key, 0-based row)` output, the input [`file_refs`] resolves.
-type Keys = Vec<(String, usize)>;
-
 fn file_refs(
     ctx: &Ctx,
     exts: &'static [&'static str],

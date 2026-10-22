@@ -1681,8 +1681,10 @@ fn init(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
         ensure_region_for_block(work, rel, &mut written)?;
     }
     // One batch, after every write — staging is best-effort (a warning, never an abort).
-    if !written.is_empty() {
-        git_add(work, &written);
+    if !written.is_empty()
+        && let Some(warning) = git_add(work, &written)
+    {
+        eprintln!("{warning}");
     }
     Ok(CommandOutput::new(
         json!({ "wrote": written }),
@@ -2132,26 +2134,23 @@ fn detect_adr_dir(tracked: &[PathBuf]) -> String {
 /// already on disk, so a `git add` failure (or a git that will not spawn) is a stderr
 /// warning naming the paths to stage by hand, NEVER a post-write abort (`init` still
 /// exits 0). Ignored targets were pre-filtered by [`skip_if_ignored`], so the common
-/// failure mode is already gone.
-fn git_add(root: &Path, paths: &[String]) {
-    let output = Command::new("git")
+/// failure mode is already gone. Returns that warning; `None` when the paths staged.
+fn git_add(root: &Path, paths: &[String]) -> Option<String> {
+    let why = match Command::new("git")
         .arg("add")
         .arg("--")
         .args(paths)
         .current_dir(root)
         .output()
-        .ok();
-    if output.as_ref().is_some_and(|o| o.status.success()) {
-        return;
-    }
-    // A git that will not spawn has no stderr to quote: the reason is empty.
-    let why = output.map_or_else(String::new, |o| {
-        String::from_utf8_lossy(&o.stderr).trim().to_string()
-    });
-    eprintln!(
+    {
+        Ok(output) if output.status.success() => return None,
+        Ok(output) => String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        Err(e) => format!("could not run git: {e}"),
+    };
+    Some(format!(
         "stele init: `git add` failed: {why}\n  stage the scaffold yourself so stele build sees it: git add -- {}",
         paths.join(" ")
-    );
+    ))
 }
 
 // ─── `stele migrate` (§5.1) ──────────────────────────────────────────────────
@@ -2811,6 +2810,18 @@ mod tests {
         }
         let out = cmd.args(args).current_dir(root).output().expect("run git");
         assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
+
+    #[test]
+    fn git_add_warns_with_the_os_error_when_git_cannot_spawn() {
+        // A vanished work tree fails the spawn itself (`current_dir`), not git.
+        let gone = tempfile::tempdir().unwrap().path().to_path_buf();
+        let warning = git_add(&gone, &["AGENTS.md".into()]).unwrap();
+        assert!(
+            warning.starts_with("stele init: `git add` failed: could not run git: "),
+            "{warning}"
+        );
+        assert!(warning.ends_with("git add -- AGENTS.md"), "{warning}");
     }
 
     #[test]

@@ -427,13 +427,12 @@ fn build(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
     if ws.mode == Mode::Undercover {
         reject_shared_graph_conflict(&ws.work, &tracked)?;
     }
-    let mut graph = build_graph(ws, &tracked)?;
     // Diagnostic only (§2.4/§3.5): flag AGENTS.md nodes the build's node roster will never
     // read. stderr-only — the lock, stdout, and exit code below stay byte-identical. Normal:
     // an untracked stele-block AGENTS.md the tracked scan misses. Undercover: an untracked
     // work-tree stele-block AGENTS.md authored outside the overlay (build reads only
     // `.stele/tree/`, §3.5) — the mode-conflict guard above already covers the tracked case.
-    warn_untracked_node_files(ws)?;
+    let mut graph = build_graph_and_warn(ws, &tracked)?;
     if !stamp_verified(&ws.work, &mut graph)? {
         // Unborn HEAD: notice goes to stderr so the `--json` stdout envelope stays a
         // single object (§5.3), and build proceeds to write a fully-null-watermark lock.
@@ -487,14 +486,13 @@ fn check(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
         ensure_info_exclude(&ws.common)?;
         reject_shared_graph_conflict(&ws.work, &tracked)?;
     }
-    let graph = build_graph(ws, &tracked)?;
     // Diagnostic only (§2.4/§3.5): flag AGENTS.md nodes the build's node roster will never
     // read — an omitted node leaves the committed lock in-spec, so the byte-compare below would
     // pass while silently short a node. stderr-only; findings/exit are untouched. Normal: an
     // untracked stele-block AGENTS.md the tracked scan misses. Undercover: an untracked
     // work-tree stele-block AGENTS.md authored outside the overlay (§3.5); the guard above
     // covers the tracked case.
-    warn_untracked_node_files(ws)?;
+    let graph = build_graph_and_warn(ws, &tracked)?;
     let mut rebuilt = Lock::from_graph(&graph);
     rebuilt.carry_over_verified(&committed);
 
@@ -2421,6 +2419,19 @@ fn build_graph(ws: &Workspace, tracked: &[PathBuf]) -> Result<Graph> {
     Ok(graph)
 }
 
+/// [`build_graph`], then [`warn_untracked_node_files`] over the untracked-but-not-gitignored
+/// files. Their `git ls-files --others` walk shares nothing with the build, so it runs beside
+/// the tree-sitter passes; a build error still surfaces first and suppresses every warning.
+fn build_graph_and_warn(ws: &Workspace, tracked: &[PathBuf]) -> Result<Graph> {
+    let (graph, others) = std::thread::scope(|scope| {
+        let others = scope.spawn(|| git_ls_files(&ws.work, &["--others", "--exclude-standard"]));
+        (build_graph(ws, tracked), others.join().unwrap())
+    });
+    let graph = graph?;
+    warn_untracked_node_files(ws, others?)?;
+    Ok(graph)
+}
+
 /// Read a node source (AGENTS.md, §3.1) from its absolute `source` path, naming the
 /// repo-root-relative `rel` in any error (identical text in both modes, §3.5). Unlike the
 /// scan's binary-skip (§2.4), a declared node source that is not valid UTF-8 is a hard
@@ -2555,11 +2566,10 @@ fn tracked_files(root: &Path) -> Result<Vec<PathBuf>> {
 /// node). The message differs by mode: Normal names the untracked node the tracked scan misses
 /// (run `git add`); Undercover names a node authored outside the overlay (build reads only
 /// `.stele/tree/`), which is the confusion signal, not an adoption gap.
-fn warn_untracked_node_files(ws: &Workspace) -> Result<()> {
+fn warn_untracked_node_files(ws: &Workspace, others: Vec<PathBuf>) -> Result<()> {
     let root = &ws.work;
     let ignore = Steleignore::load(root)?;
-    // The untracked-but-not-gitignored files: present, neither tracked nor `.gitignore`d.
-    for rel in git_ls_files(root, &["--others", "--exclude-standard"])? {
+    for rel in others {
         if rel.file_name().is_none_or(|name| name != "AGENTS.md") {
             continue;
         }

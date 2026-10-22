@@ -2136,22 +2136,22 @@ fn detect_adr_dir(tracked: &[PathBuf]) -> String {
 /// exits 0). Ignored targets were pre-filtered by [`skip_if_ignored`], so the common
 /// failure mode is already gone.
 fn git_add(root: &Path, paths: &[String]) {
-    let result = Command::new("git")
+    let output = Command::new("git")
         .arg("add")
         .arg("--")
         .args(paths)
         .current_dir(root)
-        .output();
-    let warning = match result {
-        Ok(output) if output.status.success() => return,
-        Ok(output) => format!(
-            "`git add` failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ),
-        Err(e) => format!("could not run `git add`: {e}"),
-    };
+        .output()
+        .ok();
+    if output.as_ref().is_some_and(|o| o.status.success()) {
+        return;
+    }
+    // A git that will not spawn has no stderr to quote: the reason is empty.
+    let why = output.map_or_else(String::new, |o| {
+        String::from_utf8_lossy(&o.stderr).trim().to_string()
+    });
     eprintln!(
-        "stele init: {warning}\n  stage the scaffold yourself so stele build sees it: git add -- {}",
+        "stele init: `git add` failed: {why}\n  stage the scaffold yourself so stele build sees it: git add -- {}",
         paths.join(" ")
     );
 }

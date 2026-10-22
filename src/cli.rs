@@ -2491,15 +2491,20 @@ fn stamp_verified(root: &Path, graph: &mut Graph) -> Result<bool> {
     let Some(sha) = head_sha(root)? else {
         return Ok(false);
     };
-    for node in &mut graph.nodes {
-        for claim in node.invariants.iter_mut().chain(node.hazards.iter_mut()) {
-            if let Some(resolved) = claim.resolved.clone() {
-                claim.verified = Some(Verified {
-                    sha: sha.clone(),
-                    digest: anchors::digest_for_claim(root, &claim.anchor, &resolved)?,
-                });
-            }
-        }
+    let claims: Vec<_> = graph
+        .nodes
+        .iter_mut()
+        .flat_map(|node| node.invariants.iter_mut().chain(&mut node.hazards))
+        .filter(|claim| claim.resolved.is_some())
+        .collect();
+    let digests = assert::par_map(&claims, |claim| {
+        anchors::digest_for_claim(root, &claim.anchor, claim.resolved.as_deref().unwrap())
+    });
+    for (claim, digest) in claims.into_iter().zip(digests) {
+        claim.verified = Some(Verified {
+            sha: sha.clone(),
+            digest: digest?,
+        });
     }
     Ok(true)
 }

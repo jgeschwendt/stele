@@ -1147,15 +1147,38 @@ const DIGEST_ELLIPSIS: char = '…';
 ///   or the longer `freshness.enforced_leash` (`enforced_by`-backed), with per-node
 ///   overrides (§3.4). An unset threshold disables the fallback for that claim.
 fn freshness(ctx: &Context) -> Result<Vec<Finding>> {
-    let mut findings = Vec::new();
-    for node in &ctx.graph.nodes {
-        for claim in node.invariants.iter().chain(node.hazards.iter()) {
-            if let Some(finding) = freshness_claim(ctx, node, claim)? {
-                findings.push(finding);
-            }
-        }
-    }
-    Ok(findings)
+    let claims: Vec<_> = ctx
+        .graph
+        .nodes
+        .iter()
+        .flat_map(|node| {
+            node.invariants
+                .iter()
+                .chain(&node.hazards)
+                .map(move |claim| (node, claim))
+        })
+        .collect();
+    par_map(&claims, |(node, claim)| freshness_claim(ctx, node, claim))
+        .into_iter()
+        .filter_map(Result::transpose)
+        .collect()
+}
+
+/// `f` over `items` on up to one thread per core, in order — each claim's digest re-reads
+/// and re-parses its file, and its churn count spawns git, so the per-claim passes of
+/// `build` and freshness are the engine's widest serial loops.
+pub fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    let cores = std::thread::available_parallelism().map_or(1, usize::from);
+    std::thread::scope(|scope| {
+        let chunks: Vec<_> = items
+            .chunks(items.len().div_ceil(cores).max(1))
+            .map(|chunk| scope.spawn(|| chunk.iter().map(&f).collect::<Vec<_>>()))
+            .collect();
+        chunks
+            .into_iter()
+            .flat_map(|chunk| chunk.join().unwrap())
+            .collect()
+    })
 }
 
 /// The freshness verdict for one claim (§4.5), or `None` when it is fresh, unresolved,

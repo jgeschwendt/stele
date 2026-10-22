@@ -157,22 +157,14 @@ struct Elixir;
 impl Extractor for Elixir {
     fn extract(&self, ctx: &Ctx) -> Result<Vec<FileRef>> {
         const EXTS: [&str; 2] = ["ex", "exs"];
-        let mut parser = Parser::new();
-        let language: Language = tree_sitter_elixir::LANGUAGE.into();
-
         // First pass: parse every file once, and build the module→file map from
         // each `defmodule`. First declarer wins (files arrive sorted).
+        let parsed = parse_all(ctx, &EXTS, |_| tree_sitter_elixir::LANGUAGE.into())?;
         let mut modules: BTreeMap<String, String> = BTreeMap::new();
-        let mut parsed: Vec<(&String, String, Tree)> = Vec::new();
-        for file in ctx.with_ext(&EXTS) {
-            let Some(src) = ctx.read(file)? else {
-                continue;
-            };
-            let tree = parse(&mut parser, &language, &src, file)?;
+        for (file, src, tree) in &parsed {
             collect_defmodules(tree.root_node(), src.as_bytes(), &mut |name| {
-                modules.entry(name).or_insert_with(|| file.clone());
+                modules.entry(name).or_insert_with(|| (*file).clone());
             });
-            parsed.push((file, src, tree));
         }
 
         // Second pass: resolve every module reference against the map.
@@ -258,14 +250,8 @@ impl Extractor for TsJs {
         const EXTS: [&str; 6] = ["cjs", "js", "jsx", "mjs", "ts", "tsx"];
         let packages = workspace_packages(ctx)?;
 
-        let mut parser = Parser::new();
         let mut refs = Vec::new();
-        for file in ctx.with_ext(&EXTS) {
-            let Some(src) = ctx.read(file)? else {
-                continue;
-            };
-            let language = ts_language(&ext_of(file).unwrap_or_default());
-            let tree = parse(&mut parser, &language, &src, file)?;
+        for (file, src, tree) in parse_all(ctx, &EXTS, ts_language)? {
             let mut sources = Vec::new();
             collect_ts_sources(tree.root_node(), src.as_bytes(), &mut sources);
             for (source, row) in sources {
@@ -401,12 +387,12 @@ fn probe_ts(ctx: &Ctx, target: &str) -> Option<String> {
     None
 }
 
-/// The tree-sitter grammar for a TS/JS extension: `.tsx` needs the TSX dialect,
-/// `.ts` the plain TypeScript one, every other extension the JavaScript grammar.
-fn ts_language(ext: &str) -> Language {
-    match ext {
-        "ts" => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-        "tsx" => tree_sitter_typescript::LANGUAGE_TSX.into(),
+/// The tree-sitter grammar for a TS/JS file: `.tsx` needs the TSX dialect, `.ts` the
+/// plain TypeScript one, every other extension the JavaScript grammar.
+fn ts_language(file: &str) -> Language {
+    match ext_of(file).as_deref() {
+        Some("ts") => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+        Some("tsx") => tree_sitter_typescript::LANGUAGE_TSX.into(),
         _ => tree_sitter_javascript::LANGUAGE.into(),
     }
 }
@@ -448,14 +434,8 @@ impl Extractor for RustLang {
             }
         }
 
-        let mut parser = Parser::new();
-        let language: Language = tree_sitter_rust::LANGUAGE.into();
         let mut refs = Vec::new();
-        for file in ctx.with_ext(&["rs"]) {
-            let Some(src) = ctx.read(file)? else {
-                continue;
-            };
-            let tree = parse(&mut parser, &language, &src, file)?;
+        for (file, src, tree) in parse_all(ctx, &["rs"], |_| tree_sitter_rust::LANGUAGE.into())? {
             let mut heads = Vec::new();
             collect_rust_crate_heads(tree.root_node(), src.as_bytes(), &mut heads);
             for (head, row) in heads {
@@ -551,20 +531,14 @@ impl Extractor for Python {
                 .or_insert_with(|| (*file).clone());
         }
 
-        let mut parser = Parser::new();
-        let language: Language = tree_sitter_python::LANGUAGE.into();
         let mut refs = Vec::new();
-        for file in &files {
-            let Some(src) = ctx.read(file)? else {
-                continue;
-            };
-            let tree = parse(&mut parser, &language, &src, file)?;
+        for (file, src, tree) in parse_all(ctx, &["py"], |_| tree_sitter_python::LANGUAGE.into())? {
             let mut dotted = Vec::new();
             collect_python_modules(tree.root_node(), src.as_bytes(), &mut dotted);
             for (module, row) in dotted {
                 if let Some(defining) = modules.get(&module) {
                     refs.push(FileRef {
-                        from: (*file).clone(),
+                        from: file.clone(),
                         to: defining.clone(),
                         line: row + 1,
                         text: source_line(&src, row),
@@ -626,6 +600,27 @@ fn collect_python_modules(root: Node, src: &[u8], out: &mut Vec<(String, usize)>
 }
 
 // ─── shared helpers ───────────────────────────────────────────────────────────
+
+/// Read and parse the tracked `exts` files on up to one thread per core, in their sorted order — parsing
+/// dominates extraction. A file [`Ctx::read`] skips is absent; the first failure in file
+/// order wins, as a serial loop would report it.
+fn parse_all<'c>(
+    ctx: &'c Ctx,
+    exts: &'static [&'static str],
+    language: fn(&str) -> Language,
+) -> Result<Vec<(&'c String, String, Tree)>> {
+    let files: Vec<_> = ctx.with_ext(exts).collect();
+    crate::assert::par_map(&files, |file| {
+        let Some(src) = ctx.read(file)? else {
+            return Ok(None);
+        };
+        let tree = parse(&mut Parser::new(), &language(file), &src, file)?;
+        Ok(Some((*file, src, tree)))
+    })
+    .into_iter()
+    .filter_map(Result::transpose)
+    .collect()
+}
 
 /// Parse `src` with `language`, mapping a grammar-load or parse failure to a §5.3
 /// internal error (exit 3) — the extractor crashing, never a repo-out-of-spec case.

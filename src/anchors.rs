@@ -131,23 +131,35 @@ fn is_definition_kind(lang: Lang, kind: &str) -> bool {
 /// well-formed slug/address is prose and is silently ignored (§2.5) — a comment carries
 /// no exit-2 condition at all.
 pub fn scan(root: &Path, tracked: &[PathBuf]) -> Result<AnchorData> {
+    // Files scan on every core; merging in file order keeps each slug's occurrences, the
+    // claim list and the first error exactly where a serial walk would put them.
     let mut data = AnchorData::default();
-    let mut parser = Parser::new();
-    for rel in tracked {
-        let file = posix(rel);
-        if file.starts_with(STELE_DIR_PREFIX) {
-            continue;
+    for file in crate::assert::par_map(tracked, |rel| scan_file(root, rel)) {
+        let file = file?;
+        for (slug, occurrences) in file.landmarks {
+            data.landmarks.entry(slug).or_default().extend(occurrences);
         }
-        let Some(contents) = read_text(&root.join(rel), &file)? else {
-            continue;
-        };
-        match extension(rel).as_deref() {
-            Some("markdown" | "md") => scan_markdown(&contents, &file, &mut data),
-            other => match other.and_then(lang_for_extension) {
-                Some(lang) => scan_parsed(&mut parser, lang, &file, &contents, &mut data)?,
-                None => scan_text(&contents, 0, &file, &mut data),
-            },
-        }
+        data.claims.extend(file.claims);
+    }
+    Ok(data)
+}
+
+/// One tracked file's anchor tokens (§2.5); `.stele/` and unreadable files yield none.
+fn scan_file(root: &Path, rel: &Path) -> Result<AnchorData> {
+    let mut data = AnchorData::default();
+    let file = posix(rel);
+    if file.starts_with(STELE_DIR_PREFIX) {
+        return Ok(data);
+    }
+    let Some(contents) = read_text(&root.join(rel), &file)? else {
+        return Ok(data);
+    };
+    match extension(rel).as_deref() {
+        Some("markdown" | "md") => scan_markdown(&contents, &file, &mut data),
+        other => match other.and_then(lang_for_extension) {
+            Some(lang) => scan_parsed(&mut Parser::new(), lang, &file, &contents, &mut data)?,
+            None => scan_text(&contents, 0, &file, &mut data),
+        },
     }
     Ok(data)
 }

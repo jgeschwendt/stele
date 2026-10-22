@@ -250,6 +250,14 @@ fn undercover_build_self_heals_exclude_block() {
         format!("keep\n{block}after\n")
     );
 
+    // The heal runs first: an unreadable `.steleignore` still fails the build, after the repair.
+    fixture.write(".git/info/exclude", "");
+    fixture.write(".steleignore/x", "");
+    let build = fixture.run(&["build"]);
+    assert_eq!(build.code, 3, "{}", build.combined());
+    assert_eq!(fixture.read(".git/info/exclude"), block);
+    std::fs::remove_dir_all(fixture.path(".steleignore")).unwrap();
+
     // An overlay root that is not a directory, or an unreadable exclude, is exit 3 naming it.
     for (held, plant, says) in [
         (".stele/tree", ".stele/tree", "read overlay "),

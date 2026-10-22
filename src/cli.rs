@@ -417,12 +417,14 @@ fn build(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
     // exit 2. Runs BEFORE `build_graph` and the lock write so no partial lock is ever left on
     // disk (§5.3 build atomicity) — an undercover repo that later adopts a shared committed
     // graph fails fast rather than rewriting the private lock. Normal mode never reaches here.
-    let tracked = tracked_files(&ws.work)?;
     if ws.mode == Mode::Undercover {
-        // Self-heal (§3.5): re-install the `info/exclude` block before writing any artifact, so a
+        // Self-heal (§3.5): re-install the `info/exclude` block before anything can fail, so a
         // historically-partial or hand-deleted block is repaired and the lock never surfaces in
         // `git status`. No-ops when the block is already present.
         ensure_info_exclude(&ws.common)?;
+    }
+    let tracked = tracked_files(&ws.work)?;
+    if ws.mode == Mode::Undercover {
         reject_shared_graph_conflict(&ws.work, &tracked)?;
     }
     let mut graph = build_graph(ws, &tracked)?;

@@ -16,7 +16,7 @@ use crate::emit;
 use crate::lock::{Lock, LockVerified};
 use crate::model::{
     Claim, ClaimAnchor, ClaimLookup, Graph, LANDMARK_ANCHOR_PREFIX, Node, NodeKind, Resolution,
-    Result, SYSTEM_ID, SteleError,
+    Result, SYSTEM_ID, SteleError, normalize_id,
 };
 use crate::parse::{
     self, MARKER_CLOSE, REGION_BEGIN_PREFIX, REGION_DEFAULT_NAME, REGION_END_MARKER, STELE_INFO,
@@ -402,13 +402,17 @@ fn anchor_unresolved(node: &Node, claim: &Claim) -> Finding {
             "anchor {} unresolved (0 occurrences of \"{LANDMARK_ANCHOR_PREFIX}{slug}\")",
             claim.anchor
         ),
-        None => {
-            let (path, symbol) = split_symbol(&claim.anchor);
-            format!(
+        None => match split_symbol(&claim.anchor) {
+            // Never read (anchors::resolve_symbol), so no definition count to report.
+            (path, _) if normalize_id(path).is_err() => format!(
+                "anchor {} unresolved ({path} is not a repo-root-relative path, §2.4)",
+                claim.anchor
+            ),
+            (path, symbol) => format!(
                 "anchor {} unresolved (0 definitions of \"{symbol}\" in {path})",
                 claim.anchor
-            )
-        }
+            ),
+        },
     };
     Finding::error(AssertionClass::Referential, Some(node.id.clone()), message)
         .detail(unanchored(claim))

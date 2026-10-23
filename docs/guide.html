@@ -150,7 +150,7 @@ stele emit    # fills each `&lt;!-- @stele --&gt;` … `&lt;!-- @end --&gt;` reg
 <pre class="snippet"><code>stele:
   runs-on: ubuntu-latest
   steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0        # full history — freshness checks use blame
     - run: curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/v0.3.0/scripts/install.sh | bash -s v0.3.0

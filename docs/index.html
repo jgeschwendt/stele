@@ -154,7 +154,7 @@ stele build &amp;&amp; stele emit      <span class="snippet-note"># compile the 
 stele check                    <span class="snippet-note"># six assertion classes, exit 1 on violations</span>
 stele emit --check             <span class="snippet-note"># committed files vs what the lock renders</span></pre>
   <pre class="snippet"><span class="snippet-note"># the CI gate</span>
-- uses: actions/checkout@v5
+- uses: actions/checkout@v7
   with:
     fetch-depth: 0        <span class="snippet-note"># full history — freshness checks use blame</span>
 - run: curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/v0.3.0/scripts/install.sh | bash -s v0.3.0

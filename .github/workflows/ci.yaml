@@ -6,17 +6,24 @@ on:
   pull_request:
   merge_group:
 
+# Read-only token: the gate never writes, so a compromised step cannot push.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      # Actions are pinned to commit SHAs — a tag or branch can be moved under us.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         # Full history: stele's freshness class (§4.5) walks verified.sha..HEAD; a shallow
         # (fetch-depth 1) clone prunes the watermark commit and makes churn uncountable.
         with:
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: stable
           components: clippy, rustfmt
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings

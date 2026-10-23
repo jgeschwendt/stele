@@ -66,11 +66,15 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v5
+      # Actions are pinned to commit SHAs — a tag or branch can be moved under us. No
+      # build cache: a release binary never restores state another run could have written.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
 
       # The tag is the version. Stamp Cargo.toml's [package] version so the released
       # binary reports the exact release version via `stele --version` (release.sh reads

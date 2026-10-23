@@ -95,7 +95,7 @@
   </header>
   <pre class="snippet">curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash</pre>
   <pre class="snippet"><span class="snippet-note"># pin a version</span>
-curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash -s v0.3.0
+curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/v0.3.0/scripts/install.sh | bash -s v0.3.0
 
 <span class="snippet-note"># prereleases</span>
 curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | channel=canary bash</pre>
@@ -157,7 +157,7 @@ stele emit --check             <span class="snippet-note"># committed files vs w
 - uses: actions/checkout@v5
   with:
     fetch-depth: 0        <span class="snippet-note"># full history — freshness checks use blame</span>
-- run: curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash -s v0.3.0
+- run: curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/v0.3.0/scripts/install.sh | bash -s v0.3.0
 - run: ~/.local/bin/stele check
 - run: ~/.local/bin/stele emit --check</pre>
 </section>

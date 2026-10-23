@@ -17,8 +17,9 @@
 #                       the dir holds stele-<target>.tar.gz + .sha256 (tests/install_smoke.sh)
 set -euo pipefail
 
-# One function called on the last line: a download cut short is a syntax error that
-# runs nothing, never a partial install (curl | bash executes as it streams).
+# One function called on the last line (curl | bash executes as it streams): a download
+# cut inside main is a syntax error that runs nothing, never a partial install. Only a cut
+# within the final call line itself can still exit 0 without installing.
 main() {
 repo="jgeschwendt/stele"
 install_dir="${STELE_INSTALL_DIR:-$HOME/.local/bin}"

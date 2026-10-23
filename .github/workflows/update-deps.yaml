@@ -52,6 +52,11 @@ jobs:
 
       - if: steps.guard.outputs.skip != 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # checkout v6+ persists GITHUB_TOKEN through an includeIf file that
+        # claude-code-action's credential cleanup misses, so the push would go
+        # out as GITHUB_TOKEN; the app pushes with its own credentials.
+        with:
+          persist-credentials: false
 
       - if: steps.guard.outputs.skip != 'true'
         uses: jdx/mise-action@8418fedb1110381a0d3ba51a7a415d7c1b884550 # v5.2.2

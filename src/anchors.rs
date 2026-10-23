@@ -8,7 +8,7 @@
 //! `<!-- -->` count and fenced code / prose are quotations (§2.5); only a parser-less
 //! NON-markdown file falls to a lexical line scan. Symbol resolution binds a
 //! `<path>#<symbol>` anchor to a named definition via the same parsers. The language
-//! registry maps extensions to grammars; ABI compatibility of core 0.26 against grammars
+//! registry maps extensions to grammars; ABI compatibility of core 0.27 against grammars
 //! at ABI 14/15 is verified empirically (the parse tests below exercise every bundled
 //! grammar).
 //!

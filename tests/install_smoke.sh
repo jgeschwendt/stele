@@ -35,14 +35,15 @@ echo "smoke: installing from local artifact dir (no network)"
 HOME="$HOME_DIR" STELE_INSTALL_DIR="$BIN_DIR" STELE_ARTIFACT_DIR="$ART" \
   bash "$ROOT/scripts/install.sh"
 
-echo "smoke: a truncated download runs nothing"
+echo "smoke: a truncated download is a syntax error, never a partial run"
 CUT=$(LC_ALL=C awk '/tar -xzf "\$tarball"/ { print n + length($0); exit } { n += length($0) + 1 }' "$ROOT/scripts/install.sh")
-mkdir "$WORK/cut" && cd "$WORK/cut"
-if head -c "$CUT" "$ROOT/scripts/install.sh" | HOME="$HOME_DIR" STELE_INSTALL_DIR="$WORK/cut-bin" STELE_ARTIFACT_DIR="$ART" bash 2>/dev/null; then
+if ERR=$(head -c "$CUT" "$ROOT/scripts/install.sh" | HOME="$HOME_DIR" STELE_INSTALL_DIR="$WORK/cut-bin" STELE_ARTIFACT_DIR="$ART" bash 2>&1); then
   echo "FAIL: install.sh cut after its tar line exited 0"; exit 1
 fi
-[ -z "$(ls -A)" ] || { echo "FAIL: install.sh cut after its tar line wrote $(ls -A) into the cwd"; exit 1; }
-cd "$ROOT"
+case "$ERR" in
+  *"unexpected end of file"*) : ;;
+  *) echo "FAIL: install.sh cut after its tar line ran instead of failing to parse: $ERR"; exit 1 ;;
+esac
 
 echo "smoke: asserting the binary landed and runs"
 [ -x "$BIN_DIR/stele" ] || { echo "FAIL: stele not installed at $BIN_DIR/stele"; exit 1; }

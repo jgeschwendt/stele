@@ -339,7 +339,8 @@ pub enum SymbolResolution {
 /// tree-sitter. A missing file or parser-less language yields `Unresolved` (the
 /// anchor cannot bind); a genuine read failure is a §5.3 internal error. A path that is
 /// not repo-root-relative (absolute, or with a `..` segment, §2.1) is `Unresolved` before
-/// any read, so an anchor can never probe or digest a file outside the repo.
+/// any read, so a lexically escaping anchor cannot probe or digest a file outside the
+/// repo. A committed symlink still reads through (proposal:jgeschwendt/stele:symlink-write-escape).
 pub fn resolve_symbol(root: &Path, rel_path: &str, symbol: &str) -> Result<SymbolResolution> {
     if normalize_id(rel_path).is_err() {
         return Ok(SymbolResolution::Unresolved);

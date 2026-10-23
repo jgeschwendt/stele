@@ -149,6 +149,11 @@ fn unfold_expands_two_hops() {
         leaf.ends_with("neighbours (depth 1):\n  (none)\n\n"),
         "{leaf}"
     );
+    // The walk stops when the graph runs out, not when the depth does: u32::MAX hops
+    // over an exhausted frontier ran ~100 s and blocked a single-threaded `serve`.
+    let deep = fixture.run(&["unfold", "apps/web", "--depth", "4294967295"]);
+    assert_eq!(deep.code, 0, "{}", deep.combined());
+    assert!(deep.stdout.contains("packages/shared"), "{}", deep.stdout);
 
     // A flag where the id belongs is the usage error, not a node named `--depth`.
     let missing = fixture.run(&["unfold", "--depth", "2"]);

@@ -51,10 +51,10 @@ jobs:
           fi
 
       - if: steps.guard.outputs.skip != 'true'
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - if: steps.guard.outputs.skip != 'true'
-        uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
+        uses: jdx/mise-action@8418fedb1110381a0d3ba51a7a415d7c1b884550 # v5.2.2
 
       - if: steps.guard.outputs.skip != 'true'
         id: bump

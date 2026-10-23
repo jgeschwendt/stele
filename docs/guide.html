@@ -153,7 +153,7 @@ stele emit    # fills each `&lt;!-- @stele --&gt;` … `&lt;!-- @end --&gt;` reg
     - uses: actions/checkout@v5
       with:
         fetch-depth: 0        # full history — freshness checks use blame
-    - run: curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash -s v0.3.0
+    - run: curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/v0.3.0/scripts/install.sh | bash -s v0.3.0
     - run: ~/.local/bin/stele check
     - run: ~/.local/bin/stele emit --check
 </code></pre>

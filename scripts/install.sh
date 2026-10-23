@@ -17,6 +17,9 @@
 #                       the dir holds stele-<target>.tar.gz + .sha256 (tests/install_smoke.sh)
 set -euo pipefail
 
+# One function called on the last line: a download cut short is a syntax error that
+# runs nothing, never a partial install (curl | bash executes as it streams).
+main() {
 repo="jgeschwendt/stele"
 install_dir="${STELE_INSTALL_DIR:-$HOME/.local/bin}"
 channel="${channel:-stable}"
@@ -51,7 +54,7 @@ case "$(uname -s)" in
 esac
 target="${arch}-${os}"
 
-tmp=$(mktemp -d)
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/stele.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 tarball="$tmp/stele-$target.tar.gz"
 sidecar="$tarball.sha256"
@@ -116,3 +119,6 @@ esac
 
 echo "stele: installed → ${install_dir}/stele"
 "$install_dir/stele" --version
+}
+
+main "$@"

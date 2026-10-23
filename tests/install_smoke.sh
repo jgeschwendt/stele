@@ -17,7 +17,7 @@ case "$arch" in arm64 | aarch64) arch=aarch64 ;; x86_64 | amd64) arch=x86_64 ;; 
 case "$os" in Darwin) os=darwin ;; Linux) os=linux ;; esac
 TARGET="${arch}-${os}"
 
-WORK=$(mktemp -d)
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/stele-smoke.XXXXXX") # macOS mktemp -d ignores TMPDIR
 trap 'rm -rf "$WORK"' EXIT
 DIST="$WORK/dist"
 BIN_DIR="$WORK/bin"
@@ -34,6 +34,15 @@ ART="$DIST/$VERSION"
 echo "smoke: installing from local artifact dir (no network)"
 HOME="$HOME_DIR" STELE_INSTALL_DIR="$BIN_DIR" STELE_ARTIFACT_DIR="$ART" \
   bash "$ROOT/scripts/install.sh"
+
+echo "smoke: a truncated download runs nothing"
+CUT=$(LC_ALL=C awk '/tar -xzf "\$tarball"/ { print n + length($0); exit } { n += length($0) + 1 }' "$ROOT/scripts/install.sh")
+mkdir "$WORK/cut" && cd "$WORK/cut"
+if head -c "$CUT" "$ROOT/scripts/install.sh" | HOME="$HOME_DIR" STELE_INSTALL_DIR="$WORK/cut-bin" STELE_ARTIFACT_DIR="$ART" bash 2>/dev/null; then
+  echo "FAIL: install.sh cut after its tar line exited 0"; exit 1
+fi
+[ -z "$(ls -A)" ] || { echo "FAIL: install.sh cut after its tar line wrote $(ls -A) into the cwd"; exit 1; }
+cd "$ROOT"
 
 echo "smoke: asserting the binary landed and runs"
 [ -x "$BIN_DIR/stele" ] || { echo "FAIL: stele not installed at $BIN_DIR/stele"; exit 1; }

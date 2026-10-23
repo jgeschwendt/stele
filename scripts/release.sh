@@ -48,7 +48,7 @@ fi
 
 # Stage the one binary and tar it at the archive root (extract → ./stele). A release
 # build is stripped (Cargo.toml [profile.release]).
-STAGE=$(mktemp -d)
+STAGE=$(mktemp -d "${TMPDIR:-/tmp}/stele.XXXXXX")
 trap 'rm -rf "$STAGE"' EXIT
 cp "${STELE_BIN:-target/release/stele}" "$STAGE/stele"
 chmod +x "$STAGE/stele"

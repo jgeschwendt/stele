@@ -1322,6 +1322,9 @@ fn collect_hops<'a>(lock: &'a Lock, start: &str, depth: u32) -> Vec<(u32, &'a Lo
     let mut frontier = vec![&lock.nodes[start]];
     let mut hops = Vec::new();
     for d in 1..=depth {
+        if frontier.is_empty() {
+            break;
+        }
         let mut next = Vec::new();
         for node in frontier {
             for nb in neighbours(node) {

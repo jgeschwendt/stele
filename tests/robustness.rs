@@ -366,3 +366,37 @@ fn io_failures_are_exit_3() {
         assert!(run.stderr.contains(says), "{plant} {verb}: {}", run.stderr);
     }
 }
+
+// A `<path>#<symbol>` anchor's path is repo-root-relative (§2.4): an absolute path or a
+// `..` segment never reaches the filesystem, so `build` records no `resolved` (no file
+// read, no digest — no oracle for files outside the repo) and `check` names why. Each
+// probe escapes and re-enters the repo, so an unchecked join WOULD bind it.
+#[test]
+fn anchor_paths_outside_the_repo_never_resolve() {
+    let fixture = Fixture::bare();
+    let dir = fixture.root.file_name().unwrap().to_str().unwrap();
+    let absolute = fixture.path("m.py");
+    for anchor in [
+        format!("../{dir}/m.py#secret_fn"),
+        format!("{}#secret_fn", absolute.display()),
+        format!("../{dir}/notes.md#setup"),
+    ] {
+        fixture.write(
+            "AGENTS.md",
+            &format!("```stele\nkind: system\ninvariants:\n  - claim: escapes\n    anchor: {anchor}\n```\n"),
+        );
+        fixture.write("m.py", "def secret_fn():\n    pass\n");
+        fixture.write("notes.md", "## Setup\n");
+        fixture.commit("an anchor whose path leaves the repo");
+        assert_eq!(fixture.run(&["build"]).code, 0, "{anchor}");
+        let lock = fixture.read(".stele/graph.lock");
+        assert!(lock.contains("\"resolved\": null"), "{anchor}\n{lock}");
+        let check = fixture.run(&["check"]);
+        let out = check.combined();
+        assert_eq!(check.code, 1, "{anchor}\n{out}");
+        assert!(
+            out.contains("is not a repo-root-relative path"),
+            "{anchor}\n{out}"
+        );
+    }
+}

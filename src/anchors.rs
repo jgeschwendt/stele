@@ -20,7 +20,7 @@
 
 use crate::model::{
     AnchorData, ClaimAnchor, LANDMARK_ANCHOR_PREFIX, Occurrence, Result, SteleError,
-    is_claim_address, is_valid_slug, read_text,
+    is_claim_address, is_valid_slug, normalize_id, read_text,
 };
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -337,8 +337,13 @@ pub enum SymbolResolution {
 
 /// Resolve a `<path>#<symbol>` anchor (§2.4) to a named definition's line via
 /// tree-sitter. A missing file or parser-less language yields `Unresolved` (the
-/// anchor cannot bind); a genuine read failure is a §5.3 internal error.
+/// anchor cannot bind); a genuine read failure is a §5.3 internal error. A path that is
+/// not repo-root-relative (absolute, or with a `..` segment, §2.1) is `Unresolved` before
+/// any read, so an anchor can never probe or digest a file outside the repo.
 pub fn resolve_symbol(root: &Path, rel_path: &str, symbol: &str) -> Result<SymbolResolution> {
+    if normalize_id(rel_path).is_err() {
+        return Ok(SymbolResolution::Unresolved);
+    }
     let path = Path::new(rel_path);
     let ext = extension(path);
     // Markdown has no tree-sitter named-definition grammar (§2.4), so a `<path>#<symbol>`

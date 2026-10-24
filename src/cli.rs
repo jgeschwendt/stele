@@ -1634,13 +1634,13 @@ const UNDERCOVER_MARKER_CONTENT: &str = "stele undercover\n";
 /// stele block yet. Proposals: the repo root (system) plus each top-level directory
 /// that holds tracked files, is not the ADR directory, and is not already covered by an
 /// existing node (component/import-cluster proposals are out of scope for v1). A file
-/// that already carries a stele block is left byte-identical (the §7 idempotency
-/// promise); a prose-only file gets the skeleton prepended and its prose preserved.
+/// that already carries a stele block — tracked or not — is left byte-identical (the §7
+/// idempotency promise); a prose-only file gets the skeleton prepended and its prose preserved.
 /// A proposed target that a `.gitignore` matches is skipped with a stderr notice (never
 /// scaffolded into an untrackable path). All writes happen first; then the whole set is
 /// staged in ONE `git add` batch so the next `stele build` (tracked-files scan, §2.4)
-/// sees them — a staging failure is a warning plus a `git add` instruction, never a
-/// post-write abort. `init` never deletes content, never writes inside a generated
+/// sees them — a staging failure is a warning plus a `git add` instruction (and a summary
+/// that says unstaged), never a post-write abort. `init` never deletes content, never writes inside a generated
 /// region, and never writes the lock.
 fn init(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
     // `--undercover` (§3.5) is the ONE extra token `init` accepts beyond `--json`; any other
@@ -1685,15 +1685,17 @@ fn init(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
         ensure_region_for_block(work, rel, &mut written)?;
     }
     // One batch, after every write — staging is best-effort (a warning, never an abort).
-    if !written.is_empty()
-        && let Some(warning) = git_add(work, &written)
-    {
-        eprintln!("{warning}");
-    }
+    let staged = match (!written.is_empty()).then(|| git_add(work, &written)) {
+        Some(Some(warning)) => {
+            eprintln!("{warning}");
+            "unstaged (git add failed)"
+        }
+        _ => "staged for the next stele build",
+    };
     Ok(CommandOutput::new(
         json!({ "wrote": written }),
         Some(format!(
-            "stele init: scaffolded {} node(s), staged for the next stele build",
+            "stele init: scaffolded {} node(s), {staged}",
             written.len()
         )),
     ))
@@ -2005,7 +2007,7 @@ fn proposable_top_dirs(
 }
 
 /// Scaffold one proposed node's AGENTS.md (§7). No file → write the heading + skeleton
-/// block + empty region. Prose-only file → prepend the skeleton (after any leading `#`
+/// block + empty region. A file already carrying a block is left untouched. Prose-only file → prepend the skeleton (after any leading `#`
 /// heading), preserve every existing byte, and append an empty region if the file has
 /// none. An in-tree symlink is written at its target; one out of the tree is left as is.
 /// Records the written path for staging.
@@ -2020,6 +2022,10 @@ fn scaffold_node(
     };
     let full = root.join(&target);
     let contents = match read_if_present(&full, &rel_path)? {
+        // A block already there (an untracked earlier scaffold included) is §7's untouched file.
+        Some(existing) if !matches!(parse::parse_agents_file(&target, &existing), Ok(None)) => {
+            return Ok(());
+        }
         Some(existing) => prepend_skeleton(rel_path, &existing, kind)?,
         None => new_skeleton_file(rel_path, root, kind),
     };

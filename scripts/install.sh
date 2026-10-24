@@ -3,7 +3,8 @@
 # The whole script is one brace group, closed on the last line: bash parses a compound
 # command whole before running any of it, so a `curl | bash` download cut anywhere past
 # this line's `{` is a syntax error that runs nothing — never a partial install, never a
-# run without its pinned arg. Only a cut inside the shebang line exits 0 (a no-op).
+# run without its pinned arg. Only a cut inside or right after the shebang line exits 0
+# (a no-op).
 #
 # stele installer. Resolves a release on jgeschwendt/stele, downloads the single
 # per-platform tarball (one static `stele` binary) + its checksum sidecar, verifies

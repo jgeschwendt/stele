@@ -178,3 +178,25 @@ fn init_json_still_scaffolds_and_prints_one_envelope() {
         );
     }
 }
+
+// A failed `git add` is never reported as staged, and re-running `init` over the still-untracked
+// scaffold leaves it byte-identical (§7: a file already carrying a block is untouched, tracked
+// or not) — never a second skeleton.
+#[test]
+fn init_after_a_failed_stage_neither_claims_it_nor_doubles_the_skeleton() {
+    let fixture = Fixture::bare();
+    fixture.write("apps/web/app.ex", "defmodule Acme.App do\nend\n");
+    fixture.commit("bare tree for a held-index init");
+    fixture.write(".git/index.lock", "");
+
+    let init = fixture.run(&["init"]);
+    assert_eq!(
+        init.stdout.trim(),
+        "stele init: scaffolded 2 node(s), unstaged (git add failed)"
+    );
+    let scaffold = fixture.read("apps/AGENTS.md");
+    std::fs::remove_file(fixture.path(".git/index.lock")).unwrap();
+    let reinit = fixture.run(&["init"]);
+    assert_eq!(reinit.code, 0, "{}", reinit.combined());
+    assert_eq!(fixture.read("apps/AGENTS.md"), scaffold);
+}

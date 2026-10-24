@@ -1,4 +1,10 @@
 #!/bin/bash
+{
+# The whole script is one brace group, closed on the last line: bash parses a compound
+# command whole before running any of it, so a `curl | bash` download cut anywhere past
+# this line's `{` is a syntax error that runs nothing — never a partial install, never a
+# run without its pinned arg. Only a cut inside the shebang line exits 0 (a no-op).
+#
 # stele installer. Resolves a release on jgeschwendt/stele, downloads the single
 # per-platform tarball (one static `stele` binary) + its checksum sidecar, verifies
 # the sha256, and installs the binary to ${STELE_INSTALL_DIR:-$HOME/.local/bin}. No
@@ -8,7 +14,7 @@
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash
 #   curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | channel=canary bash   # prereleases
-#   curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/main/scripts/install.sh | bash -s v0.1.0
+#   curl -fsSL https://raw.githubusercontent.com/jgeschwendt/stele/v0.3.0/scripts/install.sh | bash -s v0.3.0
 #
 # Environment:
 #   channel             release channel: stable (default), canary
@@ -17,10 +23,6 @@
 #                       the dir holds stele-<target>.tar.gz + .sha256 (tests/install_smoke.sh)
 set -euo pipefail
 
-# One function called on the last line (curl | bash executes as it streams): a download
-# cut inside main is a syntax error that runs nothing, never a partial install. Only a cut
-# within the final call line itself can still exit 0 without installing.
-main() {
 repo="jgeschwendt/stele"
 install_dir="${STELE_INSTALL_DIR:-$HOME/.local/bin}"
 channel="${channel:-stable}"
@@ -121,5 +123,3 @@ esac
 echo "stele: installed → ${install_dir}/stele"
 "$install_dir/stele" --version
 }
-
-main "$@"

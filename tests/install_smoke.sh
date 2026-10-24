@@ -35,15 +35,18 @@ echo "smoke: installing from local artifact dir (no network)"
 HOME="$HOME_DIR" STELE_INSTALL_DIR="$BIN_DIR" STELE_ARTIFACT_DIR="$ART" \
   bash "$ROOT/scripts/install.sh"
 
-echo "smoke: a truncated download is a syntax error, never a partial run"
-CUT=$(LC_ALL=C awk '/tar -xzf "\$tarball"/ { print n + length($0); exit } { n += length($0) + 1 }' "$ROOT/scripts/install.sh")
-if ERR=$(head -c "$CUT" "$ROOT/scripts/install.sh" | HOME="$HOME_DIR" STELE_INSTALL_DIR="$WORK/cut-bin" STELE_ARTIFACT_DIR="$ART" bash 2>&1); then
-  echo "FAIL: install.sh cut after its tar line exited 0"; exit 1
-fi
-case "$ERR" in
-  *"unexpected end of file"*) : ;;
-  *) echo "FAIL: install.sh cut after its tar line ran instead of failing to parse: $ERR"; exit 1 ;;
-esac
+echo "smoke: a download cut past the shebang line is a syntax error, never a partial run"
+# Every line end after the shebang (preamble included) + every byte of the last line
+# short of its newline (dropping only that leaves the whole script, which runs).
+for CUT in $(LC_ALL=C awk 'NR > 2 { print n } { n += l = length($0) + 1 } END { for (i = n - l + 1; i < n - 1; i++) print i }' "$ROOT/scripts/install.sh"); do
+  if ERR=$(head -c "$CUT" "$ROOT/scripts/install.sh" | HOME="$HOME_DIR" STELE_INSTALL_DIR="$WORK/cut-bin" STELE_ARTIFACT_DIR="$ART" bash -s v0.0.1 2>&1); then
+    echo "FAIL: install.sh cut at byte $CUT exited 0"; exit 1
+  fi
+  case "$ERR" in
+    *"unexpected end of file"*) : ;;
+    *) echo "FAIL: install.sh cut at byte $CUT ran instead of failing to parse: $ERR"; exit 1 ;;
+  esac
+done
 
 echo "smoke: asserting the binary landed and runs"
 [ -x "$BIN_DIR/stele" ] || { echo "FAIL: stele not installed at $BIN_DIR/stele"; exit 1; }

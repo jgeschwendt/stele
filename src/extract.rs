@@ -211,8 +211,8 @@ fn defmodule_name(call: Node, src: &[u8]) -> Option<String> {
 
 // ─── TypeScript / JavaScript ──────────────────────────────────────────────────
 
-/// TS/JS extraction (§9): `import`/`export … from` sources and `require(…)` calls
-/// are resolved either by relative path-probing (`./x`, `../x` against
+/// TS/JS extraction (§9): `import`/`export … from` sources and string-literal
+/// `require(…)`/dynamic `import(…)` calls are resolved either by relative path-probing (`./x`, `../x` against
 /// `.ts/.tsx/.js/.jsx/.cjs/.mjs` and `index.*`) or, for a bare specifier, against
 /// the workspace package-name map built from tracked `package.json` `name` fields.
 struct TsJs;
@@ -272,7 +272,7 @@ fn workspace_packages(ctx: &Ctx) -> Result<Vec<Package>> {
 
 /// Collect every module specifier paired with its 0-based line: the `string` source
 /// of an `import`/`export … from` statement and the first string argument of a
-/// `require(…)` call.
+/// `require(…)` or dynamic `import(…)` call.
 fn collect_ts_sources(root: Node, src: &[u8], out: &mut Vec<(String, usize)>) {
     walk(root, |node, _| {
         match node.kind() {
@@ -282,7 +282,7 @@ fn collect_ts_sources(root: Node, src: &[u8], out: &mut Vec<(String, usize)>) {
                 }
             }
             "call_expression" => {
-                if let Some(source) = require_source(node, src) {
+                if let Some(source) = call_source(node, src) {
                     out.push((source, node.start_position().row));
                 }
             }
@@ -292,10 +292,14 @@ fn collect_ts_sources(root: Node, src: &[u8], out: &mut Vec<(String, usize)>) {
     });
 }
 
-/// The specifier of a `require("…")` call, or `None` for any other call.
-fn require_source(call: Node, src: &[u8]) -> Option<String> {
+/// The string-literal specifier of a `require("…")` or dynamic `import("…")` call, or
+/// `None` for any other call or a computed specifier.
+fn call_source(call: Node, src: &[u8]) -> Option<String> {
     let function = call.child_by_field_name("function")?;
-    if function.kind() != "identifier" || function.utf8_text(src).ok() != Some("require") {
+    if !matches!(
+        (function.kind(), function.utf8_text(src).ok()),
+        ("import", _) | ("identifier", Some("require"))
+    ) {
         return None;
     }
     let args = call.child_by_field_name("arguments")?;

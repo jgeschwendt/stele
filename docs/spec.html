@@ -409,7 +409,7 @@ stele build | init                        # all read/write commands take --json
 <div class="stack">
 <ul class="claims stack" role="list">
 <li>Extraction: <code class="code">tree-sitter-graph</code> crate (MIT/Apache) per language; SCIP import (<code class="code">rust-analyzer</code> emits natively) as the high-fidelity path where an indexer exists [C22]. stack-graphs is archived — do not depend on it.</li>
-<li>Import-edge extraction per language is the long tail; v1 languages: Rust, TypeScript/JS, Elixir, Python (this machine&#39;s actual repos), behind one trait.</li>
+<li>Import-edge extraction per language is the long tail; v1 languages: Rust, TypeScript/JS, Elixir, Python (this machine&#39;s actual repos), behind one trait. A TS/JS reference is an <code class="code">import</code>/<code class="code">export … from</code> source or the string-literal argument of a <code class="code">require(…)</code> or dynamic <code class="code">import(…)</code> call; a computed specifier is left to <code class="code">allow:</code>.</li>
 <li>Node ranking for budget-constrained rendering: tree-sitter tags + graph centrality + token-budget binary search (aider&#39;s repo-map mechanics; aider primary docs, verified 2026-07-19 · research/findings/sq2).</li>
 <li>Single static binary, zero runtime deps, <code class="code">cargo install stele-cli</code> (crate name <code class="code">stele</code> is squatted by a dormant 2024 atomic-Vec crate — binary stays <code class="code">stele</code>; verified 2026-07-19) / prebuilt releases. Implementation is delegated to pinned opus agents per house rules; this spec + the assertion suite&#39;s fixtures are the review contract.</li>
 </ul>

@@ -1639,8 +1639,9 @@ const UNDERCOVER_MARKER_CONTENT: &str = "stele undercover\n";
 /// A proposed target that a `.gitignore` matches is skipped with a stderr notice (never
 /// scaffolded into an untrackable path). All writes happen first; then the whole set is
 /// staged in ONE `git add` batch so the next `stele build` (tracked-files scan, §2.4)
-/// sees them — a staging failure is a warning plus a `git add` instruction (and a summary
-/// that says unstaged), never a post-write abort. `init` never deletes content, never writes inside a generated
+/// sees them, together with any untouched block-carrying target still untracked (an earlier
+/// scaffold whose stage failed) — a staging failure is a warning plus a `git add` instruction
+/// (and a summary that says unstaged), never a post-write abort; nothing to stage, no claim. `init` never deletes content, never writes inside a generated
 /// region, and never writes the lock.
 fn init(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
     // `--undercover` (§3.5) is the ONE extra token `init` accepts beyond `--json`; any other
@@ -1666,15 +1667,26 @@ fn init(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
     let existing = existing_node_dirs(work, &tracked)?;
 
     let mut written: Vec<String> = Vec::new();
+    let mut kept = Vec::new();
     if !existing.contains("") && !skip_if_ignored(work, "AGENTS.md")? {
-        scaffold_node(work, "AGENTS.md", NodeKind::System, &mut written)?;
+        kept.extend(scaffold_node(
+            work,
+            "AGENTS.md",
+            NodeKind::System,
+            &mut written,
+        )?);
     }
     for dir in proposable_top_dirs(&tracked, &existing, &adr_dir) {
         let path = format!("{dir}/AGENTS.md");
         if skip_if_ignored(work, &path)? {
             continue;
         }
-        scaffold_node(work, &path, NodeKind::Container, &mut written)?;
+        kept.extend(scaffold_node(
+            work,
+            &path,
+            NodeKind::Container,
+            &mut written,
+        )?);
     }
     // An already-authored AGENTS.md that carries a stele block but no generated region
     // gets an empty region appended (§3.1: `emit` exits 2 pointing here — `init` must
@@ -1685,17 +1697,24 @@ fn init(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
         ensure_region_for_block(work, rel, &mut written)?;
     }
     // One batch, after every write — staging is best-effort (a warning, never an abort).
-    let staged = match (!written.is_empty()).then(|| git_add(work, &written)) {
+    let stage: Vec<String> = kept
+        .iter()
+        .filter(|t| !tracked.contains(t))
+        .map(|t| t.to_string_lossy().replace('\\', "/"))
+        .chain(written.iter().cloned())
+        .collect();
+    let staged = match (!stage.is_empty()).then(|| git_add(work, &stage)) {
         Some(Some(warning)) => {
             eprintln!("{warning}");
-            "unstaged (git add failed)"
+            ", unstaged (git add failed)"
         }
-        _ => "staged for the next stele build",
+        Some(None) => ", staged for the next stele build",
+        None => "",
     };
     Ok(CommandOutput::new(
         json!({ "wrote": written }),
         Some(format!(
-            "stele init: scaffolded {} node(s), {staged}",
+            "stele init: scaffolded {} node(s){staged}",
             written.len()
         )),
     ))
@@ -1798,7 +1817,7 @@ fn scaffold_overlay_node(
     if overlay_root.join(rel_path).exists() {
         return Ok(());
     }
-    scaffold_node(overlay_root, rel_path, kind, written)
+    scaffold_node(overlay_root, rel_path, kind, written).map(drop)
 }
 
 /// Install the marker-fenced managed block into `<common-dir>/info/exclude` (§3.5), creating
@@ -2010,21 +2029,21 @@ fn proposable_top_dirs(
 /// block + empty region. A file already carrying a block is left untouched. Prose-only file → prepend the skeleton (after any leading `#`
 /// heading), preserve every existing byte, and append an empty region if the file has
 /// none. An in-tree symlink is written at its target; one out of the tree is left as is.
-/// Records the written path for staging.
+/// Records the written path for staging; returns the untouched block-carrying target.
 fn scaffold_node(
     root: &Path,
     rel_path: &str,
     kind: NodeKind,
     written: &mut Vec<String>,
-) -> Result<()> {
+) -> Result<Option<PathBuf>> {
     let Some(target) = in_tree_target(root, Path::new(rel_path)) else {
-        return Ok(());
+        return Ok(None);
     };
     let full = root.join(&target);
     let contents = match read_if_present(&full, &rel_path)? {
         // A block already there (an untracked earlier scaffold included) is §7's untouched file.
         Some(existing) if !matches!(parse::parse_agents_file(&target, &existing), Ok(None)) => {
-            return Ok(());
+            return Ok(Some(target));
         }
         Some(existing) => prepend_skeleton(rel_path, &existing, kind)?,
         None => new_skeleton_file(rel_path, root, kind),
@@ -2035,7 +2054,7 @@ fn scaffold_node(
     std::fs::write(&full, contents)
         .map_err(|e| SteleError::internal(format!("write {rel_path}: {e}")))?;
     written.push(target.to_string_lossy().replace('\\', "/"));
-    Ok(())
+    Ok(None)
 }
 
 /// Where a write to `rel` (under `root`) lands: `rel` itself, or — for a symlink — its

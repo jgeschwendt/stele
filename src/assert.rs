@@ -27,7 +27,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::thread::{Builder, Scope};
 
 /// The claim comment token (§2.5) — the glyph plus its single space — quoted ahead of
 /// an address in the §4.1(e) dangling-binding messages.
@@ -1176,13 +1177,37 @@ pub fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec
     std::thread::scope(|scope| {
         let chunks: Vec<_> = items
             .chunks(items.len().div_ceil(cores).max(1))
-            .map(|chunk| scope.spawn(|| chunk.iter().map(&f).collect::<Vec<_>>()))
+            .map(|chunk| spawn(scope, || chunk.iter().map(&f).collect::<Vec<_>>()))
             .collect();
-        chunks
-            .into_iter()
-            .flat_map(|chunk| chunk.join().unwrap())
-            .collect()
+        chunks.into_iter().flat_map(|join| join()).collect()
     })
+}
+
+/// `f` on a thread of `scope`, joined by calling the result — or, when the OS refuses
+/// the thread, run here and now: a parallel pass degrades to the serial one, never a panic.
+pub fn spawn<'s, R: Send + 's>(
+    scope: &'s Scope<'s, '_>,
+    f: impl FnOnce() -> R + Send + 's,
+) -> Box<dyn FnOnce() -> R + 's> {
+    spawn_on(Builder::new(), scope, f)
+}
+
+/// [`spawn`] on `builder` (a test seam: an impossible stack makes the OS refuse).
+fn spawn_on<'s, R: Send + 's>(
+    builder: Builder,
+    scope: &'s Scope<'s, '_>,
+    f: impl FnOnce() -> R + Send + 's,
+) -> Box<dyn FnOnce() -> R + 's> {
+    // A refused spawn drops its closure, so the job is shared to survive it.
+    let job = Arc::new(Mutex::new(Some(f)));
+    let theirs = Arc::clone(&job);
+    match builder.spawn_scoped(scope, move || theirs.lock().unwrap().take().unwrap()()) {
+        Ok(thread) => Box::new(move || thread.join().unwrap()),
+        Err(_) => {
+            let done = job.lock().unwrap().take().unwrap()();
+            Box::new(move || done)
+        }
+    }
 }
 
 /// The freshness verdict for one claim (§4.5), or `None` when it is fresh, unresolved,
@@ -2338,5 +2363,15 @@ mod tests {
             ]
         );
         assert_eq!(fmt_kib_cap(1536), "1.5 KiB");
+    }
+
+    /// A thread the OS refuses (here an impossible stack) runs its work inline on the
+    /// calling thread, never panicking the command.
+    #[test]
+    fn refused_thread_runs_inline() {
+        let refused = std::thread::Builder::new().stack_size(usize::MAX);
+        let ran =
+            std::thread::scope(|scope| spawn_on(refused, scope, || std::thread::current().id())());
+        assert_eq!(ran, std::thread::current().id());
     }
 }

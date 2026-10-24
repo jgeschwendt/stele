@@ -180,17 +180,19 @@ impl Extractor for Elixir {
 /// `alias`.
 fn collect_defmodules(root: Node, src: &[u8], sink: &mut impl FnMut(String)) {
     walk(root, |node, _| {
-        if node.kind() == "call"
-            && let Some(name) = defmodule_name(node, src)
-        {
+        if let Some(name) = defmodule_name(node, src) {
             sink(name);
         }
         true
     });
 }
 
-/// The module name of a `defmodule` call, or `None` for any other call.
+/// The full module name of a `defmodule` call, or `None` for any other node: a nested
+/// `defmodule Inner` inside `defmodule Outer` declares `Outer.Inner`, as Elixir names it.
 fn defmodule_name(call: Node, src: &[u8]) -> Option<String> {
+    if call.kind() != "call" {
+        return None;
+    }
     let mut cursor = call.walk();
     let children: Vec<Node> = call.children(&mut cursor).collect();
     let leads_defmodule = children
@@ -206,7 +208,15 @@ fn defmodule_name(call: Node, src: &[u8]) -> Option<String> {
     let alias = args
         .children(&mut arg_cursor)
         .find(|c| c.kind() == "alias")?;
-    alias.utf8_text(src).ok().map(str::to_string)
+    let name = alias.utf8_text(src).ok()?;
+    Some(
+        match std::iter::successors(call.parent(), Node::parent)
+            .find_map(|outer| defmodule_name(outer, src))
+        {
+            Some(outer) => format!("{outer}.{name}"),
+            None => name.to_string(),
+        },
+    )
 }
 
 // ─── TypeScript / JavaScript ──────────────────────────────────────────────────

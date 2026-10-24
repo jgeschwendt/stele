@@ -37,7 +37,8 @@ fn node_block(name: &str) -> String {
 
 // Elixir: an `alias` to a module a sibling node defines is a cross-node import; a
 // reference to a module the same node owns is dropped; an external module (no
-// `defmodule` anywhere) is ignored; a duplicate reference collapses to one entry.
+// `defmodule` anywhere) is ignored; a duplicate reference collapses to one entry. A nested
+// `defmodule` declares its full dotted name, so shared's `AcmeWeb.Refund` binds web.
 #[test]
 fn elixir_records_cross_node_drops_same_node_ignores_external() {
     let fixture = Fixture::bare();
@@ -45,10 +46,10 @@ fn elixir_records_cross_node_drops_same_node_ignores_external() {
     fixture.write("apps/web/AGENTS.md", &node_block("web"));
     fixture.write("packages/shared/AGENTS.md", &node_block("shared"));
 
-    // shared defines AcmeShared.Money.
+    // shared defines AcmeShared.Money and calls web's nested AcmeWeb.Refund.
     fixture.write(
         "packages/shared/lib/money.ex",
-        "defmodule AcmeShared.Money do\n  def new(c), do: c\nend\n",
+        "defmodule AcmeShared.Money do\n  def new(c), do: c\n  def r, do: AcmeWeb.Refund.g()\nend\n",
     );
     // web defines two modules; one aliases the other (same node → dropped), both
     // alias shared's Money (cross-node, twice → deduped), plus an external.
@@ -58,7 +59,7 @@ fn elixir_records_cross_node_drops_same_node_ignores_external() {
     );
     fixture.write(
         "apps/web/lib/refund.ex",
-        "defmodule AcmeWeb.Refund do\n  alias AcmeShared.Money\n  def g, do: Money.new(2)\nend\n",
+        "defmodule AcmeWeb do\n  defmodule Refund do\n    alias AcmeShared.Money\n    def g, do: Money.new(2)\n  end\nend\n",
     );
     // A tracked source gone from the working tree is skipped, never read.
     fixture.write("apps/web/lib/gone.ex", "");
@@ -67,11 +68,7 @@ fn elixir_records_cross_node_drops_same_node_ignores_external() {
 
     let imports = imports_of(&fixture);
     assert_eq!(imports["apps/web"], vec!["packages/shared"]);
-    assert!(
-        imports["packages/shared"].is_empty(),
-        "shared should import nothing: {:?}",
-        imports["packages/shared"]
-    );
+    assert_eq!(imports["packages/shared"], vec!["apps/web"]);
 }
 
 // ─── TypeScript / JavaScript ──────────────────────────────────────────────────

@@ -71,6 +71,50 @@ fn elixir_records_cross_node_drops_same_node_ignores_external() {
     assert_eq!(imports["packages/shared"], vec!["apps/web"]);
 }
 
+// Elixir: a `defmodule` under one named `__MODULE__.X`, or under a `quote`, declares no
+// guessed name, so it never shadows the real `Outer.Deep`/`Base2.Helper` (first declarer
+// wins, and `a` sorts first): use binds real, real binds nothing. A 400-deep nest still
+// declares its full dotted name, in one top-down walk.
+#[test]
+fn elixir_unnameable_nesting_declares_nothing_and_deep_nesting_names_fully() {
+    let fixture = Fixture::bare();
+    fixture.write("AGENTS.md", ROOT_BLOCK);
+    for node in ["a", "real", "use"] {
+        fixture.write(&format!("{node}/AGENTS.md"), &node_block(node));
+    }
+    fixture.write(
+        "a/lib/outer.ex",
+        "defmodule Outer do\n  defmodule __MODULE__.Dyn do\n    defmodule Deep do\n    end\n  end\nend\n",
+    );
+    fixture.write(
+        "a/lib/base2.ex",
+        "defmodule Base2 do\n  defmacro __using__(_) do\n    quote do\n      defmodule Helper do\n      end\n    end\n  end\nend\n",
+    );
+    let deep: Vec<String> = (0..400).map(|i| format!("M{i}")).collect();
+    fixture.write(
+        "a/lib/deep.ex",
+        &(deep
+            .iter()
+            .map(|m| format!("defmodule {m} do\n"))
+            .collect::<String>()
+            + &"end\n".repeat(400)),
+    );
+    fixture.write("real/lib/deep.ex", "defmodule Outer.Deep do\nend\n");
+    fixture.write("real/lib/helper.ex", "defmodule Base2.Helper do\nend\n");
+    fixture.write(
+        "use/lib/use.ex",
+        &format!(
+            "defmodule Use do\n  def f, do: {{Outer.Deep.f(), Base2.Helper.f(), {}.f()}}\nend\n",
+            deep.join(".")
+        ),
+    );
+    fixture.commit("elixir nesting fixture");
+
+    let imports = imports_of(&fixture);
+    assert!(imports["real"].is_empty(), "real: {:?}", imports["real"]);
+    assert_eq!(imports["use"], vec!["a", "real"]);
+}
+
 // ─── TypeScript / JavaScript ──────────────────────────────────────────────────
 
 // TS/JS: a relative import, `require` or string-literal dynamic `import()` crossing a node

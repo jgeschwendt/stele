@@ -199,4 +199,13 @@ fn init_after_a_failed_stage_neither_claims_it_nor_doubles_the_skeleton() {
     let reinit = fixture.run(&["init"]);
     assert_eq!(reinit.code, 0, "{}", reinit.combined());
     assert_eq!(fixture.read("apps/AGENTS.md"), scaffold);
+    // The rerun stages what the failed add left behind, so a third run proposes nothing.
+    assert_eq!(
+        reinit.stdout.trim(),
+        "stele init: scaffolded 0 node(s), staged for the next stele build"
+    );
+    assert_eq!(
+        fixture.run(&["init"]).stdout.trim(),
+        "stele init: scaffolded 0 node(s)"
+    );
 }

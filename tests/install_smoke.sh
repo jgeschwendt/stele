@@ -43,7 +43,7 @@ for CUT in $(LC_ALL=C awk 'NR > 2 { print n } { n += l = length($0) + 1 } END { 
     echo "FAIL: install.sh cut at byte $CUT exited 0"; exit 1
   fi
   case "$ERR" in
-    *"unexpected end of file"*) : ;;
+    *"unexpected end of file"* | *"unexpected EOF while looking for matching"*) : ;;
     *) echo "FAIL: install.sh cut at byte $CUT ran instead of failing to parse: $ERR"; exit 1 ;;
   esac
 done

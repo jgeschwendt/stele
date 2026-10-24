@@ -466,7 +466,8 @@ fn build(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
 fn check(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
     let only = parse_only(args)?;
     if only.is_none_or(|class| class == AssertionClass::Budget) {
-        std::thread::spawn(assert::tokenizer);
+        // A warm-up only: a refused thread leaves the first count to load it.
+        let _ = std::thread::Builder::new().spawn(assert::tokenizer);
     }
     let freeze = args.contains(&FREEZE_FLAG);
     let run_commands = args.contains(&RUN_COMMANDS_FLAG);
@@ -2403,8 +2404,10 @@ fn build_graph(ws: &Workspace, tracked: &[PathBuf]) -> Result<Graph> {
     // the two tree-sitter passes dominate a build — and its error still surfaces last.
     let territory = graph.territory();
     let (anchors, extraction) = std::thread::scope(|scope| {
-        let extraction = scope.spawn(|| extract::extract_imports(root, tracked, &territory));
-        (anchors::scan(root, tracked), extraction.join().unwrap())
+        let extraction = assert::spawn(scope, || {
+            extract::extract_imports(root, tracked, &territory)
+        });
+        (anchors::scan(root, tracked), extraction())
     });
     graph.anchors = anchors?;
     resolve_claim_anchors(root, &mut graph.nodes, &graph.anchors)?;
@@ -2426,8 +2429,10 @@ fn build_graph(ws: &Workspace, tracked: &[PathBuf]) -> Result<Graph> {
 /// the tree-sitter passes; a build error still surfaces first and suppresses every warning.
 fn build_graph_and_warn(ws: &Workspace, tracked: &[PathBuf]) -> Result<Graph> {
     let (graph, others) = std::thread::scope(|scope| {
-        let others = scope.spawn(|| git_ls_files(&ws.work, &["--others", "--exclude-standard"]));
-        (build_graph(ws, tracked), others.join().unwrap())
+        let others = assert::spawn(scope, || {
+            git_ls_files(&ws.work, &["--others", "--exclude-standard"])
+        });
+        (build_graph(ws, tracked), others())
     });
     let graph = graph?;
     warn_untracked_node_files(ws, others?)?;

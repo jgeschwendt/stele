@@ -175,56 +175,52 @@ impl Extractor for Elixir {
     }
 }
 
-/// Invoke `sink` with the module name of every `defmodule NAME do` in the tree:
-/// a `call` whose leading identifier is `defmodule` and whose `arguments` hold an
-/// `alias`.
+/// Invoke `sink` with the full module name of every `defmodule NAME do` in the tree — a
+/// `call` led by the identifier `defmodule` whose first argument is an `alias` — in one
+/// top-down walk carrying each enclosing module's name down: a `defmodule Inner` nested in
+/// `defmodule Outer` declares `Outer.Inner`, as Elixir names it. A `defmodule` named by
+/// anything but a plain alias (`__MODULE__.X`) or a `quote` block hides that name, so
+/// nothing below either declares a guessed one.
 fn collect_defmodules(root: Node, src: &[u8], sink: &mut impl FnMut(String)) {
-    walk(root, |node, _| {
-        if let Some(name) = defmodule_name(node, src) {
-            sink(name);
+    let mut scope: Vec<(u32, String)> = Vec::new();
+    walk(root, |node, depth| {
+        while scope.last().is_some_and(|(at, _)| *at >= depth) {
+            scope.pop();
         }
-        true
+        if node.kind() != "call" {
+            return true;
+        }
+        let child = |kind| node.children(&mut node.walk()).find(|c| c.kind() == kind);
+        match child("identifier").and_then(|c| c.utf8_text(src).ok()) {
+            Some("quote") => false,
+            Some("defmodule") => {
+                let Some(name) = child("arguments")
+                    .and_then(|args| args.named_child(0))
+                    .filter(|arg| arg.kind() == "alias")
+                    .and_then(|alias| alias.utf8_text(src).ok())
+                else {
+                    return false;
+                };
+                let name = match scope.last() {
+                    Some((_, outer)) => format!("{outer}.{name}"),
+                    None => name.to_string(),
+                };
+                sink(name.clone());
+                scope.push((depth, name));
+                true
+            }
+            _ => true,
+        }
     });
-}
-
-/// The full module name of a `defmodule` call, or `None` for any other node: a nested
-/// `defmodule Inner` inside `defmodule Outer` declares `Outer.Inner`, as Elixir names it.
-fn defmodule_name(call: Node, src: &[u8]) -> Option<String> {
-    if call.kind() != "call" {
-        return None;
-    }
-    let mut cursor = call.walk();
-    let children: Vec<Node> = call.children(&mut cursor).collect();
-    let leads_defmodule = children
-        .iter()
-        .find(|c| c.kind() == "identifier")
-        .and_then(|c| c.utf8_text(src).ok())
-        == Some("defmodule");
-    if !leads_defmodule {
-        return None;
-    }
-    let args = children.iter().find(|c| c.kind() == "arguments")?;
-    let mut arg_cursor = args.walk();
-    let alias = args
-        .children(&mut arg_cursor)
-        .find(|c| c.kind() == "alias")?;
-    let name = alias.utf8_text(src).ok()?;
-    Some(
-        match std::iter::successors(call.parent(), Node::parent)
-            .find_map(|outer| defmodule_name(outer, src))
-        {
-            Some(outer) => format!("{outer}.{name}"),
-            None => name.to_string(),
-        },
-    )
 }
 
 // ─── TypeScript / JavaScript ──────────────────────────────────────────────────
 
 /// TS/JS extraction (§9): `import`/`export … from` sources and string-literal
-/// `require(…)`/dynamic `import(…)` calls are resolved either by relative path-probing (`./x`, `../x` against
-/// `.ts/.tsx/.js/.jsx/.cjs/.mjs` and `index.*`) or, for a bare specifier, against
-/// the workspace package-name map built from tracked `package.json` `name` fields.
+/// `require(…)`/dynamic `import(…)` calls are resolved either by relative path-probing
+/// (`./x`, `../x` against `.ts/.tsx/.js/.jsx/.cjs/.mjs` and `index.*`) or, for a bare
+/// specifier, against the workspace package-name map built from tracked `package.json`
+/// `name` fields.
 struct TsJs;
 
 /// A tracked `package.json` `name` field and its resolved main file (§9 workspace

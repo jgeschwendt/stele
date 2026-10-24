@@ -76,10 +76,11 @@ fn elixir_records_cross_node_drops_same_node_ignores_external() {
 
 // ─── TypeScript / JavaScript ──────────────────────────────────────────────────
 
-// TS/JS: a relative import or `require` crossing a node boundary resolves by
-// extension- or index-probing and is recorded; a bare specifier naming no workspace
-// package is external and ignored; a workspace package-name (or subpath) import
-// resolves through `package.json`, an unreadable one naming nothing.
+// TS/JS: a relative import, `require` or string-literal dynamic `import()` crossing a node
+// boundary resolves by extension- or index-probing and is recorded (a computed `import()`
+// is ignored); a bare specifier naming no workspace package is external and ignored; a
+// workspace package-name (or subpath) import resolves through `package.json`, an
+// unreadable one naming nothing.
 #[test]
 fn ts_records_relative_cross_node_and_workspace_package() {
     let fixture = Fixture::bare();
@@ -102,6 +103,10 @@ fn ts_records_relative_cross_node_and_workspace_package() {
         "import { money } from \"../shared/src/money\";\nimport { money as m } from \"@acme/shared\";\nimport { money as s } from \"@acme/shared/src/money\";\nimport express from \"express\";\nimport { local } from \"./helper\";\nimport { lib } from \"./lib\";\nimport { gone } from \"./gone\";\nexport { money, m, s, express, local, lib, gone };\n",
     );
     fixture.write("web/helper.tsx", "export const local = 1;\n");
+    fixture.write(
+        "shared/src/lazy.ts",
+        "export const lazy = () => import(\"../../web/helper\");\nexport const any = (p: string) => import(p);\n",
+    );
     fixture.write("web/lib/index.ts", "export const lib = 1;\n");
     fixture.write(
         "web/legacy.js",
@@ -114,7 +119,7 @@ fn ts_records_relative_cross_node_and_workspace_package() {
 
     let imports = imports_of(&fixture);
     assert_eq!(imports["web"], vec!["shared"]);
-    assert!(imports["shared"].is_empty());
+    assert_eq!(imports["shared"], vec!["web"]);
 }
 
 // ─── Rust ─────────────────────────────────────────────────────────────────────

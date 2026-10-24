@@ -1641,8 +1641,9 @@ const UNDERCOVER_MARKER_CONTENT: &str = "stele undercover\n";
 /// staged in ONE `git add` batch so the next `stele build` (tracked-files scan, §2.4)
 /// sees them, together with any untouched block-carrying target still untracked (an earlier
 /// scaffold whose stage failed) — a staging failure is a warning plus a `git add` instruction
-/// (and a summary that says unstaged), never a post-write abort; nothing to stage, no claim. `init` never deletes content, never writes inside a generated
-/// region, and never writes the lock.
+/// (and a summary that says unstaged), never a post-write abort; nothing to stage, no
+/// claim. `init` never deletes content, never writes inside a generated region, and never
+/// writes the lock.
 fn init(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
     // `--undercover` (§3.5) is the ONE extra token `init` accepts beyond `--json`; any other
     // is still an exit-2 input error, and the flag is inert on every other verb. With it,
@@ -2026,9 +2027,9 @@ fn proposable_top_dirs(
 }
 
 /// Scaffold one proposed node's AGENTS.md (§7). No file → write the heading + skeleton
-/// block + empty region. A file already carrying a block is left untouched. Prose-only file → prepend the skeleton (after any leading `#`
-/// heading), preserve every existing byte, and append an empty region if the file has
-/// none. An in-tree symlink is written at its target; one out of the tree is left as is.
+/// block + empty region. A file already carrying a block is left untouched. Prose-only
+/// file → prepend the skeleton (after any leading `#` heading), preserve every existing
+/// byte, and append an empty region if the file has none. An in-tree symlink is written at its target; one out of the tree is left as is.
 /// Records the written path for staging; returns the untouched block-carrying target.
 fn scaffold_node(
     root: &Path,

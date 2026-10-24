@@ -1669,25 +1669,16 @@ fn init(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
 
     let mut written: Vec<String> = Vec::new();
     let mut kept = Vec::new();
+    let mut scaffold = |path: &str, kind| scaffold_node(work, path, kind, &mut written);
     if !existing.contains("") && !skip_if_ignored(work, "AGENTS.md")? {
-        kept.extend(scaffold_node(
-            work,
-            "AGENTS.md",
-            NodeKind::System,
-            &mut written,
-        )?);
+        kept.extend(scaffold("AGENTS.md", NodeKind::System)?);
     }
     for dir in proposable_top_dirs(&tracked, &existing, &adr_dir) {
         let path = format!("{dir}/AGENTS.md");
         if skip_if_ignored(work, &path)? {
             continue;
         }
-        kept.extend(scaffold_node(
-            work,
-            &path,
-            NodeKind::Container,
-            &mut written,
-        )?);
+        kept.extend(scaffold(&path, NodeKind::Container)?);
     }
     // An already-authored AGENTS.md that carries a stele block but no generated region
     // gets an empty region appended (§3.1: `emit` exits 2 pointing here — `init` must

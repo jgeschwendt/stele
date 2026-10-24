@@ -1802,7 +1802,8 @@ fn scaffold_overlay_node(
 /// Install the marker-fenced managed block into `<common-dir>/info/exclude` (§3.5), creating
 /// `info/` and the file if absent. Idempotent replace-in-place: an existing fence has ONLY its
 /// bracketed lines rewritten; otherwise the block is appended (with a separating newline when
-/// the file is non-empty and unterminated). Lines outside the fence are never touched.
+/// the file is non-empty and unterminated). Lines outside the fence are never touched, save a
+/// stray fence line ([`rewrite_exclude_block`]).
 fn ensure_info_exclude(common: &Path) -> Result<()> {
     let dir = common.join("info");
     std::fs::create_dir_all(&dir)
@@ -1851,30 +1852,35 @@ fn write_atomic(path: &Path, bytes: &str, lock_home: Option<&Path>) -> Result<()
     })
 }
 
-/// The `info/exclude` content with the managed block (§3.5) present exactly once. When the
-/// fence already exists, the inclusive begin..end span is replaced in place and every other
-/// line is byte-preserved; otherwise the block is appended after a newline separator. The
-/// block itself is the two begin/end fence lines bracketing [`EXCLUDE_ENTRIES`].
+/// The `info/exclude` content with the managed block (§3.5) present exactly once. The fence
+/// is the first begin line paired with the first end line after it: that inclusive span is
+/// replaced in place; a stray fence line outside it is dropped, and with no pair the block is
+/// appended after a newline separator — a half-deleted fence heals in one run, and every
+/// non-fence line outside the pair is byte-preserved. The block itself is the two begin/end
+/// fence lines bracketing [`EXCLUDE_ENTRIES`].
 fn rewrite_exclude_block(existing: &str) -> String {
     let block = format!(
         "{EXCLUDE_BEGIN}\n{}\n{EXCLUDE_END}\n",
         EXCLUDE_ENTRIES.join("\n")
     );
-    let lines: Vec<&str> = existing.lines().collect();
-    let begin = lines.iter().position(|l| *l == EXCLUDE_BEGIN);
-    let end = lines.iter().position(|l| *l == EXCLUDE_END);
-    if let (Some(b), Some(e)) = (begin, end)
-        && b <= e
-    {
-        let mut out: String = lines[..b].iter().map(|l| format!("{l}\n")).collect();
-        out.push_str(&block);
-        out.push_str(&lines[e + 1..].join("\n"));
-        if e + 1 < lines.len() && existing.ends_with('\n') {
-            out.push('\n');
+    let lines: Vec<&str> = existing.split_inclusive('\n').collect();
+    let find =
+        |fence: &str, from: usize| (from..lines.len()).find(|&i| lines[i].trim_end() == fence);
+    let pair = find(EXCLUDE_BEGIN, 0).and_then(|b| Some((b, find(EXCLUDE_END, b)?)));
+    let mut out = String::new();
+    for (i, line) in lines.iter().enumerate() {
+        match pair {
+            Some((b, _)) if i == b => out.push_str(&block),
+            Some((b, e)) if (b..=e).contains(&i) => {}
+            _ if [EXCLUDE_BEGIN, EXCLUDE_END].contains(&line.trim_end()) => {}
+            _ => out.push_str(line),
         }
-        return out;
     }
-    format!("{existing}{}{block}", append_separator(existing))
+    if pair.is_none() {
+        out.push_str(append_separator(&out));
+        out.push_str(&block);
+    }
+    out
 }
 
 /// The newline that terminates a non-empty, unterminated `contents` before more is appended.

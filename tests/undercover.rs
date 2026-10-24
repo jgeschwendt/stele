@@ -250,6 +250,28 @@ fn undercover_build_self_heals_exclude_block() {
         format!("keep\n{block}after\n")
     );
 
+    // A half-deleted fence heals in one run: the stray fence line drops, every other line
+    // (the teammate's below an orphan begin included) survives, and a second run is a no-op.
+    for (broken, healed) in [
+        (
+            "keep\n/.stele/\n# stele:end undercover\n",
+            "keep\n/.stele/\n",
+        ),
+        (
+            "# stele:begin undercover\n/my-secret-notes/\n",
+            "/my-secret-notes/\n",
+        ),
+    ] {
+        fixture.write(".git/info/exclude", broken);
+        for _ in 0..2 {
+            assert_eq!(fixture.run(&["build"]).code, 0);
+            assert_eq!(
+                fixture.read(".git/info/exclude"),
+                format!("{healed}{block}")
+            );
+        }
+    }
+
     // The heal runs first: an unreadable `.steleignore` still fails the build, after the repair.
     fixture.write(".git/info/exclude", "");
     fixture.write(".steleignore/x", "");

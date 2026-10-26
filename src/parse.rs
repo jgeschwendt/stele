@@ -84,7 +84,7 @@ struct RawBlock {
     id: Option<String>,
     #[serde(default)]
     purpose: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "unique_commands")]
     commands: BTreeMap<String, String>,
     #[serde(default)]
     invariants: Vec<RawClaim>,
@@ -94,6 +94,35 @@ struct RawBlock {
     edges: RawEdges,
     #[serde(default)]
     budget: Option<u64>,
+}
+
+/// `commands` as a map that refuses a repeated key: YAML keys are unique, and a plain
+/// `BTreeMap` would silently keep the last — the struct fields' `duplicate field` gate.
+fn unique_commands<'de, D: serde::Deserializer<'de>>(
+    de: D,
+) -> std::result::Result<BTreeMap<String, String>, D::Error> {
+    struct Unique;
+    impl<'de> serde::de::Visitor<'de> for Unique {
+        type Value = BTreeMap<String, String>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a map of command names to commands")
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(
+            self,
+            mut map: A,
+        ) -> std::result::Result<Self::Value, A::Error> {
+            let mut out = BTreeMap::new();
+            while let Some((name, command)) = map.next_entry::<String, String>()? {
+                if out.insert(name.clone(), command).is_some() {
+                    return Err(serde::de::Error::custom(format!(
+                        "duplicate command `{name}`"
+                    )));
+                }
+            }
+            Ok(out)
+        }
+    }
+    de.deserialize_map(Unique)
 }
 
 /// `claim` and `anchor` are required (a missing one is a serde error); emptiness is
@@ -788,6 +817,16 @@ mod tests {
                 "kind: component\nedges:\n  decided_by: [§ seven]\n",
                 3,
                 "§ <NNNN>",
+            ),
+            (
+                "kind: component\ncommands:\n  test: a\n  test: b\n",
+                6,
+                "duplicate command `test`",
+            ),
+            (
+                "kind: component\ncommands: [x]\n",
+                5,
+                "a map of command names",
             ),
         ] {
             let err = parse(body).unwrap_err();

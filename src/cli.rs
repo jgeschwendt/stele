@@ -1220,8 +1220,12 @@ const DEFAULT_UNFOLD_DEPTH: u32 = 1;
 /// `depth` hops as `id · kind · purpose` summaries. A neighbour is a child (`contains`)
 /// or a `depends` target; depth 2 expands each neighbour's neighbours in turn.
 fn unfold(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
-    // `--depth` where the id belongs is a missing id.
-    let Some(query) = args.get(1).filter(|a| **a != "--depth") else {
+    // The id follows a leading `--depth N` (dispatch held argv to that grammar).
+    let Some(query) = args.get(if args.get(1) == Some(&"--depth") {
+        3
+    } else {
+        1
+    }) else {
         return Err(SteleError::input_msg(
             "usage: stele unfold <id> [--depth N]",
         ));

@@ -126,6 +126,11 @@ fn unfold_expands_two_hops() {
     let unfold = fixture.run(&["unfold", "apps/web", "--depth", "2"]);
     assert_eq!(unfold.code, 0, "{}", unfold.combined());
     let out = unfold.stdout;
+    // Flag order is free: `--depth 2` before the id reads the same.
+    assert_eq!(
+        fixture.run(&["unfold", "--depth", "2", "apps/web"]).stdout,
+        out
+    );
 
     assert!(out.starts_with("apps/web (container)"), "{out}");
     assert!(out.contains("neighbours (depth 2):"), "{out}");

@@ -666,6 +666,7 @@ fn landmark_line(src: &[u8], slug: &str) -> Option<usize> {
 /// `def`/`defmodule` renders `name/arity` or the module alias; every other language's
 /// definition renders its `name` field; a whole-file fallback renders the base name.
 fn region_name(node: Node, src: &[u8], lang: Lang, file: &str) -> String {
+    let node = unwrapped(node);
     is_definition_node(lang, node, src)
         .then(|| match lang {
             Lang::Elixir => elixir_def_name(node, src),
@@ -735,18 +736,15 @@ fn find_comment_at_row(root: Node, row: usize) -> Option<Node> {
 /// The first named definition among `comment`'s siblings that follow it in source
 /// order (§4.5 immediate-precedence): intervening comment/attribute/doc siblings are
 /// not definitions, so they are skipped rather than breaking the binding. A wrapper
-/// sibling — TS/JS `export_statement`, Python `decorated_definition` — stands for the
-/// definition it wraps, so `export function a` and `@dec def a` bind `a`.
+/// sibling — TS/JS `export_statement`, Python `decorated_definition` — binds whole when it
+/// wraps a definition, so `export function a` and `@dec def a` digest the modifier or
+/// decorator too.
 fn next_definition_sibling<'a>(comment: Node<'a>, src: &[u8], lang: Lang) -> Option<Node<'a>> {
     let parent = comment.parent()?;
     let mut cursor = parent.walk();
     let mut after = false;
     for child in parent.children(&mut cursor) {
-        let child = ["declaration", "definition"]
-            .iter()
-            .find_map(|field| child.child_by_field_name(field))
-            .unwrap_or(child);
-        if after && is_definition_node(lang, child, src) {
+        if after && is_definition_node(lang, unwrapped(child), src) {
             return Some(child);
         }
         if child.id() == comment.id() {
@@ -754,6 +752,15 @@ fn next_definition_sibling<'a>(comment: Node<'a>, src: &[u8], lang: Lang) -> Opt
         }
     }
     None
+}
+
+/// The definition a wrapper (`export_statement`, `decorated_definition`, nested) wraps, or
+/// `node` itself: the wrapper is the digested region, the definition names it.
+fn unwrapped(node: Node) -> Node {
+    ["declaration", "definition"]
+        .iter()
+        .find_map(|field| node.child_by_field_name(field))
+        .map_or(node, unwrapped)
 }
 
 /// The nearest ancestor of `node` that is a named definition (§4.5 fallback), or

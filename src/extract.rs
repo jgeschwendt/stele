@@ -263,7 +263,8 @@ fn workspace_packages(ctx: &Ctx) -> Result<Vec<Package>> {
         let Some(src) = ctx.read(file)? else {
             continue;
         };
-        let Ok(parsed) = serde_json::from_str::<PackageJson>(&src) else {
+        let Ok(parsed) = serde_json::from_str::<PackageJson>(src.trim_start_matches('\u{feff}'))
+        else {
             continue;
         };
         let Some(name) = parsed.name else {

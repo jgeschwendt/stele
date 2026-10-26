@@ -542,8 +542,10 @@ fn scan_fences(contents: &str) -> Vec<Fence> {
 /// If `line` opens a fence, return `(fence_char, run_length, info_language)`. The
 /// info language is the first whitespace-delimited token after the fence run;
 /// per CommonMark a backtick fence's info may not itself contain a backtick. Shared
-/// with the markdown anchor scanner (§2.5), which masks fenced code before scanning.
+/// with the markdown anchor scanner (§2.5), which masks fenced code before scanning. A
+/// leading BOM (U+FEFF, only ever before line 1) is not indentation or content.
 pub(crate) fn open_fence(line: &str) -> Option<(char, usize, String)> {
+    let line = line.strip_prefix('\u{feff}').unwrap_or(line);
     let indent = line.len() - line.trim_start_matches(' ').len();
     if indent > MAX_FENCE_INDENT {
         return None;

@@ -62,10 +62,15 @@ impl Steleignore {
         }
     }
 
-    /// Compile every non-comment line into a [`Pattern`] (§2.4 gitignore subset).
+    /// Compile every non-comment line into a [`Pattern`] (§2.4 gitignore subset); a
+    /// leading BOM is skipped, as git skips it.
     pub fn parse(contents: &str) -> Self {
         Self {
-            patterns: contents.lines().filter_map(Pattern::parse).collect(),
+            patterns: contents
+                .trim_start_matches('\u{feff}')
+                .lines()
+                .filter_map(Pattern::parse)
+                .collect(),
         }
     }
 

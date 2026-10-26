@@ -200,9 +200,13 @@ pub(crate) const HTML_COMMENT_CLOSE: &str = "-->";
 /// declaration. The comment state carries across lines; `scan_text` does the
 /// per-fragment recording and payload validation.
 fn scan_markdown(contents: &str, file: &str, data: &mut AnchorData) {
+    let generated = generated_rows(Path::new(file), contents);
     let mut fence: Option<(char, usize)> = None;
     let mut in_comment = false;
     for (row, line) in contents.lines().enumerate() {
+        if generated.contains(&row) {
+            continue; // emit's copy of authored text quotes, never declares (§3.1)
+        }
         if let Some((fence_char, open_len)) = fence {
             // Inside a fenced block: skip every line; the matching closer ends it. A
             // fence is never recognized while inside a comment, so this arm only runs
@@ -220,6 +224,19 @@ fn scan_markdown(contents: &str, file: &str, data: &mut AnchorData) {
         }
         in_comment = scan_markdown_line(line, row, in_comment, file, data);
     }
+}
+
+/// The 0-based rows `emit` owns in a markdown file (§3.1): a node AGENTS.md's generated
+/// region, or a whole `emit --claude-rules` file. Rows stay on-disk rows.
+fn generated_rows(path: &Path, contents: &str) -> std::ops::Range<usize> {
+    if contents.starts_with(crate::emit::CLAUDE_RULE_MARKER) {
+        return 0..usize::MAX;
+    }
+    let row = |at: usize| contents[..at].matches('\n').count();
+    (path.file_name().is_some_and(|name| name == "AGENTS.md"))
+        .then(|| crate::parse::find_region(path, contents).ok().flatten())
+        .flatten()
+        .map_or(0..0, |r| row(r.content_start)..row(r.content_end))
 }
 
 /// Scan the portions of one markdown `line` that lie inside an HTML comment, returning
@@ -458,13 +475,8 @@ fn resolve_markdown_heading(
     let Some(contents) = read_text(&root.join(path), rel_path)? else {
         return Ok(SymbolResolution::Unresolved);
     };
-    // A node AGENTS.md's generated region is emit's (§3.1): its headings are not candidates,
-    // so emit never makes an authored heading ambiguous. Lines stay on-disk lines.
-    let row = |at: usize| contents[..at].matches('\n').count();
-    let generated = (path.file_name().is_some_and(|name| name == "AGENTS.md"))
-        .then(|| crate::parse::find_region(path, &contents).ok().flatten())
-        .flatten()
-        .map_or(0..0, |r| row(r.content_start)..row(r.content_end));
+    // Emit's headings are not candidates, so emit never makes an authored heading ambiguous.
+    let generated = generated_rows(path, &contents);
     let mut lines = Vec::new();
     let mut fence: Option<(char, usize)> = None;
     for (index, line) in contents.lines().enumerate() {

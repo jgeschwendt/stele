@@ -160,6 +160,32 @@ fn parserless_churn_fallback_fires_past_threshold() {
     );
 }
 
+// The churn count reads the anchored path literally: `:notes.txt` is no pathspec magic
+// (its edit counts) and `[ab].txt` no glob (an `a.txt`-only edit does not).
+#[test]
+fn churn_count_reads_the_anchored_path_literally() {
+    for (file, edited, stale) in [
+        (":notes.txt", ":notes.txt", true),
+        ("[ab].txt", "a.txt", false),
+    ] {
+        let fixture = Fixture::bare();
+        fixture.write(
+            "AGENTS.md",
+            "# churn\n\n```stele\nkind: system\ninvariants:\n  - claim: notes hold\n    anchor: ※ notes-mark\n```\n",
+        );
+        fixture.write(file, "# ※ notes-mark\n");
+        fixture.write("a.txt", "");
+        fixture.write(".stele/config.toml", "[freshness]\nchurn_threshold = 0\n");
+        fixture.commit("import");
+        assert_eq!(fixture.run(&["build"]).code, 0);
+        fixture.commit("lock");
+        fixture.append(edited, "edit\n");
+        fixture.commit("edit");
+        let check = fixture.run(&["check", "--only", "freshness"]);
+        assert_eq!(check.code == 1, stale, "{file}: {}", check.combined());
+    }
+}
+
 // §4.5 fallback disabled: with neither `freshness.churn_threshold` nor (for the
 // `enforced_by`-backed claim) `freshness.enforced_leash` configured, a parser-less anchor
 // never stales however much its file churns (unset threshold → fallback off).

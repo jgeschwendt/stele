@@ -223,6 +223,12 @@ fn landmark_over_a_non_definition_never_reaches_a_later_definition() {
             "999",
         ),
         (
+            "a.ts",
+            "// ※ note\nexport function a(x: string): number;\nfunction a(x: number): number;\nexport function a(x: any) {}\nfunction other() { return 1; }\n",
+            "{}",
+            "{ 2; }",
+        ),
+        (
             "a.rs",
             "// ※ note\n#[inline]\nfn guard() {}\nfn other() -> u32 { 1 }\n",
             "{}",

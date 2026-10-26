@@ -1128,8 +1128,9 @@ fn stale_claude_rules(root: &Path, rules: &BTreeMap<String, (&str, String)>) -> 
 /// marker-carrying target may be (re)generated.
 fn refuse_foreign_rule(root: &Path, name: &str) -> Result<()> {
     let path = root.join(CLAUDE_RULES_DIR).join(name);
-    if let Ok(existing) = std::fs::read_to_string(&path)
-        && !existing.starts_with(emit::CLAUDE_RULE_MARKER)
+    // Bytes, not text: a non-UTF-8 rule is foreign, never mistaken for an absent one.
+    if let Ok(existing) = std::fs::read(&path)
+        && !existing.starts_with(emit::CLAUDE_RULE_MARKER.as_bytes())
     {
         return Err(SteleError::input(
             format!("{CLAUDE_RULES_DIR}/{name}"),

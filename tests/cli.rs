@@ -323,16 +323,26 @@ fn lock_gate_and_report_and_json_envelope() {
     );
 }
 
-// A bad command line is an exit-2 input error naming the fix (§5.3). `--undercover` is an
-// `init`-only flag (§3.5): on any other verb it is a bad flag, never silently ignored (the
-// read/emit verbs otherwise tolerate unknown tokens).
+// A bad command line is an exit-2 input error naming the fix (§5.3). Every verb rejects a
+// token outside its grammar — a misspelled `check --run-command` never silently skips the
+// liveness run, nor `invariants --touchng` return the unscoped list; `--undercover` is an
+// `init`-only flag (§3.5).
 #[test]
 fn bad_command_lines_exit_2() {
     let fixture = built();
     for (args, says) in [
-        (&["check", "--undercover"][..], "only valid on `stele init`"),
-        (&["emit", "--undercover"], "only valid on `stele init`"),
-        (&["nodes", "--undercover"], "only valid on `stele init`"),
+        (
+            &["check", "--run-command"][..],
+            "unexpected argument \"--run-command\"; usage: stele check",
+        ),
+        (&["check", "--undercover"], "usage: stele check"),
+        (&["emit", "--undercover"], "usage: stele emit"),
+        (&["nodes", "--undercover"], "usage: stele nodes"),
+        (&["invariants", "--touchng", "x"], "usage: stele invariants"),
+        (&["invariants", "--touching=x"], "usage: stele invariants"),
+        (&["hazards", "--nod", "x"], "usage: stele hazards"),
+        (&["node", "apps/web", "x"], "unexpected argument \"x\""),
+        (&["root", "x"], "usage: stele root"),
         (&[], "usage: stele root | node <id>"),
         (&["bogus"], "unknown command: \"bogus\""),
         (&["blame"], "usage: stele blame <node-id>/<slug>"),

@@ -365,8 +365,10 @@ fn shallow_clone_reports_history_unavailable_not_silent_pass() {
         check.code, 1,
         "shallow clone must not silently pass:\n{out}"
     );
+    // Addressed to the parser-less claim: code-rule's digest drift alone also says
+    // "history unavailable", so a bare substring passed with the churn path silenced.
     assert!(
-        out.contains("history unavailable (shallow clone?)"),
+        out.contains("doc-rule — cannot verify freshness: history unavailable (shallow clone?)"),
         "check must name the honest failure:\n{out}"
     );
     assert!(out.contains("staling commit: history unavailable"), "{out}");

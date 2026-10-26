@@ -214,7 +214,7 @@ pub fn render_human(findings: &[Finding]) -> String {
 // ─── the registry ─────────────────────────────────────────────────────────────
 
 /// Everything an assertion class reads: the rebuilt graph plus the check-time config
-/// (§3.4), the VCS-tracked file set (§4.1 enforced_by, §4.3 exhaustiveness scope), and
+/// (§3.4), the `.steleignore`-filtered tracked file set (§4.3 exhaustiveness scope), and
 /// the committed lock — the sole carrier of `verified {sha, digest}` on the check path
 /// (§4.5; `build` stamps it, `check` never re-stamps, so the rebuilt graph's claims
 /// carry no watermark and freshness reads it from here).
@@ -239,11 +239,11 @@ pub struct Context<'a> {
 
 impl Context<'_> {
     /// Whether `rel` (a repo-root-relative POSIX path) is a VCS-tracked file (§4.1
-    /// enforced_by / §2.4 scan scope: tracked implies committed).
-    fn tracks(&self, rel: &str) -> bool {
-        self.tracked
-            .iter()
-            .any(|path| path.to_string_lossy().replace('\\', "/") == rel)
+    /// enforced_by: tracked implies committed). Asks git, not [`Self::tracked`]: that is
+    /// the `.steleignore`-filtered scan roster, and a referenced guard is not scanned.
+    fn tracks(&self, rel: &str) -> Result<bool> {
+        let output = git(self.root, "ls-files -z --", &[&format!(":(literal){rel}")])?;
+        Ok(output.stdout == format!("{rel}\0").as_bytes())
     }
 }
 
@@ -309,7 +309,7 @@ fn referential(ctx: &Context) -> Result<Vec<Finding>> {
 
             // (d) the enforced_by artifact is a VCS-tracked file.
             if let Some(artifact) = &claim.enforced_by
-                && !ctx.tracks(artifact)
+                && !ctx.tracks(artifact)?
             {
                 findings.push(Finding::error(
                     AssertionClass::Referential,

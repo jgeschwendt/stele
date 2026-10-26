@@ -17,10 +17,9 @@
 //! negates (last matching pattern wins); a leading or internal `/` anchors the pattern
 //! to the repo root; a trailing `/` matches directories only; `*` and `?` match within
 //! one path segment; `**` matches across segments; a slash-free pattern matches at any
-//! depth. Two documented divergences from full gitignore, neither reachable by a
-//! source-scan exclude list: character classes (`[a-z]`) and backslash escapes are not
-//! parsed, and gitignore's "a file under an excluded parent cannot be re-included by a
-//! later `!` negation" rule is not modeled — negation is evaluated per path.
+//! depth; as in git, nothing re-includes a file under an excluded directory. One documented
+//! divergence from full gitignore, unreachable by a source-scan exclude list: character
+//! classes (`[a-z]`) and backslash escapes are not parsed.
 
 use crate::model::{Result, SteleError};
 use std::path::{Path, PathBuf};
@@ -81,19 +80,18 @@ impl Steleignore {
         }
     }
 
-    /// Whether a repo-root-relative POSIX `path` is excluded (§2.4). Last matching
-    /// pattern wins; a `!` pattern re-includes. A path is matched by a pattern when the
-    /// pattern matches the whole path or any ancestor directory of it (everything under
-    /// an excluded directory is excluded too).
+    /// Whether a repo-root-relative POSIX `path` is excluded (§2.4), judged as git walks:
+    /// each ancestor directory, then the file, by its last matching pattern (`!`
+    /// re-includes; a trailing-`/` pattern judges directories only). An excluded ancestor
+    /// excludes everything under it, past any later `!`.
     pub fn is_ignored(&self, path: &str) -> bool {
         let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-        let mut ignored = false;
-        for pattern in &self.patterns {
-            if pattern.matches(&segments) {
-                ignored = !pattern.negated;
-            }
-        }
-        ignored
+        (1..=segments.len()).any(|len| {
+            let file = len == segments.len();
+            (self.patterns.iter().rev())
+                .find(|p| !(file && p.dir_only) && seg_match(&p.segments, &segments[..len]))
+                .is_some_and(|p| !p.negated)
+        })
     }
 }
 
@@ -139,29 +137,16 @@ impl Pattern {
             segments,
         })
     }
-
-    /// Whether this pattern excludes `path` (given as its non-empty segment list). The
-    /// pattern must fully match either the whole path or one of its ancestor-directory
-    /// prefixes; a `dir_only` pattern never matches the final (file) segment, so it
-    /// tests strict prefixes only.
-    fn matches(&self, path: &[&str]) -> bool {
-        let last_prefix = if self.dir_only {
-            path.len().saturating_sub(1)
-        } else {
-            path.len()
-        };
-        (1..=last_prefix).any(|len| seg_match(&self.segments, &path[..len]))
-    }
 }
 
 /// Match a pattern's segment list against a candidate segment list, `**` spanning zero
-/// or more segments. A full (both-exhausted) match is required.
+/// or more segments — one or more when trailing, so `dir/**` matches inside `dir`, never
+/// `dir` itself. A full (both-exhausted) match is required.
 fn seg_match(pattern: &[Segment], candidate: &[&str]) -> bool {
     match pattern.split_first() {
         None => candidate.is_empty(),
-        Some((Segment::DoubleStar, rest)) => {
-            (0..=candidate.len()).any(|skip| seg_match(rest, &candidate[skip..]))
-        }
+        Some((Segment::DoubleStar, rest)) => (usize::from(rest.is_empty())..=candidate.len())
+            .any(|skip| seg_match(rest, &candidate[skip..])),
         Some((Segment::Glob(glob), rest)) => match candidate.split_first() {
             Some((head, tail)) if glob_match(glob, head) => seg_match(rest, tail),
             _ => false,
@@ -279,5 +264,17 @@ mod tests {
         let s = "*.log\n!keep.log\n";
         assert!(ig(s, "a/debug.log"));
         assert!(!ig(s, "a/keep.log"));
+    }
+
+    #[test]
+    fn negation_follows_git_directory_by_directory() {
+        // A dir-only `!` never re-includes a file a file pattern excluded.
+        assert!(ig("*_gen.py\n!lib/\n", "lib/vendor/copy_gen.py"));
+        // Nothing re-includes a file under an excluded directory…
+        assert!(ig("vendor/\n!vendor/keep.py\n", "vendor/keep.py"));
+        // …but re-including the directory itself does, and `dir/**` excludes only its contents.
+        assert!(!ig("build/\n!build/\n", "build/x"));
+        assert!(!ig("vendor/**\n!vendor/keep.py\n", "vendor/keep.py"));
+        assert!(ig("vendor/**\n!vendor/keep.py\n", "vendor/drop.py"));
     }
 }

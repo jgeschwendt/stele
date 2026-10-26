@@ -22,7 +22,7 @@
 //! classes (`[a-z]`) and backslash escapes are not parsed.
 
 use crate::model::{Result, SteleError};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// The committed root exclude file (§2.4).
 const STELEIGNORE_FILE: &str = ".steleignore";
@@ -49,16 +49,9 @@ enum Segment {
 }
 
 impl Steleignore {
-    /// Load the root `.steleignore` (§2.4) when `tracked`, the raw `git ls-files` roster,
-    /// holds it. Absent or untracked → an empty matcher (ignore nothing), so a repo without
-    /// a committed one behaves exactly as before this feature, and as a clean clone does.
-    pub fn load(root: &Path, tracked: &[PathBuf]) -> Result<Self> {
-        if !tracked
-            .iter()
-            .any(|path| path == Path::new(STELEIGNORE_FILE))
-        {
-            return Ok(Self::default());
-        }
+    /// Load the root `.steleignore` (§2.4). Absent → an empty matcher (ignore nothing),
+    /// which is why a repo without one behaves exactly as before this feature.
+    pub fn load(root: &Path) -> Result<Self> {
         match std::fs::read_to_string(root.join(STELEIGNORE_FILE)) {
             Ok(contents) => Ok(Self::parse(&contents)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
@@ -222,9 +215,7 @@ mod tests {
         std::fs::create_dir(dir.path().join(STELEIGNORE_FILE)).unwrap();
         let internal = Some(crate::model::ExitCode::Internal);
         assert_eq!(
-            Steleignore::load(dir.path(), &[STELEIGNORE_FILE.into()])
-                .err()
-                .map(|e| e.exit),
+            Steleignore::load(dir.path()).err().map(|e| e.exit),
             internal
         );
         assert_eq!(

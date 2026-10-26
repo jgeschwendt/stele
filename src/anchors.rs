@@ -460,6 +460,16 @@ fn resolve_markdown_heading(
     let Some(contents) = read_text(&root.join(path), rel_path)? else {
         return Ok(SymbolResolution::Unresolved);
     };
+    // The generated region is emit's (§3.1): its headings are not anchors and, markers
+    // included, it counts as one line (the empty one-line form), so emit can neither
+    // shadow nor move a resolved heading.
+    let contents = match crate::parse::find_region(path, &contents).ok().flatten() {
+        Some(r) => {
+            let start = r.content_start - usize::from(contents[..r.content_start].ends_with('\n'));
+            format!("{}{}", &contents[..start], &contents[r.content_end..])
+        }
+        None => contents,
+    };
     let mut lines = Vec::new();
     let mut fence: Option<(char, usize)> = None;
     for (index, line) in contents.lines().enumerate() {

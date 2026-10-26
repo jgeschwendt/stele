@@ -80,24 +80,40 @@ fn blank_enforced_by_is_rejected_at_build() {
 }
 
 /// Two ADR files sharing a number make `§ 0003` ambiguous (the lock keeps one): check
-/// names both, whichever status each carries.
+/// names both, whichever status each carries. Unreferenced twins (log4brains' same-day
+/// `20240101-*`) leave nothing ambiguous and pass.
 #[test]
 fn duplicate_adr_number_names_both_files() {
-    for (a, b) in [("Accepted", "Superseded"), ("Superseded", "Accepted")] {
+    for (a, b, edges) in [
+        (
+            "Accepted",
+            "Superseded",
+            "edges:\n  decided_by: [\"§ 0003\"]\n",
+        ),
+        (
+            "Superseded",
+            "Accepted",
+            "edges:\n  decided_by: [\"§ 0003\"]\n",
+        ),
+        ("Accepted", "Accepted", ""),
+    ] {
         let fixture = Fixture::bare();
         fixture.write(
             "AGENTS.md",
-            "# root\n\n```stele\nkind: system\nedges:\n  decided_by: [\"§ 0003\"]\n```\n",
+            &format!("# root\n\n```stele\nkind: system\n{edges}```\n"),
         );
         fixture.write("adr/0003-a.md", &format!("# a\n\nStatus: {a}\n"));
         fixture.write("adr/0003-b.md", &format!("# b\n\nStatus: {b}\n"));
         fixture.commit("twin adrs");
         assert_eq!(fixture.run(&["build"]).code, 0);
-        let out = fixture.run(&["check", "--only", "referential"]).combined();
-        assert!(
+        let check = fixture.run(&["check", "--only", "referential"]);
+        let out = check.combined();
+        assert_eq!(
             out.contains("adr/0003 is declared by 2 files: adr/0003-a.md, adr/0003-b.md"),
+            !edges.is_empty(),
             "{out}"
         );
+        assert_eq!(check.code, i32::from(!edges.is_empty()), "{out}");
     }
 }
 

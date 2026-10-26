@@ -138,7 +138,7 @@ stele emit    # fills each `&lt;!-- @stele --&gt;` … `&lt;!-- @end --&gt;` reg
 </code></pre>
 <p class="docs-note">Commit everything: the <code class="code">AGENTS.md</code> files, their <code class="code">CLAUDE.md</code> shims, <code class="code">.stele/graph.lock</code>, <code class="code">.stele/index/</code>. The lock is the canonical graph — queries and CI read it, never re-derive it.</p>
 <p class="docs-note"><code class="code">build</code> is the reconciliation point: it re-stamps each claim&#39;s <code class="code">verified</code> mark against the current code. Run it locally when you&#39;ve reviewed that a claim still holds; <strong>CI never runs <code class="code">stele build</code></strong> — that would launder staleness.</p>
-<p class="docs-note">Paths the engine should never scan (fixtures, vendored trees) go in a committed <code class="code">.steleignore</code> at the root — gitignore syntax; an untracked one applies nothing.</p>
+<p class="docs-note">Paths the engine should never scan (fixtures, vendored trees) go in a <code class="code">.steleignore</code> at the root — gitignore syntax.</p>
 </div>
 </section>
 

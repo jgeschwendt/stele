@@ -2567,7 +2567,7 @@ fn build_graph_and_warn(ws: &Workspace, tracked: &[PathBuf]) -> Result<Graph> {
         (build_graph(ws, tracked), others())
     });
     let graph = graph?;
-    warn_untracked_node_files(ws, tracked, others?)?;
+    warn_untracked_node_files(ws, others?)?;
     Ok(graph)
 }
 
@@ -2695,9 +2695,8 @@ fn head_sha(root: &Path) -> Result<Option<String>> {
 /// subtree invisible to all of them at once (`steleignore` module). Repo-root-relative
 /// and sorted for deterministic iteration.
 fn tracked_files(root: &Path) -> Result<Vec<PathBuf>> {
-    let tracked = git_ls_files(root, &[])?;
-    let ignore = Steleignore::load(root, &tracked)?;
-    Ok(tracked
+    let ignore = Steleignore::load(root)?;
+    Ok(git_ls_files(root, &[])?
         .into_iter()
         .filter(|rel| !ignore.is_ignored(&rel.to_string_lossy().replace('\\', "/")))
         .collect())
@@ -2714,13 +2713,9 @@ fn tracked_files(root: &Path) -> Result<Vec<PathBuf>> {
 /// node). The message differs by mode: Normal names the untracked node the tracked scan misses
 /// (run `git add`); Undercover names a node authored outside the overlay (build reads only
 /// `.stele/tree/`), which is the confusion signal, not an adoption gap.
-fn warn_untracked_node_files(
-    ws: &Workspace,
-    tracked: &[PathBuf],
-    others: Vec<PathBuf>,
-) -> Result<()> {
+fn warn_untracked_node_files(ws: &Workspace, others: Vec<PathBuf>) -> Result<()> {
     let root = &ws.work;
-    let ignore = Steleignore::load(root, tracked)?;
+    let ignore = Steleignore::load(root)?;
     for rel in others {
         if rel.file_name().is_none_or(|name| name != "AGENTS.md") {
             continue;

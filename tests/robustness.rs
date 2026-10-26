@@ -439,3 +439,59 @@ fn anchor_paths_outside_the_repo_never_resolve() {
         );
     }
 }
+
+// An ADR is scanned like any tracked file (§2.6): a Latin-1 byte decodes lossily (only its
+// status token matters), and a dangling symlink or an unstaged delete is skipped — never an
+// exit-3 abort of `build`/`check` (a delete after the build stales the lock: exit 2).
+#[cfg(unix)]
+#[test]
+fn unreadable_adrs_never_abort() {
+    let fixture = Fixture::bare();
+    fixture.write("AGENTS.md", "# root\n\n```stele\nkind: system\n```\n");
+    fixture.write("adr/0001-a.md", "# 1\n\nStatus: accepted\n");
+    std::fs::write(
+        fixture.path("adr/0002-b.md"),
+        b"# 2\n\nStatus: rejected\nAuthor: Ren\xe9\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("../gone.md", fixture.path("adr/0003-moved.md")).unwrap();
+    fixture.commit("a Latin-1 ADR and a dangling one");
+    let build = fixture.run(&["build"]);
+    assert_eq!(build.code, 0, "{}", build.combined());
+    let lock = fixture.read(".stele/graph.lock");
+    assert!(
+        lock.contains("\"rejected\"") && !lock.contains("0003"),
+        "{lock}"
+    );
+    fixture.commit("lock");
+    std::fs::remove_file(fixture.path("adr/0001-a.md")).unwrap();
+    let check = fixture.run(&["check"]);
+    assert_eq!(check.code, 2, "{}", check.combined());
+    assert!(
+        check.stderr.contains("run stele build"),
+        "{}",
+        check.combined()
+    );
+}
+
+// A node source gone from the work tree (an unstaged `rm`) is §5.3's "a lock node whose
+// file is gone": an input error (exit 2) naming it, never an internal exit 3.
+#[test]
+fn a_gone_node_source_is_an_input_error() {
+    let fixture = Fixture::bare();
+    fixture.write("AGENTS.md", "# root\n\n```stele\nkind: system\n```\n");
+    fixture.write("lib/AGENTS.md", "# lib\n\n```stele\nkind: container\n```\n");
+    fixture.commit("two nodes");
+    assert_eq!(fixture.run(&["build"]).code, 0);
+    fixture.commit("lock");
+    std::fs::remove_file(fixture.path("lib/AGENTS.md")).unwrap();
+    for verb in ["build", "check", "init"] {
+        let run = fixture.run(&[verb]);
+        assert_eq!(run.code, 2, "{verb}: {}", run.combined());
+        assert!(
+            run.stderr.contains("lib/AGENTS.md: node source is gone"),
+            "{verb}: {}",
+            run.combined()
+        );
+    }
+}

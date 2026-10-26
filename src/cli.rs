@@ -2036,8 +2036,7 @@ fn ensure_region_for_block(root: &Path, rel: &Path, written: &mut Vec<String>) -
     let Some(rel) = &in_tree_target(root, rel) else {
         return Ok(());
     };
-    let contents = std::fs::read_to_string(root.join(rel))
-        .map_err(|e| SteleError::internal(format!("read {}: {e}", rel.display())))?;
+    let contents = read_node_source(&root.join(rel), rel)?;
     // Ok(None) is "no stele block" — a blockless file declares no node and needs no
     // region; Ok(Some)/Err both mean a block is present.
     if matches!(parse::parse_agents_file(rel, &contents), Ok(None)) {
@@ -2067,8 +2066,7 @@ fn existing_node_dirs(root: &Path, tracked: &[PathBuf]) -> Result<BTreeSet<Strin
         if rel.file_name().is_none_or(|name| name != "AGENTS.md") {
             continue;
         }
-        let contents = std::fs::read_to_string(root.join(rel))
-            .map_err(|e| SteleError::internal(format!("read {}: {e}", rel.display())))?;
+        let contents = read_node_source(&root.join(rel), rel)?;
         // Ok(None) is "no stele block"; Ok(Some)/Err both mean a block is present.
         if !matches!(parse::parse_agents_file(rel, &contents), Ok(None)) {
             dirs.insert(declaring_dir_str(rel));
@@ -2557,11 +2555,11 @@ fn build_graph_and_warn(ws: &Workspace, tracked: &[PathBuf]) -> Result<Graph> {
 /// repo-root-relative `rel` in any error (identical text in both modes, §3.5). Unlike the
 /// scan's binary-skip (§2.4), a declared node source that is not valid UTF-8 is a hard
 /// §5.3 input error naming the file — a node whose own bytes cannot be read is a
-/// repo-out-of-spec condition, never silently dropped. A genuine IO failure stays a §5.3
-/// internal error.
+/// repo-out-of-spec condition, never silently dropped; so is one gone from the work tree
+/// (§5.3 "a lock node whose file is gone"). A genuine IO failure stays a §5.3 internal error.
 fn read_node_source(source: &Path, rel: &Path) -> Result<String> {
-    let bytes = std::fs::read(source)
-        .map_err(|e| SteleError::internal(format!("read {}: {e}", rel.display())))?;
+    let bytes = crate::model::read_tracked(source, &rel.display().to_string())?
+        .ok_or_else(|| SteleError::input_msg(format!("{}: node source is gone", rel.display())))?;
     String::from_utf8(bytes).map_err(|_| {
         SteleError::input_msg(format!(
             "{}: node source is not valid UTF-8 (§3.1)",
@@ -2788,12 +2786,15 @@ fn build_adr_index(root: &Path, tracked: &[PathBuf]) -> Result<Vec<AdrEntry>> {
         let number: i64 = nnnn.parse().map_err(|_| {
             SteleError::input(path, 1, format!("ADR number {nnnn:?} is not an integer"))
         })?;
-        let contents = std::fs::read_to_string(root.join(path))
-            .map_err(|e| SteleError::internal(format!("read {path}: {e}")))?;
+        // Gone (deleted, dangling) is skipped like any scanned file; bytes decode lossily,
+        // as only the status token matters.
+        let Some(bytes) = crate::model::read_tracked(&root.join(path), path)? else {
+            continue;
+        };
         entries.push(AdrEntry {
             id: format!("{dir}/{nnnn}"),
             number,
-            status: adr_status(&contents),
+            status: adr_status(&String::from_utf8_lossy(&bytes)),
             path: path.clone(),
         });
     }

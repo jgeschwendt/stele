@@ -101,11 +101,18 @@ pub fn read_tracked(path: &Path, file: &str) -> Result<Option<Vec<u8>>> {
     }
 }
 
-/// [`read_tracked`] as UTF-8: `Ok(None)` also when the bytes are not valid UTF-8, a binary
-/// blob (PNG, font, icon) the scan skips rather than aborting on (§2.4). Never for node
-/// sources (AGENTS.md): an invalid-UTF-8 node source is a hard input error, not a skip.
+/// How far [`read_text`] sniffs for a NUL — git's own binary heuristic.
+const BINARY_SNIFF: usize = 8 << 10;
+
+/// [`read_tracked`] as text: `Ok(None)` also for a binary blob (PNG, font, icon) the scan
+/// skips rather than aborting on (§2.4) — a NUL in the first 8 KiB. Any other bytes decode
+/// lossily, so a legacy-encoded source (Latin-1, CP1252) keeps its ASCII imports and tokens
+/// instead of vanishing from the graph. Never for node sources (AGENTS.md): an
+/// invalid-UTF-8 node source is a hard input error, not a skip.
 pub fn read_text(path: &Path, file: &str) -> Result<Option<String>> {
-    Ok(read_tracked(path, file)?.and_then(|bytes| String::from_utf8(bytes).ok()))
+    Ok(read_tracked(path, file)?
+        .filter(|bytes| !bytes.iter().take(BINARY_SNIFF).any(|&b| b == 0))
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned()))
 }
 
 /// Result specialized to [`SteleError`]; the shared return type across phases.

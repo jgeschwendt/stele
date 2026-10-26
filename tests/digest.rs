@@ -112,7 +112,7 @@ fn comment_churn_inside_bound_region_is_stable() {
 fn parserless_language_has_no_digest() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("NOTES.md"), "# ※ doc\ntext\n").unwrap();
-    fs::write(dir.path().join("blob.rs"), b"\xff\xfe").unwrap();
+    fs::write(dir.path().join("blob.rs"), b"\xff\xfe\0").unwrap();
     for resolved in ["NOTES.md:1", "blob.rs:1"] {
         assert_eq!(
             digest_for_claim(dir.path(), "※ doc", resolved).unwrap(),

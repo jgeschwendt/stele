@@ -2307,16 +2307,23 @@ fn parse_cargo_aliases(root: &Path) -> BTreeSet<String> {
 }
 
 /// Extract recipe names from a justfile (§4.6): an unindented line whose name (up to its
-/// first `:`) is a recipe head. `name := value` assignments are skipped; recipe
-/// parameters after the name are ignored. Blank lines, `set …` directives and `#`
-/// comments need no rule: they carry no `:`, or a head that is not a recipe name.
+/// first `:`, a quiet `@` dropped) is a recipe head. Of the `name := value` lines only
+/// `alias name := recipe` names one; recipe parameters after the name are ignored. Blank
+/// lines, `set …` directives and `#` comments need no rule: they carry no `:`, or a head
+/// that is not a recipe name.
 fn parse_just_recipes(source: &str) -> BTreeSet<String> {
     source
         .lines()
         .filter(|line| !line.starts_with([' ', '\t']))
         .filter_map(|line| line.split_once(':'))
-        .filter(|(_, rest)| !rest.starts_with('='))
-        .filter_map(|(head, _)| head.split_whitespace().next())
+        .filter_map(|(head, rest)| {
+            let mut words = head.split_whitespace();
+            match (words.next()?, rest.starts_with('=')) {
+                ("alias", true) => words.next(),
+                (name, false) => Some(name.strip_prefix('@').unwrap_or(name)),
+                _ => None,
+            }
+        })
         .filter(|name| {
             name.chars()
                 .all(|c| c.is_alphanumeric() || c == '_' || c == '-')

@@ -116,7 +116,7 @@ fn probe5_runner_variety_npm_cargo_just() {
     );
     fixture.write(
         "justfile",
-        "build:\n\techo hi\ndeploy target:\n\techo {{target}}\n",
+        "alias b := build\nbuild:\n\techo hi\n@deploy target:\n\techo {{target}}\n",
     );
     add_root_commands(
         &fixture,
@@ -126,6 +126,7 @@ fn probe5_runner_variety_npm_cargo_just() {
          rs-builtin: cargo build\n  \
          rs-bad: cargo frobnicate\n  \
          just-ok: just deploy prod\n  \
+         just-alias: just b\n  \
          just-bad: just teardown\n",
     );
 
@@ -150,8 +151,8 @@ fn probe5_runner_variety_npm_cargo_just() {
         out.contains("`just teardown` — recipe not found in justfile"),
         "{out}"
     );
-    // Only the three missing tasks fail; the four valid ones (script, alias, builtin,
-    // recipe) resolve.
+    // Only the three missing tasks fail; the five valid ones (script, alias, builtin,
+    // quiet recipe, recipe alias) resolve.
     assert_eq!(liveness_lines(&out), 3, "{out}");
 }
 

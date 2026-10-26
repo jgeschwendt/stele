@@ -840,14 +840,29 @@ impl DirScan {
 }
 
 /// Whether the root-relative dir `segments` is dropped from the §4.3 walk: its name is a
-/// fixed ignored dir (`.git`/`.stele`) or matches an `exhaustiveness.exclude` glob — a
-/// `/`-bearing glob against the whole path (`apps/legacy`), any other against the name.
+/// fixed ignored dir (`.git`/`.stele`) or matches an `exhaustiveness.exclude` glob read as a
+/// gitignore line — `./`, a leading/trailing `/` and a trailing `/**` dropped; a glob that
+/// had a non-trailing `/` anchored at the root (`apps/legacy`, `/legacy`), one led by `**/`
+/// against every path suffix, any other against the name.
 fn is_ignored_dir(segments: &[&str], excludes: &[String]) -> bool {
-    let (name, path) = (segments[segments.len() - 1], segments.join("/"));
+    let name = segments[segments.len() - 1];
     IGNORED_DIRS.contains(&name)
-        || excludes
-            .iter()
-            .any(|glob| glob_matches(glob, if glob.contains('/') { &path } else { name }))
+        || excludes.iter().any(|glob| {
+            let deep = glob.starts_with("**/");
+            let anchored = !deep && glob.trim_end_matches('/').contains('/');
+            let glob = glob
+                .trim_start_matches("./")
+                .trim_start_matches("**/")
+                .trim_matches('/');
+            let glob = glob.strip_suffix("/**").unwrap_or(glob);
+            match (anchored, deep) {
+                (true, _) => glob_matches(glob, &segments.join("/")),
+                (_, true) => {
+                    (0..segments.len()).any(|i| glob_matches(glob, &segments[i..].join("/")))
+                }
+                _ => glob_matches(glob, name),
+            }
+        })
 }
 
 /// A minimal `*`/`?` glob match (anchored, whole-string; `*` spans `/`) for

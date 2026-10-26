@@ -112,6 +112,8 @@ fn whitespace_only_string_content_enters_the_digest() {
     for (name, template) in [
         ("m.py", "def f(w):\n    return S.join(w)\n"),
         ("m.rs", "fn f() -> &'static str { S }\n"),
+        ("m.rs", "fn f() -> &'static str { rS }\n"),
+        ("m.rs", "fn f() -> &'static str { r#S# }\n"),
         ("m.ts", "function f() { return S; }\n"),
         ("m.ex", "def f, do: S\n"),
     ] {

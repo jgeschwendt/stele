@@ -822,7 +822,9 @@ fn serialize_structure(bound: Node, src: &[u8]) -> String {
         if node.kind().contains("comment") {
             return false;
         }
-        if node.child_count() > 0 {
+        // tree-sitter-rust's scanner spans a whitespace-only raw string's content as
+        // empty, so `r" "` serializes whole, as one leaf.
+        if node.child_count() > 0 && node.kind() != "raw_string_literal" {
             out.push('(');
             out.push_str(node.kind());
             open += 1;

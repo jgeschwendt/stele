@@ -233,6 +233,12 @@ fn scan_markdown_line(
     file: &str,
     data: &mut AnchorData,
 ) -> bool {
+    // Outside a comment, a line indented four columns (any leading tab reaches them) is
+    // indented code, or a list item's nested code — a quotation either way.
+    let lead = &line[..line.len() - line.trim_start_matches([' ', '\t']).len()];
+    if !in_comment && (lead.len() >= 4 || lead.contains('\t')) {
+        return false;
+    }
     let mut rest = line;
     loop {
         if in_comment {
@@ -249,15 +255,33 @@ fn scan_markdown_line(
                 }
             }
         } else {
+            let tick = rest.find('`').unwrap_or(rest.len());
             match rest.find(HTML_COMMENT_OPEN) {
-                Some(open) => {
+                Some(open) if open < tick => {
                     rest = &rest[open + HTML_COMMENT_OPEN.len()..];
                     in_comment = true;
                 }
-                None => return false, // rest is prose — skip it.
+                _ if tick < rest.len() => rest = after_code_span(&rest[tick..]),
+                _ => return false, // rest is prose — skip it.
             }
         }
     }
+}
+
+/// The text after the inline code span `s` opens (CommonMark: a backtick run closed by
+/// the next run of the same length); an unclosed run is literal and only it is skipped.
+fn after_code_span(s: &str) -> &str {
+    let ticks = |s: &str| s.len() - s.trim_start_matches('`').len();
+    let after = &s[ticks(s)..];
+    let mut from = 0;
+    while let Some(at) = after[from..].find('`') {
+        let run = ticks(&after[from + at..]);
+        if run == ticks(s) {
+            return &after[from + at + run..];
+        }
+        from += at + run;
+    }
+    after
 }
 
 /// Scan a text blob (a comment's text, or a whole parser-less file) line by line,

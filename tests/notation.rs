@@ -250,3 +250,30 @@ fn superseded_lock_versions_are_exit_2_naming_their_fix() {
         }
     }
 }
+
+// §2.5 markdown quotation: a `<!--` in an inline code span or an indented code block is
+// code, not a comment — the quoted token declares nothing, and an unclosed backticked
+// `<!--` never opens a comment that would swallow later prose.
+#[test]
+fn markdown_code_spans_and_indented_code_quote_comments() {
+    let fixture = Fixture::bare();
+    fixture.write(
+        "AGENTS.md",
+        "# p\n\n```stele\nkind: system\npurpose: quotation probe\ninvariants:\n\
+         \x20 - claim: a is capped\n    anchor: ※ cap-a\n\
+         \x20 - claim: prose declares nothing\n    anchor: ※ stray-prose\n```\n\n\
+         Declare with ``<!-- ※ cap-a -->`` in markdown; comments are written `<!--`;\n\
+         ``a`b`` nests, a lone ` is literal.\n\n\
+         \x20   <!-- ※ cap-a -->\n\n※ stray-prose\n",
+    );
+    fixture.write("m.ts", "// ※ cap-a\nexport function a() {}\n");
+    fixture.commit("quote the comment syntax");
+    assert_eq!(fixture.run(&["build"]).code, 0);
+    fixture.commit("lock");
+
+    let check = fixture.run(&["check"]);
+    let out = check.combined();
+    assert_eq!(check.code, 1, "{out}");
+    assert!(out.contains("anchor ※ stray-prose unresolved"), "{out}");
+    assert!(!out.contains("cap-a"), "{out}");
+}

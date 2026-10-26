@@ -166,6 +166,45 @@ fn block_comment_landmark_binds_the_following_definition() {
     );
 }
 
+/// A landmark binds only the sibling it immediately precedes: over a non-definition
+/// (`const`, a module assignment, an `impl`) it falls back to the file rather than
+/// reaching a later definition, so editing the value fires; an attribute between the
+/// comment and a definition is skipped, so the definition still binds.
+#[test]
+fn landmark_over_a_non_definition_never_reaches_a_later_definition() {
+    for (name, src, from, to) in [
+        (
+            "a.ts",
+            "// ※ note\nexport const CAP = 100;\n\nfunction other() { return 1; }\n",
+            "100",
+            "999",
+        ),
+        (
+            "a.py",
+            "# ※ note\nCAP = 100\n\ndef other():\n    return 1\n",
+            "100",
+            "999",
+        ),
+        (
+            "a.rs",
+            "// ※ note\nimpl R { fn cap() -> u32 { 100 } }\nfn other() {}\n",
+            "100",
+            "999",
+        ),
+        (
+            "a.rs",
+            "// ※ note\n#[inline]\nfn guard() {}\nfn other() -> u32 { 1 }\n",
+            "{}",
+            "{ 2; }",
+        ),
+    ] {
+        let digest = |src: &str| digest_inline(name, src, "※ note", &format!("{name}:1"));
+        assert_ne!(digest(src), digest(&src.replace(from, to)), "{src}");
+        let sibling = src.replace("1", "2");
+        assert_eq!(digest(src) == digest(&sibling), from == "{}", "{src}");
+    }
+}
+
 /// (d) A landmark preceding NO definition in its scope falls back to its strictly-
 /// enclosing named node, then the whole file (§4.5). Two tiers:
 ///

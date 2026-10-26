@@ -731,25 +731,22 @@ fn find_comment_at_row(root: Node, row: usize) -> Option<Node> {
     found
 }
 
-/// The first named definition among `comment`'s siblings that follow it in source
-/// order (§4.5 immediate-precedence): intervening comment/attribute/doc siblings are
-/// not definitions, so they are skipped rather than breaking the binding. A wrapper
-/// sibling — TS/JS `export_statement`, Python `decorated_definition` — binds whole when it
-/// wraps a definition, so `export function a` and `@dec def a` digest the modifier or
-/// decorator too.
+/// The named definition `comment` immediately precedes (§4.5): intervening comment,
+/// attribute (`#[…]`) and `@`-doc/decorator siblings are skipped; any other sibling ends
+/// the search, so a landmark over a `const` or an `impl` never reaches a later definition.
+/// A wrapper sibling — TS/JS `export_statement`, Python `decorated_definition` — binds
+/// whole when it wraps a definition, so `export function a` and `@dec def a` digest the
+/// modifier or decorator too.
 fn next_definition_sibling<'a>(comment: Node<'a>, src: &[u8], lang: Lang) -> Option<Node<'a>> {
-    let parent = comment.parent()?;
-    let mut cursor = parent.walk();
-    let mut after = false;
-    for child in parent.children(&mut cursor) {
-        if after && is_definition_node(lang, unwrapped(child), src) {
-            return Some(child);
-        }
-        if child.id() == comment.id() {
-            after = true;
-        }
+    let mut next = comment.next_sibling();
+    while let Some(node) = next.filter(|n| !is_definition_node(lang, unwrapped(*n), src)) {
+        let skipped = ["attribute", "comment"]
+            .iter()
+            .any(|k| node.kind().contains(k))
+            || node.utf8_text(src).is_ok_and(|text| text.starts_with('@'));
+        next = node.next_sibling().filter(|_| skipped);
     }
-    None
+    next
 }
 
 /// The definition a wrapper (`export_statement`, `decorated_definition`, nested) wraps, or

@@ -884,6 +884,11 @@ mod tests {
                 Some(NodeKind::System),
             ),
             (format!("<!-- x --> y\n{live}"), Some(NodeKind::System)),
+            // Indented four spaces it is a code line, not a comment opener.
+            (
+                format!("    <!-- example\n\n{live}"),
+                Some(NodeKind::System),
+            ),
             ("<!--\n```stele\nkind: component\n```\n".to_string(), None),
         ] {
             let node = parse_agents_file(Path::new("AGENTS.md"), &contents).unwrap();

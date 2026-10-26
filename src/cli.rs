@@ -2795,7 +2795,8 @@ fn adr_number<'a>(dir: &str, path: &'a str) -> Option<&'a str> {
 ///   • MADR YAML frontmatter — a `status:` key inside a leading `---`-fenced block;
 ///   • adr-tools/Nygard inline — a `Status: X` on any line (the original form);
 ///   • adr-tools/Nygard heading — a `## Status` ATX heading, the value on the first
-///     non-empty line after it (markdown links stripped, first word token decides).
+///     non-empty line after it.
+/// Each value reduces to its first word ([`status_word`]): quotes, emphasis and links drop.
 /// Frontmatter outranks the inline form, which outranks the heading form.
 fn adr_status(contents: &str) -> String {
     const UNKNOWN: &str = "unknown";
@@ -2805,8 +2806,9 @@ fn adr_status(contents: &str) -> String {
         .unwrap_or_else(|| UNKNOWN.to_string())
 }
 
-/// The MADR YAML-frontmatter status: the `status:` key inside a leading `---` fence.
-/// `None` when the file opens with no frontmatter or the block carries no `status:` key.
+/// The MADR YAML-frontmatter status: the `status:` key inside a leading `---` fence,
+/// reduced to its status word (so a quoted scalar reads as its first word). `None` when
+/// the file opens with no frontmatter or the block carries no `status:` key.
 fn frontmatter_status(contents: &str) -> Option<String> {
     const FENCE: &str = "---";
     let mut lines = contents.lines();
@@ -2814,21 +2816,18 @@ fn frontmatter_status(contents: &str) -> Option<String> {
     lines
         .map(str::trim)
         .take_while(|line| *line != FENCE)
-        .find_map(|line| line.strip_prefix("status:"))?
-        .split_whitespace()
-        .next()
-        .map(str::to_ascii_lowercase)
+        .find_map(|line| line.strip_prefix("status:"))
+        .and_then(status_word)
 }
 
-/// The inline `Status: X` form (adr-tools/Nygard, the original): the lowercased first
-/// whitespace token after the first `Status:` on any line. `None` when no line carries
-/// a `Status:` with a following token.
+/// The inline `Status: X` form (adr-tools/Nygard, the original): the status word after
+/// the first `Status:` on any line, markdown emphasis on either side dropped. `None` when
+/// no line carries a `Status:` with a word after it.
 fn inline_status(contents: &str) -> Option<String> {
     contents
         .lines()
         .find_map(|line| line.split("Status:").nth(1))
-        .and_then(|rest| rest.split_whitespace().next())
-        .map(str::to_ascii_lowercase)
+        .and_then(status_word)
 }
 
 /// The `## Status` heading form (adr-tools/Nygard): the first non-empty line after a
@@ -2855,8 +2854,8 @@ fn is_status_heading(line: &str) -> bool {
     body.len() < trimmed.len() && body.trim().eq_ignore_ascii_case("status")
 }
 
-/// The status word of a heading-form value line: markdown-link syntax reduced to its
-/// text by taking the first maximal run of ASCII letters, lowercased (so
+/// The status word of a status value: quoting, emphasis and markdown-link syntax reduced
+/// to its text by taking the first maximal run of ASCII letters, lowercased (so
 /// `[Accepted](0009.md)` → `accepted`, `Superseded by [ADR-9](…)` → `superseded`).
 /// `None` for a line with no letters.
 fn status_word(line: &str) -> Option<String> {
@@ -2949,6 +2948,15 @@ mod tests {
             adr_status("# 1\n\n## Status\n\n[Superseded](0009-x.md) by ADR 9\n"),
             "superseded"
         );
+        // A quoted YAML scalar (the MADR 4.0 template) and markdown emphasis reduce to the
+        // status word, as the heading form does.
+        for contents in [
+            "---\nstatus: \"superseded by ADR-0002\"\n---\n",
+            "**Status:** Superseded\n",
+            "Status: **Superseded**\n",
+        ] {
+            assert_eq!(adr_status(contents), "superseded", "{contents:?}");
+        }
         // No status anywhere → unknown.
         assert_eq!(adr_status("# t\n\n## Context\n\nnothing here\n"), "unknown");
     }

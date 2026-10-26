@@ -363,18 +363,22 @@ fn shallow_clone_reports_history_unavailable_not_silent_pass() {
 }
 
 // §4.5 binding through a wrapper: a landmark above `export function a` or a decorated
-// `def a` binds `a` (the export/decorator node wraps the definition it immediately
-// precedes), so editing `a` stales the claim and editing the next definition `b` does not.
+// `def a` digests the wrapper, named `a`, so editing the export modifier or the decorator
+// stales the claim and editing the next definition `b` does not.
 #[test]
 fn landmark_above_an_export_or_decorator_binds_the_wrapped_definition() {
-    for (file, src) in [
+    for (file, src, wrapper, edited) in [
         (
             "m.ts",
             "// ※ cap-a\nexport function a() { return 1; }\n\nfunction b() { return 2; }\n",
+            "export function",
+            "export default function",
         ),
         (
             "m.py",
             "# ※ cap-a\n@staticmethod\ndef a(): return 1\n\ndef b(): return 2\n",
+            "@staticmethod",
+            "@classmethod",
         ),
     ] {
         let fixture = Fixture::bare();
@@ -393,8 +397,8 @@ fn landmark_above_an_export_or_decorator_binds_the_wrapped_definition() {
         let check = fixture.run(&["check"]);
         assert_eq!(check.code, 0, "{file}: {}", check.combined());
 
-        fixture.replace(file, "return 1", "return 9");
-        fixture.commit("edit a");
+        fixture.replace(file, wrapper, edited);
+        fixture.commit("edit the wrapper");
         let check = fixture.run(&["check"]);
         let out = check.combined();
         assert_eq!(check.code, 1, "{file}: {out}");

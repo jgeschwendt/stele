@@ -217,6 +217,12 @@ fn landmark_over_a_non_definition_never_reaches_a_later_definition() {
             "999",
         ),
         (
+            "a.ex",
+            "# ※ note\n@cap 100\n\ndef other, do: 1\n",
+            "100",
+            "999",
+        ),
+        (
             "a.rs",
             "// ※ note\n#[inline]\nfn guard() {}\nfn other() -> u32 { 1 }\n",
             "{}",

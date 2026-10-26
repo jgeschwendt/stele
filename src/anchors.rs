@@ -43,6 +43,17 @@ const NAME_FIELD: &str = "name";
 /// `call` a definition for landmark binding (§4.5); every other `call` (`use`,
 /// `import`, `alias`, `@attr …`) is not a definition and never binds a landmark.
 const ELIXIR_DEF_KEYWORDS: [&str; 5] = ["def", "defmacro", "defmacrop", "defmodule", "defp"];
+/// Elixir doc/spec attributes a landmark skips on its way to the definition they annotate
+/// (§4.5); any other `@name value` is a constant the landmark binds by falling back.
+const ELIXIR_DOC_ATTRIBUTES: [&str; 7] = [
+    "deprecated",
+    "doc",
+    "impl",
+    "moduledoc",
+    "since",
+    "spec",
+    "typedoc",
+];
 
 // ─── language registry (§2.4) ────────────────────────────────────────────────
 
@@ -744,18 +755,27 @@ fn find_comment_at_row(root: Node, row: usize) -> Option<Node> {
 }
 
 /// The named definition `comment` immediately precedes (§4.5): intervening comment,
-/// attribute (`#[…]`) and `@`-doc/decorator siblings are skipped; any other sibling ends
-/// the search, so a landmark over a `const` or an `impl` never reaches a later definition.
+/// attribute (`#[…]`), decorator and Elixir doc/spec attribute ([`ELIXIR_DOC_ATTRIBUTES`])
+/// siblings are skipped; any other sibling ends the search, so a landmark over a `const`,
+/// an `@cap 100` or an `impl` never reaches a later definition.
 /// A wrapper sibling — TS/JS `export_statement`, Python `decorated_definition` — binds
 /// whole when it wraps a definition, so `export function a` and `@dec def a` digest the
 /// modifier or decorator too.
 fn next_definition_sibling<'a>(comment: Node<'a>, src: &[u8], lang: Lang) -> Option<Node<'a>> {
     let mut next = comment.next_sibling();
     while let Some(node) = next.filter(|n| !is_definition_node(lang, unwrapped(*n), src)) {
-        let skipped = ["attribute", "comment"]
+        let skipped = ["attribute", "comment", "decorator"]
             .iter()
             .any(|k| node.kind().contains(k))
-            || node.utf8_text(src).is_ok_and(|text| text.starts_with('@'));
+            || node
+                .utf8_text(src)
+                .ok()
+                .and_then(|text| text.strip_prefix('@'))
+                .and_then(|attr| {
+                    attr.split(|c: char| !c.is_alphanumeric() && c != '_')
+                        .next()
+                })
+                .is_some_and(|name| ELIXIR_DOC_ATTRIBUTES.contains(&name));
         next = node.next_sibling().filter(|_| skipped);
     }
     next

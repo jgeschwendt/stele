@@ -252,7 +252,8 @@ fn superseded_lock_versions_are_exit_2_naming_their_fix() {
 }
 
 // §2.5 markdown quotation: a `<!--` in an inline code span is code, not a comment — the quoted token declares nothing, and an unclosed backticked
-// `<!--` never opens a comment that would swallow later prose.
+// `<!--` never opens a comment that would swallow later prose; a backslash-escaped backtick
+// opens no span, so the comment after it declares.
 #[test]
 fn markdown_code_spans_quote_comments() {
     let fixture = Fixture::bare();
@@ -260,9 +261,10 @@ fn markdown_code_spans_quote_comments() {
         "AGENTS.md",
         "# p\n\n```stele\nkind: system\npurpose: quotation probe\ninvariants:\n\
          \x20 - claim: a is capped\n    anchor: ※ cap-a\n\
-         \x20 - claim: prose declares nothing\n    anchor: ※ stray-prose\n```\n\n\
+         \x20 - claim: prose declares nothing\n    anchor: ※ stray-prose\n\
+         \x20 - claim: an escaped backtick opens no span\n    anchor: ※ escaped\n```\n\n\
          Declare with ``<!-- ※ cap-a -->`` in markdown; comments are written `<!--`;\n\
-         ``a`b`` nests, a lone ` is literal.\n\n※ stray-prose\n",
+         ``a`b`` nests, a lone ` is literal.\n\n\\` <!-- ※ escaped --> `\n\n※ stray-prose\n",
     );
     fixture.write("m.ts", "// ※ cap-a\nexport function a() {}\n");
     fixture.commit("quote the comment syntax");
@@ -274,6 +276,7 @@ fn markdown_code_spans_quote_comments() {
     assert_eq!(check.code, 1, "{out}");
     assert!(out.contains("anchor ※ stray-prose unresolved"), "{out}");
     assert!(!out.contains("cap-a"), "{out}");
+    assert!(!out.contains("※ escaped"), "{out}");
 }
 
 // §2.5: indented code is not distinguished — a comment indented four columns in a nested

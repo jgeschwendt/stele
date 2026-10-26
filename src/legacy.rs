@@ -279,7 +279,7 @@ fn rewrite_block_line(line: &str, in_list: &mut bool) -> String {
     let (head, trimmed) = line.split_at(indent);
 
     if *in_list {
-        if trimmed.is_empty() {
+        if trimmed.is_empty() || trimmed.starts_with('#') {
             return line.to_string();
         }
         if let Some(item) = trimmed.strip_prefix('-')
@@ -292,11 +292,12 @@ fn rewrite_block_line(line: &str, in_list: &mut bool) -> String {
     }
 
     if let Some(value) = trimmed.strip_prefix(DECIDED_BY_KEY) {
-        if value.trim().is_empty() {
+        let flow = uncommented(value);
+        if flow.trim().is_empty() {
             *in_list = true;
             return line.to_string();
         }
-        if let (Some(open), Some(close)) = (value.find('['), value.rfind(']'))
+        if let (Some(open), Some(close)) = (flow.find('['), flow.rfind(']'))
             && open < close
         {
             let entries: Vec<String> = value[open + 1..close]
@@ -353,9 +354,9 @@ fn rewrite_anchor_line(head: &str, trimmed: &str) -> Option<String> {
 /// matches the filename (§2.6). Anything else — an already-migrated `§ <NNNN>` included
 /// — is returned untouched, which is what makes a second run a no-op.
 fn rewrite_decision_entry(raw: &str) -> String {
-    let lead = raw.len() - raw.trim_start().len();
-    let core_end = lead + raw[lead..].trim_end().len();
-    let core = &raw[lead..core_end];
+    let kept = uncommented(raw).trim_end();
+    let lead = kept.len() - kept.trim_start().len();
+    let core = &kept[lead..];
     let (quote, body) = split_quotes(core);
     let Some((dir, number)) = body.rsplit_once('/') else {
         return raw.to_string();
@@ -370,7 +371,16 @@ fn rewrite_decision_entry(raw: &str) -> String {
         return raw.to_string();
     }
     let migrated = requote(quote, &format!("{DECISION_PREFIX}{number}"));
-    format!("{}{migrated}{}", &raw[..lead], &raw[core_end..])
+    format!("{}{migrated}{}", &raw[..lead], &raw[kept.len()..])
+}
+
+/// `value` up to its trailing YAML comment — a `#` after whitespace — so a comment
+/// neither hides a value nor lends it brackets; the caller keeps the comment's bytes.
+fn uncommented(value: &str) -> &str {
+    value
+        .match_indices('#')
+        .find(|&(at, _)| value[..at].ends_with([' ', '\t']))
+        .map_or(value, |(at, _)| &value[..at])
 }
 
 /// Split a fully-quoted scalar into its quote character and its body; an unquoted (or
@@ -597,10 +607,17 @@ mod tests {
 
     #[test]
     fn a_comment_in_the_block_survives_the_field_rewrite() {
-        let out = node("```stele\nedges:\n  decided_by: [adr/0007] # integer cents\n```\n");
-        assert!(
-            out.contains("decided_by: [§ 0007] # integer cents"),
-            "{out}"
-        );
+        // On the flow list, a bare scalar, the block-list key, and a block entry.
+        for (value, want) in [
+            (" [adr/0007] # [x] cents", " [§ 0007] # [x] cents"),
+            (" adr/0007 # c", " § 0007 # c"),
+            (
+                "  # note\n    # aside\n    - adr/0007  # the money ADR",
+                "  # note\n    # aside\n    - § 0007  # the money ADR",
+            ),
+        ] {
+            let out = node(&format!("```stele\nedges:\n  decided_by:{value}\n```\n"));
+            assert!(out.contains(&format!("decided_by:{want}\n")), "{out}");
+        }
     }
 }

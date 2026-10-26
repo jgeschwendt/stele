@@ -783,7 +783,7 @@ fn is_strict_ancestor(ancestor: &str, descendant: &str) -> bool {
 /// The tracked-directory tree for §4.3: which directories exist (a dir exists iff it
 /// holds ≥1 tracked file at any depth), each one's immediate children, and its
 /// recursive tracked-file count. Built from the VCS-tracked file list with the ignore
-/// set (`.git`, `.stele`, `exhaustiveness.exclude` globs) applied by segment.
+/// set (`.git`, `.stele`, `exhaustiveness.exclude` globs) applied per directory.
 struct DirScan {
     /// dir → recursive count of tracked files under it (`""` is the repo root).
     counts: BTreeMap<String, usize>,
@@ -804,10 +804,7 @@ impl DirScan {
                 continue;
             }
             let dir_segments = &segments[..segments.len() - 1];
-            if dir_segments
-                .iter()
-                .any(|seg| is_ignored_segment(seg, excludes))
-            {
+            if (1..=dir_segments.len()).any(|n| is_ignored_dir(&dir_segments[..n], excludes)) {
                 continue;
             }
             let mut prefix = String::new();
@@ -840,14 +837,20 @@ impl DirScan {
     }
 }
 
-/// Whether a single path segment is dropped from the §4.3 walk: a fixed ignored dir
-/// (`.git`/`.stele`) or a match of an `exhaustiveness.exclude` glob.
-fn is_ignored_segment(segment: &str, excludes: &[String]) -> bool {
-    IGNORED_DIRS.contains(&segment) || excludes.iter().any(|glob| glob_matches(glob, segment))
+/// Whether the root-relative dir `segments` is dropped from the §4.3 walk: its name is a
+/// fixed ignored dir (`.git`/`.stele`) or matches an `exhaustiveness.exclude` glob — a
+/// `/`-bearing glob against the whole path (`apps/legacy`), any other against the name.
+fn is_ignored_dir(segments: &[&str], excludes: &[String]) -> bool {
+    let (name, path) = (segments[segments.len() - 1], segments.join("/"));
+    IGNORED_DIRS.contains(&name)
+        || excludes
+            .iter()
+            .any(|glob| glob_matches(glob, if glob.contains('/') { &path } else { name }))
 }
 
-/// A minimal `*`/`?` glob match (anchored, whole-segment) for `exhaustiveness.exclude`
-/// (§3.4). The defaults are plain names; wildcards cover a team's custom entries.
+/// A minimal `*`/`?` glob match (anchored, whole-string; `*` spans `/`) for
+/// `exhaustiveness.exclude` (§3.4). The defaults are plain names; wildcards cover a
+/// team's custom entries.
 fn glob_matches(pattern: &str, text: &str) -> bool {
     fn go(pattern: &[u8], text: &[u8]) -> bool {
         match pattern.split_first() {

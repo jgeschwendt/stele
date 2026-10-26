@@ -240,9 +240,11 @@ pub struct Context<'a> {
 impl Context<'_> {
     /// Whether `rel` (a repo-root-relative POSIX path) is a VCS-tracked file (§4.1
     /// enforced_by: tracked implies committed). Asks git, not [`Self::tracked`]: that is
-    /// the `.steleignore`-filtered scan roster, and a referenced guard is not scanned.
+    /// the `.steleignore`-filtered scan roster, and a referenced guard is not scanned. The
+    /// global `--literal-pathspecs` (never `:(literal)` magic, which an inherited
+    /// `GIT_LITERAL_PATHSPECS=1` reads as part of the name) keeps a glob character literal.
     fn tracks(&self, rel: &str) -> Result<bool> {
-        let output = git(self.root, "ls-files -z --", &[&format!(":(literal){rel}")])?;
+        let output = git(self.root, "--literal-pathspecs ls-files -z --", &[rel])?;
         Ok(output.stdout == format!("{rel}\0").as_bytes())
     }
 }

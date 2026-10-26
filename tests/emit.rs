@@ -721,3 +721,26 @@ fn budget_codex_counts_a_plain_agents_md_between_nodes() {
         "{out}"
     );
 }
+
+// ─── build → emit → build converges (§3.1) ───────────────────────────────────
+
+// Emitted text quoting an HTML-comment landmark — in the root region or a rules file — is
+// engine output, not a declaration: the rebuild after `emit` reproduces the committed lock.
+#[test]
+fn emitted_text_never_declares_a_landmark() {
+    let fixture = Fixture::bare();
+    fixture.write(
+        "AGENTS.md",
+        "# p\n\n```stele\nkind: system\npurpose: probe\nhazards:\n\
+         \x20 - claim: \"keep the <!-- ※ ghost --> landmark\"\n    anchor: ※ boot\n```\n\n\
+         <!-- @stele -->\n<!-- @end -->\n",
+    );
+    fixture.write("lib.rs", "// ※ boot\npub fn f() {}\n");
+    fixture.commit("import");
+    assert_eq!(fixture.run(&["build"]).code, 0);
+    assert_eq!(fixture.run(&["emit", "--claude-rules"]).code, 0);
+    assert!(fixture.read(".claude/rules/root.md").contains("※ ghost"));
+    fixture.commit("emit");
+    let check = fixture.run(&["check", "--only", "referential"]);
+    assert_eq!(check.code, 0, "{}", check.combined());
+}

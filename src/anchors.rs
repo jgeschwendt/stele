@@ -759,16 +759,19 @@ fn find_comment_at_row(root: Node, row: usize) -> Option<Node> {
 /// attribute (`#[…]`), decorator, TS overload signature and Elixir doc/spec attribute
 /// ([`ELIXIR_DOC_ATTRIBUTES`]) siblings are skipped; any other sibling ends the search,
 /// so a landmark over a `const`, an `@cap 100` or an `impl` never reaches a later
-/// definition, and one over an overload set binds its implementation.
+/// definition, and one over an overload set (a `function_signature`/`method_signature`
+/// run, with its `;`) binds its implementation — never past an `abstract` signature.
 /// A wrapper sibling — TS/JS `export_statement`, Python `decorated_definition` — binds
 /// whole when it wraps a definition, so `export function a` and `@dec def a` digest the
 /// modifier or decorator too.
 fn next_definition_sibling<'a>(comment: Node<'a>, src: &[u8], lang: Lang) -> Option<Node<'a>> {
     let mut next = comment.next_sibling();
     while let Some(node) = next.filter(|n| !is_definition_node(lang, unwrapped(*n), src)) {
-        let skipped = ["attribute", "comment", "decorator", "function_signature"]
+        let kind = unwrapped(node).kind();
+        let skipped = ["attribute", "comment", "decorator"]
             .iter()
-            .any(|k| unwrapped(node).kind().contains(k))
+            .any(|k| kind.contains(k))
+            || [";", "function_signature", "method_signature"].contains(&kind)
             || node
                 .utf8_text(src)
                 .ok()

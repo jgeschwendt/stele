@@ -229,6 +229,18 @@ fn landmark_over_a_non_definition_never_reaches_a_later_definition() {
             "{ 2; }",
         ),
         (
+            "a.ts",
+            "class X { // ※ note\n  m(x: string): void;\n  m(x: number): void\n  m(x: any) {}\n  o() { return 1; }\n}\n",
+            "{}",
+            "{ 2; }",
+        ),
+        (
+            "a.ts",
+            "abstract class X { // ※ note\n  abstract m(): void;\n  o() { return 1; }\n}\n",
+            "void",
+            "number",
+        ),
+        (
             "a.rs",
             "// ※ note\n#[inline]\nfn guard() {}\nfn other() -> u32 { 1 }\n",
             "{}",

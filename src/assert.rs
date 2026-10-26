@@ -243,11 +243,12 @@ impl Context<'_> {
     /// the `.steleignore`-filtered scan roster, and a referenced guard is not scanned.
     fn tracks(&self, rel: &str) -> Result<bool> {
         let output = git(self.root, "ls-files -z --", &[rel])?;
-        // An unmerged path is listed once per stage.
-        Ok(output
-            .stdout
-            .split(|&b| b == 0)
-            .any(|e| e == rel.as_bytes()))
+        // An unmerged path is listed once per stage; a failed git lists nothing.
+        Ok(output.status.success()
+            && output
+                .stdout
+                .split(|&b| b == 0)
+                .any(|e| e == rel.as_bytes()))
     }
 }
 

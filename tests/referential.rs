@@ -59,6 +59,26 @@ fn steleignored_tracked_guard_satisfies_enforced_by() {
     assert_eq!(conflicted.code, 0, "{}", conflicted.combined());
 }
 
+/// A blank `enforced_by` names no guard: build rejects it (exit 2) rather than letting the
+/// claim read as tracked and dodge digest staling.
+#[test]
+fn blank_enforced_by_is_rejected_at_build() {
+    let fixture = Fixture::bare();
+    fixture.write(
+        "AGENTS.md",
+        "# root\n\n```stele\nkind: system\ninvariants:\n  - claim: capped\n    anchor: ※ cap\n    enforced_by: ' '\n```\n",
+    );
+    fixture.write("a.sh", "# ※ cap\n");
+    fixture.commit("blank guard");
+    let build = fixture.run(&["build"]);
+    assert_eq!(build.code, 2, "{}", build.combined());
+    assert!(
+        build.combined().contains("enforced_by"),
+        "{}",
+        build.combined()
+    );
+}
+
 /// An `exhaustiveness.exclude` entry reads as a gitignore line (§4.3): `./`, a leading or
 /// trailing `/` and a trailing `/**` change no match, a slash anchors at the root and `**/`
 /// matches at any depth. Each spelling silences exactly its directory, never another.

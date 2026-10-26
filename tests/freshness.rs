@@ -361,3 +361,43 @@ fn shallow_clone_reports_history_unavailable_not_silent_pass() {
         "blame must not read the unreachable watermark as zero churn:\n{bout}"
     );
 }
+
+// §4.5 binding through a wrapper: a landmark above `export function a` or a decorated
+// `def a` binds `a` (the export/decorator node wraps the definition it immediately
+// precedes), so editing `a` stales the claim and editing the next definition `b` does not.
+#[test]
+fn landmark_above_an_export_or_decorator_binds_the_wrapped_definition() {
+    for (file, src) in [
+        (
+            "m.ts",
+            "// ※ cap-a\nexport function a() { return 1; }\n\nfunction b() { return 2; }\n",
+        ),
+        (
+            "m.py",
+            "# ※ cap-a\n@staticmethod\ndef a(): return 1\n\ndef b(): return 2\n",
+        ),
+    ] {
+        let fixture = Fixture::bare();
+        fixture.write(
+            "AGENTS.md",
+            "# p\n\n```stele\nkind: system\npurpose: wrapper probe\ninvariants:\n\
+             \x20 - claim: a is capped\n    anchor: ※ cap-a\n```\n",
+        );
+        fixture.write(file, src);
+        fixture.commit("import");
+        assert_eq!(fixture.run(&["build"]).code, 0);
+        fixture.commit("baseline graph.lock");
+
+        fixture.replace(file, "return 2", "return 9");
+        fixture.commit("edit b");
+        let check = fixture.run(&["check"]);
+        assert_eq!(check.code, 0, "{file}: {}", check.combined());
+
+        fixture.replace(file, "return 1", "return 9");
+        fixture.commit("edit a");
+        let check = fixture.run(&["check"]);
+        let out = check.combined();
+        assert_eq!(check.code, 1, "{file}: {out}");
+        assert!(out.contains("region a now digests"), "{file}: {out}");
+    }
+}

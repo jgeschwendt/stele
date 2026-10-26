@@ -161,6 +161,45 @@ fn one_line_empty_region_form_is_accepted() {
     );
 }
 
+// ─── a leading UTF-8 BOM is not content (§2.4, §3.1) ───────────────────────────
+
+// A Windows editor's BOM (U+FEFF) before line 1 hid a first-line ```stele fence (the
+// node dropped out, so `init` prepended a second skeleton), failed a package.json's JSON
+// parse (its package drew no edge), and glued itself to `.steleignore`'s first pattern.
+#[test]
+fn leading_bom_is_skipped_in_node_package_and_ignore_files() {
+    let fixture = Fixture::bare();
+    fixture.write("AGENTS.md", "\u{feff}```stele\nkind: system\n```\n");
+    fixture.write(".steleignore", "\u{feff}ghost/\n");
+    fixture.write("ghost/AGENTS.md", "```stele\nkind: container\n```\n");
+    for name in ["shared", "web"] {
+        fixture.write(
+            &format!("{name}/AGENTS.md"),
+            "```stele\nkind: component\n```\n",
+        );
+    }
+    fixture.write(
+        "shared/package.json",
+        "\u{feff}{ \"name\": \"@acme/shared\", \"main\": \"index.ts\" }\n",
+    );
+    fixture.write("shared/index.ts", "export const m = 1;\n");
+    fixture.write(
+        "web/index.ts",
+        "import { m } from \"@acme/shared\";\nexport { m };\n",
+    );
+    fixture.commit("BOM-prefixed node, package and ignore files");
+
+    assert_eq!(fixture.run(&["init"]).code, 0);
+    assert_eq!(fixture.read("AGENTS.md").matches("kind:").count(), 1);
+    assert_eq!(fixture.run(&["build"]).code, 0);
+    let lock = stele::lock::parse_lock(&fixture.read(".stele/graph.lock")).unwrap();
+    assert_eq!(
+        lock.nodes.keys().collect::<Vec<_>>(),
+        ["/", "shared", "web"]
+    );
+    assert_eq!(lock.nodes["web"].extracted.imports, ["shared"]);
+}
+
 // ─── an absent tracked file skips instead of aborting (§2.4, §5.3) ────────────
 
 // A tracked source file deleted from the working tree WITHOUT staging the removal

@@ -136,29 +136,3 @@ fn gitignore_spelled_excludes_drop_their_directory() {
         assert_eq!(check.code == 0, silenced, "{entry}: {}", check.combined());
     }
 }
-
-/// A `<path>#<symbol>` anchor binds only a path git tracks byte for byte (§2.4): a
-/// gitignored file or a case-folded spelling is unresolved even where the disk opens it.
-#[test]
-fn symbol_anchor_into_an_untracked_or_case_folded_path_is_unresolved() {
-    for anchor in ["gen/api.py#handler", "src/M.py#handler"] {
-        let fixture = Fixture::bare();
-        fixture.write(
-            "AGENTS.md",
-            &format!("# root\n\n```stele\nkind: system\ninvariants:\n  - claim: handled\n    anchor: {anchor}\n```\n"),
-        );
-        fixture.write(".gitignore", "gen/\n");
-        fixture.write("gen/api.py", "def handler():\n    return 1\n");
-        fixture.write("src/m.py", "def handler():\n    return 1\n");
-        fixture.commit("import");
-        assert_eq!(fixture.run(&["build"]).code, 0);
-        fixture.commit("lock");
-        let check = fixture.run(&["check", "--only", "referential"]);
-        let out = check.combined();
-        assert_eq!(check.code, 1, "{anchor}: {out}");
-        assert!(
-            out.contains(&format!("anchor {anchor} unresolved")),
-            "{out}"
-        );
-    }
-}

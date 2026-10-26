@@ -412,13 +412,17 @@ fn verbs_run_from_the_work_tree_top_level() {
 }
 
 // A path argument keeps its cwd-relative meaning under top-level rooting (§3.5): it is
-// rebased onto the cwd's prefix, `..` included.
+// rebased onto the cwd's prefix, `..` included; an absolute path names the same file from
+// any cwd (a symlinked spelling of the tree included), and one outside the tree is exit 2.
 #[test]
 fn touching_paths_resolve_against_the_cwd() {
     let fixture = built();
+    let absolute = fixture.path("apps/web/lib/billing/x.ex");
+    let absolute = absolute.to_str().unwrap();
     for (dir, path) in [
         ("apps/web/lib", "billing"),
         ("apps/web/lib/store", "../billing/x.ex"),
+        ("apps/web/lib/store", absolute),
     ] {
         let out = fixture
             .run_in(dir, &["invariants", "--touching", path])
@@ -428,6 +432,13 @@ fn touching_paths_resolve_against_the_cwd() {
             "{dir}: {out}"
         );
     }
+    let outside = fixture.run(&["invariants", "--touching", "/"]);
+    assert_eq!(outside.code, 2, "{}", outside.combined());
+    assert!(
+        outside.stderr.contains("outside the work tree"),
+        "{}",
+        outside.combined()
+    );
 }
 
 // Probe 11 — `stele --version` prints `stele <CARGO_PKG_VERSION>` to stdout and exits 0

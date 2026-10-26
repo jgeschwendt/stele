@@ -241,10 +241,12 @@ pub fn run(args: &[String]) -> i32 {
     }
     let json = args.iter().any(|a| a == JSON_FLAG);
     let mut rest: Vec<String> = args.iter().filter(|a| *a != JSON_FLAG).cloned().collect();
-    // Every verb runs from the top level (§3.5), so a typed path argument — `--touching`,
-    // the only one — is rebased onto the cwd's prefix to keep its cwd-relative meaning.
+    // Every verb runs from the top level (§3.5), so a typed relative path argument —
+    // `--touching`, the only one — is rebased onto the cwd's prefix to keep its cwd-relative
+    // meaning; an absolute one is left to [`repo_relative`].
     if let Some(i) = rest.iter().position(|a| a == "--touching")
         && let Some(path) = rest.get_mut(i + 1)
+        && Path::new(path).is_relative()
     {
         *path = rebase_on_cwd(&git_stdout(Path::new("."), "--show-prefix"), path);
     }
@@ -1228,8 +1230,8 @@ fn unfold(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
 /// §4.2 contrast to structural permission, which never inherits.
 fn invariants(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
     let lock = load_committed(&ws.home)?;
-    let touching = flag_value(args, "--touching")?;
-    let scope: Option<Vec<String>> = touching.map(|path| owning_chain(&lock, path));
+    let touching = flag_value(args, "--touching")?.map(|path| repo_relative(&ws.work, path));
+    let scope = touching.transpose()?.map(|path| owning_chain(&lock, &path));
     let rows = collect_claims(&lock, "invariant", scope.as_deref());
     Ok(CommandOutput::new(
         claims_data(&rows),
@@ -1348,6 +1350,26 @@ fn flag_value<'a>(args: &'a [&str], name: &str) -> Result<Option<&'a str>> {
             .map(Some)
             .ok_or_else(|| SteleError::input_msg(format!("{name} requires a value"))),
     }
+}
+
+/// `path` relative to the work-tree top level `work`. An absolute path is resolved through
+/// its longest existing ancestor's canonical form, so a symlinked spelling of the tree
+/// (macOS `/var` → `/private/var`) still lands inside it; one outside the tree is exit 2.
+/// A relative path is already top-level-relative (`run` rebased it on the cwd).
+fn repo_relative(work: &Path, path: &str) -> Result<String> {
+    let absolute = Path::new(path);
+    if absolute.is_relative() {
+        return Ok(path.to_string());
+    }
+    let canonical = absolute
+        .ancestors()
+        .find_map(|a| Some(a.canonicalize().ok()?.join(absolute.strip_prefix(a).ok()?)));
+    canonical
+        .zip(work.canonicalize().ok())
+        .and_then(|(full, root)| Some(full.strip_prefix(root).ok()?.to_string_lossy().into()))
+        .ok_or_else(|| {
+            SteleError::input_msg(format!("--touching {path:?} is outside the work tree"))
+        })
 }
 
 /// Parse `unfold --depth N` (§5.1): a positive integer, defaulting to

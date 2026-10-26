@@ -45,6 +45,9 @@ const JSON_FLAG: &str = "--json";
 
 /// The `check --freeze` flag (§4.2): baseline current structural violations.
 const FREEZE_FLAG: &str = "--freeze";
+/// `check`'s §5.1 grammar: `--freeze` is a run of its own.
+const CHECK_USAGE: &str =
+    "stele check [--only <class>] [--run-commands] [--report] | stele check --freeze";
 
 /// The `check --run-commands` flag (§4.6): execute each declared command, not only
 /// resolve it (off by default — the bonfires tier).
@@ -236,8 +239,13 @@ pub fn run(args: &[String]) -> i32 {
     }
     // `serve` (§5.2) owns stdin/stdout for MCP JSON-RPC framing, so it is intercepted
     // BEFORE the `--json` envelope machinery — its stdout must carry only protocol
-    // messages, never a CLI envelope.
+    // messages, never a CLI envelope. It takes no argument (its own `--json` refusal aside):
+    // any other is a §5.3 bad flag, refused before the server starts.
     if args.first().map(String::as_str) == Some("serve") {
+        if let Some(token) = args.get(1).filter(|a| *a != JSON_FLAG) {
+            eprintln!("unexpected argument {token:?}; usage: stele serve");
+            return ExitCode::Input as i32;
+        }
         return crate::serve::run(Path::new("."), args);
     }
     let json = args.iter().any(|a| a == JSON_FLAG);
@@ -304,7 +312,7 @@ const VERBS: &[Verb] = &[
         0,
         &[FREEZE_FLAG, REPORT_FLAG, RUN_COMMANDS_FLAG],
         &["--only"],
-        "stele check [--only <class>] [--freeze | --run-commands] [--report]",
+        CHECK_USAGE,
     ),
     (
         "emit",
@@ -537,6 +545,11 @@ fn check(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
         let _ = std::thread::Builder::new().spawn(assert::tokenizer);
     }
     let freeze = args.contains(&FREEZE_FLAG);
+    if freeze && args.len() > 2 {
+        return Err(SteleError::input_msg(format!(
+            "--freeze takes no other flag; usage: {CHECK_USAGE} [--json]"
+        )));
+    }
     let run_commands = args.contains(&RUN_COMMANDS_FLAG);
     let config = config::load(&ws.home)?;
 

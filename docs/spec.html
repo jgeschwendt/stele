@@ -330,7 +330,7 @@ stele invariants [--touching &lt;path&gt;]      # cross-cutting transpose querie
 stele hazards [--node &lt;id&gt;]
 stele nodes [--kind &lt;kind&gt;]
 stele check [--only &lt;class&gt;]              # class ∈ referential|structural|exhaustiveness|budget|freshness|liveness (§4)
-stele check [--freeze | --run-commands]   # --freeze baselines violations to .stele/freeze.json (§4.2); --run-commands executes them (§4.6)
+stele check [--freeze | --run-commands]   # --freeze, alone (any other flag beside it is exit 2), baselines violations to .stele/freeze.json (§4.2); --run-commands executes them (§4.6)
 stele check [--report]                    # human-readable findings, incl. every allow reason verbatim (§4.2)
 stele emit [--check] [--claude-rules]     # render regions + indexes; --check fails CI on divergence (§3.1); --claude-rules opt-in (§3.3)
 stele blame &lt;node-id&gt;/&lt;slug&gt;              # walk history to the staling commit (§4.5)

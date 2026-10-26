@@ -2873,14 +2873,14 @@ fn is_status_heading(line: &str) -> bool {
 }
 
 /// The status word of a status value: quoting, emphasis and markdown-link syntax reduced
-/// to its text by taking the first maximal run of ASCII letters, lowercased (so
+/// to its text by taking the first maximal run of ASCII letters and inner hyphens, lowercased (so
 /// `[Accepted](0009.md)` → `accepted`, `Superseded by [ADR-9](…)` → `superseded`).
 /// `None` for a line with no letters.
 fn status_word(line: &str) -> Option<String> {
     let word: String = line
         .chars()
         .skip_while(|c| !c.is_ascii_alphabetic())
-        .take_while(char::is_ascii_alphabetic)
+        .take_while(|c| c.is_ascii_alphabetic() || *c == '-')
         .collect();
     (!word.is_empty()).then(|| word.to_ascii_lowercase())
 }
@@ -2975,6 +2975,13 @@ mod tests {
         ] {
             assert_eq!(adr_status(contents), "superseded", "{contents:?}");
         }
+        // A hyphenated status stays whole: `in-progress` is not `in`, nor is a
+        // `superseded-candidate` superseded.
+        assert_eq!(adr_status("---\nstatus: in-progress\n---\n"), "in-progress");
+        assert_eq!(
+            adr_status("Status: Superseded-candidate\n"),
+            "superseded-candidate"
+        );
         // No status anywhere → unknown.
         assert_eq!(adr_status("# t\n\n## Context\n\nnothing here\n"), "unknown");
     }

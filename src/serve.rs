@@ -21,7 +21,7 @@ use crate::cli::{self, Mode, VerbRender, Workspace};
 use crate::config::AssertionClass;
 use crate::model::ExitCode;
 use serde_json::{Value, json};
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::path::Path;
 
 /// Protocol versions this server will echo back verbatim when a client requests one of
@@ -70,10 +70,12 @@ pub fn run(root: &Path, args: &[String]) -> i32 {
     }
     eprintln!("stele serve: MCP stdio server ready (protocol {LATEST_PROTOCOL_VERSION})");
     let mut stdout = std::io::stdout();
-    for line in std::io::stdin().lines() {
+    for frame in std::io::stdin().lock().split(b'\n') {
         // Compact serialization has no embedded newlines (transport requirement); the
-        // trailing `\n` is the message delimiter.
-        let written = line.and_then(|line| {
+        // trailing `\n` is the message delimiter. A non-UTF-8 frame is no JSON text: it
+        // decodes to an unparsable stand-in (a parse error), never a stdio error.
+        let written = frame.and_then(|frame| {
+            let line = String::from_utf8(frame).unwrap_or_else(|_| "\u{fffd}".into());
             handle_message(&workspace, line.trim()).map_or(Ok(()), |r| writeln!(stdout, "{r}"))
         });
         if let Err(e) = written {

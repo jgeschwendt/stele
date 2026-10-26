@@ -281,6 +281,11 @@ fn nodes_filtered_by_kind() {
         !out.contains("apps/web/lib/billing"),
         "kind filter leaked a component:\n{out}"
     );
+    // The auxiliary kinds (§2.1) are kinds too: a valid query, never a bad flag.
+    for kind in ["adr", "anchor"] {
+        let aux = fixture.run(&["nodes", "--kind", kind]);
+        assert_eq!(aux.code, 0, "{}", aux.combined());
+    }
 }
 
 // Probe 10 — the shared lock-presence gate (§5.3) and the `check --report` governance
@@ -372,7 +377,7 @@ fn bad_command_lines_exit_2() {
         (&["check", "--only"], "--only requires a class argument"),
         (
             &["nodes", "--kind", "contianer"],
-            "unknown --kind \"contianer\"",
+            "unknown --kind \"contianer\"; expected one of adr|anchor|component|container|system",
         ),
         (
             &["check", "--only", "budget", "--only", "referential"],

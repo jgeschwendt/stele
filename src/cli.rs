@@ -1290,10 +1290,13 @@ fn hazards(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
 fn nodes(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
     let lock = load_committed(&ws.home)?;
     let kind = flag_value(args, "--kind")?;
-    // A typo is a §5.3 bad flag, never an empty listing.
-    if let Some(k) = kind.filter(|k| !["component", "container", "system"].contains(k)) {
+    // A typo is a §5.3 bad flag, never an empty listing; the auxiliary kinds (§2.1) are
+    // valid and list no authored node.
+    let kinds = ["adr", "anchor", "component", "container", "system"];
+    if let Some(k) = kind.filter(|k| !kinds.contains(k)) {
         return Err(SteleError::input_msg(format!(
-            "unknown --kind {k:?}; expected one of component|container|system"
+            "unknown --kind {k:?}; expected one of {}",
+            kinds.join("|")
         )));
     }
     let rows: Vec<&LockNode> = lock

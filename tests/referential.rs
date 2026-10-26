@@ -1,12 +1,13 @@
 //! Paths the user names resolve as named: an `enforced_by` guard (SPEC §4.1d) is not
-//! scanned, so `.steleignore` (§2.4) never makes a git-tracked guard read as untracked;
+//! scanned, so `.steleignore` (§2.4) never makes a git-tracked guard read as untracked, nor
+//! an inherited `GIT_LITERAL_PATHSPECS=1`;
 //! a `/`-bearing `exhaustiveness.exclude` glob (§3.4) matches the directory path.
 
 mod common;
 
-use common::Fixture;
+use common::{BIN, Fixture, isolate_git};
 
-/// A tracked guard under a steleignored `vendor/` passes §4.1d.
+/// A tracked guard under a steleignored `vendor/` passes §4.1d, whatever git's pathspec env.
 #[test]
 fn steleignored_tracked_guard_satisfies_enforced_by() {
     let fixture = Fixture::bare();
@@ -22,6 +23,12 @@ fn steleignored_tracked_guard_satisfies_enforced_by() {
     fixture.commit("lock");
     let check = fixture.run(&["check", "--only", "referential"]);
     assert_eq!(check.code, 0, "{}", check.combined());
+    let literal = isolate_git(std::process::Command::new(BIN).current_dir(fixture.path("")))
+        .args(["check", "--only", "referential"])
+        .env("GIT_LITERAL_PATHSPECS", "1")
+        .status()
+        .unwrap();
+    assert!(literal.success());
 }
 
 /// `exclude = ["apps/legacy"]` silences exactly the path the §4.3 fix line names.

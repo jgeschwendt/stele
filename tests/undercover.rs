@@ -274,6 +274,9 @@ fn undercover_build_self_heals_exclude_block() {
 
     // The heal runs first: an unreadable `.steleignore` still fails the build, after the repair.
     fixture.write(".git/info/exclude", "");
+    fixture.write(".steleignore", "");
+    fixture.git(&["add", ".steleignore"]);
+    std::fs::remove_file(fixture.path(".steleignore")).unwrap();
     fixture.write(".steleignore/x", "");
     let build = fixture.run(&["build"]);
     assert_eq!(build.code, 3, "{}", build.combined());

@@ -102,3 +102,16 @@ fn un_ignoring_restores_the_whole_subtree() {
         check.combined()
     );
 }
+
+// Only a git-tracked `.steleignore` applies: an untracked one hides nothing, so the local
+// gate sees what a clean clone sees.
+#[test]
+fn an_untracked_steleignore_hides_nothing() {
+    let fixture = repo();
+    fixture.write(".steleignore", "vendor/\n");
+    assert_eq!(fixture.run(&["build"]).code, 0);
+    assert!(fixture.read(".stele/graph.lock").contains("vendor-mark"));
+    fixture.git(&["add", ".steleignore"]);
+    assert_eq!(fixture.run(&["build"]).code, 0);
+    assert!(!fixture.read(".stele/graph.lock").contains("vendor-mark"));
+}

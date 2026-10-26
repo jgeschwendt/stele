@@ -515,12 +515,25 @@ fn find_stele_block(rel_path: &Path, contents: &str) -> Result<Option<SteleBlock
 /// Scan every fenced code block (CommonMark-flavored, sufficient for AGENTS.md):
 /// a run of ≥3 backticks or tildes opens a block; a run of the same character at
 /// least as long, with no trailing info, closes it. Bytes between markers are the
-/// body verbatim. An unterminated fence runs to end-of-file.
+/// body verbatim. An unterminated fence runs to end-of-file. An HTML comment block — a
+/// line opening `<!--` — runs to the line holding `-->` (or end-of-file) and holds no
+/// fence: a commented-out block is not a block.
 fn scan_fences(contents: &str) -> Vec<Fence> {
+    use crate::anchors::{HTML_COMMENT_CLOSE, HTML_COMMENT_OPEN};
     let lines: Vec<&str> = contents.lines().collect();
     let mut fences = Vec::new();
     let mut i = 0;
     while i < lines.len() {
+        let lead = lines[i].len() - lines[i].trim_start_matches(' ').len();
+        if lead <= MAX_FENCE_INDENT
+            && let Some(rest) = lines[i][lead..].strip_prefix(HTML_COMMENT_OPEN)
+        {
+            i += std::iter::once(rest)
+                .chain(lines[i + 1..].iter().copied())
+                .position(|l| l.contains(HTML_COMMENT_CLOSE))
+                .map_or(lines.len() - i, |at| at + 1);
+            continue;
+        }
         let Some((fence_char, fence_len, info)) = open_fence(lines[i]) else {
             i += 1;
             continue;
@@ -790,5 +803,27 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.line, Some(4));
         assert!(err.message.contains("line 1"), "{err}");
+    }
+
+    #[test]
+    fn a_fence_inside_an_html_comment_is_commented_out() {
+        // CommonMark: an HTML comment block runs to the line holding its `-->`, and nothing
+        // in it is a fence — a commented-out block is neither a second nor an earlier one.
+        let live = "```stele\nkind: system\n```\n";
+        for (contents, kind) in [
+            (
+                format!("<!--\n```stele\nkind: component\n```\n-->\n{live}"),
+                Some(NodeKind::System),
+            ),
+            (
+                format!("  <!-- old:\n```sh\necho\n```\n-->\n{live}"),
+                Some(NodeKind::System),
+            ),
+            (format!("<!-- x --> y\n{live}"), Some(NodeKind::System)),
+            ("<!--\n```stele\nkind: component\n```\n".to_string(), None),
+        ] {
+            let node = parse_agents_file(Path::new("AGENTS.md"), &contents).unwrap();
+            assert_eq!(node.map(|n| n.kind), kind, "{contents}");
+        }
     }
 }

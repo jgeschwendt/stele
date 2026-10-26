@@ -2415,8 +2415,8 @@ fn migrate_targets(ws: &Workspace) -> Result<Vec<MigrateTarget>> {
 }
 
 /// Read one migrate target. `Ok(None)` skips it: a tracked path with nothing to read
-/// ([`crate::model::read_tracked`]), or a binary file (the §2.4 scan skips non-UTF-8 bytes
-/// the same way). A node source that is not valid UTF-8 is a §5.3 input error instead — the same hard stop
+/// ([`crate::model::read_tracked`]), or a code file that is not valid UTF-8 — the §2.4 scan
+/// decodes those lossily, but a rewrite would corrupt their bytes. A node source that is not valid UTF-8 is a §5.3 input error instead — the same hard stop
 /// `build` gives it — and, running in pass 1, it aborts before anything is written.
 fn read_migrate_source(target: &MigrateTarget) -> Result<Option<String>> {
     let Some(bytes) = crate::model::read_tracked(&target.path, &target.display)? else {

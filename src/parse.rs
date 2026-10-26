@@ -151,6 +151,13 @@ fn validate(rel_path: &Path, block: &SteleBlock, raw: &RawBlock) -> Result<()> {
                     .to_string(),
             ));
         }
+        if claim
+            .enforced_by
+            .as_deref()
+            .is_some_and(|e| e.trim().is_empty())
+        {
+            return Err(at("enforced_by must be non-empty (§2.4)".to_string()));
+        }
     }
 
     for allow in &raw.edges.allow {

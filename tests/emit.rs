@@ -573,6 +573,16 @@ fn claude_rules_refuses_to_overwrite_a_foreign_file() {
     );
     assert_eq!(fixture.read("AGENTS.md"), root, "emit half-wrote the tree");
     assert_eq!(fixture.read(".stele/index/hazards.md"), "stale\n");
+
+    // So is one that is not UTF-8 (a Latin-1 rule): unreadable as text, never read as absent.
+    fixture.delete_file(".claude/rules/apps-web-lib-billing.md");
+    let latin1 = b"caf\xe9\n";
+    std::fs::write(fixture.path(".claude/rules/root.md"), latin1).unwrap();
+    assert_eq!(fixture.run(&["emit", "--claude-rules"]).code, 2);
+    assert_eq!(
+        std::fs::read(fixture.path(".claude/rules/root.md")).unwrap(),
+        latin1
+    );
 }
 
 // Two ids flattening to one filename (`root` vs the system node's `root.md`; `apps-Worker`

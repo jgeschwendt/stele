@@ -244,7 +244,11 @@ impl Context<'_> {
     /// global `--literal-pathspecs` keeps a glob character literal.
     fn tracks(&self, rel: &str) -> Result<bool> {
         let output = git(self.root, "--literal-pathspecs ls-files -z --", &[rel])?;
-        Ok(output.stdout == format!("{rel}\0").as_bytes())
+        // An unmerged path is listed once per stage.
+        Ok(output
+            .stdout
+            .split(|&b| b == 0)
+            .any(|e| e == rel.as_bytes()))
     }
 }
 

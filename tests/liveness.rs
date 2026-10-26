@@ -11,7 +11,7 @@
 
 mod common;
 
-use common::Fixture;
+use common::{BIN, Fixture, isolate_git};
 use serde_json::Value;
 
 /// Count the `✗ liveness:` finding lines in a `check` render.
@@ -264,4 +264,35 @@ fn probe8_shell_builtins_resolve_before_path() {
         "cd fired as a finding:\n{out}"
     );
     assert_eq!(liveness_lines(&out), 1, "{out}");
+}
+
+// Probe 9 — the POSIX regular built-ins without a Linux executable (`command`, `hash`,
+// `alias`, `jobs`, …) resolve as rung (a) too: on a PATH holding only git, no macOS
+// `/usr/bin/command` shim rescues them.
+#[test]
+fn probe9_regular_builtins_resolve_without_a_path_shim() {
+    let fixture = Fixture::bare();
+    fixture.write(
+        "AGENTS.md",
+        "# root\n\n```stele\nkind: system\ncommands:\n  guard: command -v git && hash git\n  \
+         job: alias a=b; unalias a; jobs; fg; bg; getopts o v\n```\n",
+    );
+    fixture.commit("builtins");
+    assert_eq!(fixture.run(&["build"]).code, 0);
+    let bin = tempfile::tempdir().unwrap();
+    let git = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|dir| dir.join("git"))
+        .find(|git| git.exists())
+        .unwrap();
+    std::os::unix::fs::symlink(git, bin.path().join("git")).unwrap();
+    let check = isolate_git(std::process::Command::new(BIN).current_dir(fixture.path("")))
+        .args(["check", "--only", "liveness"])
+        .env("PATH", bin.path())
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stdout)
+    );
 }

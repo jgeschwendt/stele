@@ -277,3 +277,31 @@ fn markdown_code_spans_and_indented_code_quote_comments() {
     assert!(out.contains("anchor ※ stray-prose unresolved"), "{out}");
     assert!(!out.contains("cap-a"), "{out}");
 }
+
+// §2.4 × §3.1: a heading anchor resolves over the authored bytes only — the generated
+// region's headings (`## Map`, …) never collide with an authored one, and the lines it
+// fills never move a heading below it — so build → emit → commit leaves check green.
+#[test]
+fn heading_anchors_ignore_the_generated_region() {
+    let fixture = Fixture::bare();
+    fixture.write(
+        "AGENTS.md",
+        "# p\n\n```stele\nkind: system\npurpose: p\ninvariants:\n\
+         \x20 - claim: the map holds\n    anchor: AGENTS.md#map\n\
+         \x20 - claim: release steps hold\n    anchor: AGENTS.md#release\n```\n\n\
+         ## Map\n\n<!-- @stele --><!-- @end -->\n\n## Release\n",
+    );
+    fixture.write(
+        "src/AGENTS.md",
+        "# src\n\n```stele\nkind: component\npurpose: s\n```\n\n<!-- @stele --><!-- @end -->\n",
+    );
+    fixture.write("src/main.rs", "fn main() {}\n");
+    fixture.commit("import");
+    assert_eq!(fixture.run(&["build"]).code, 0);
+    assert_eq!(fixture.run(&["emit"]).code, 0);
+    fixture.commit("build and emit");
+
+    assert!(fixture.read("AGENTS.md").matches("## Map").count() == 2);
+    let check = fixture.run(&["check"]);
+    assert_eq!(check.code, 0, "{}", check.combined());
+}

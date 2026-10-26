@@ -287,7 +287,7 @@ fn run_class(ctx: &Context, class: AssertionClass) -> Result<Vec<Finding>> {
 
 /// The referential class (§4.1): (a) every claim anchor resolves; (b) every
 /// referenced-or-declared landmark slug has slug-match cardinality exactly 1; (c)
-/// every `decided_by` names an existing, non-superseded ADR; (d) every `enforced_by`
+/// every `decided_by` names an existing, non-superseded ADR, and each ADR id one file; (d) every `enforced_by`
 /// names a VCS-tracked file; (e) every claim-glyph comment resolves to a declared
 /// claim.
 fn referential(ctx: &Context) -> Result<Vec<Finding>> {
@@ -348,6 +348,24 @@ fn referential(ctx: &Context) -> Result<Vec<Finding>> {
                 Some(_) => {}
             }
         }
+    }
+
+    // (c) an ADR id names one file: twins (parallel branches each adding 0003) leave
+    // `§ 0003` ambiguous, and the lock keeps only one of them.
+    let mut adr_files: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for adr in &graph.adrs {
+        adr_files.entry(&adr.id).or_default().push(&adr.path);
+    }
+    for (id, paths) in adr_files.iter().filter(|(_, paths)| paths.len() > 1) {
+        findings.push(Finding::error(
+            AssertionClass::Referential,
+            None,
+            format!(
+                "ADR {id} is declared by {} files: {}",
+                paths.len(),
+                paths.join(", ")
+            ),
+        ));
     }
 
     // (b) slug-match cardinality exactly 1 (§2.5). A referenced slug with 0

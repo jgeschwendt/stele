@@ -79,6 +79,28 @@ fn blank_enforced_by_is_rejected_at_build() {
     );
 }
 
+/// Two ADR files sharing a number make `§ 0003` ambiguous (the lock keeps one): check
+/// names both, whichever status each carries.
+#[test]
+fn duplicate_adr_number_names_both_files() {
+    for (a, b) in [("Accepted", "Superseded"), ("Superseded", "Accepted")] {
+        let fixture = Fixture::bare();
+        fixture.write(
+            "AGENTS.md",
+            "# root\n\n```stele\nkind: system\nedges:\n  decided_by: [\"§ 0003\"]\n```\n",
+        );
+        fixture.write("adr/0003-a.md", &format!("# a\n\nStatus: {a}\n"));
+        fixture.write("adr/0003-b.md", &format!("# b\n\nStatus: {b}\n"));
+        fixture.commit("twin adrs");
+        assert_eq!(fixture.run(&["build"]).code, 0);
+        let out = fixture.run(&["check", "--only", "referential"]).combined();
+        assert!(
+            out.contains("adr/0003 is declared by 2 files: adr/0003-a.md, adr/0003-b.md"),
+            "{out}"
+        );
+    }
+}
+
 /// An `exhaustiveness.exclude` entry reads as a gitignore line (§4.3): `./`, a leading or
 /// trailing `/` and a trailing `/**` change no match, a slash anchors at the root and `**/`
 /// matches at any depth. Each spelling silences exactly its directory, never another.

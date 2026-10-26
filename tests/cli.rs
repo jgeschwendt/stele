@@ -413,32 +413,47 @@ fn verbs_run_from_the_work_tree_top_level() {
 
 // A path argument keeps its cwd-relative meaning under top-level rooting (§3.5): it is
 // rebased onto the cwd's prefix, `..` included; an absolute path names the same file from
-// any cwd (a symlinked spelling of the tree included), and one outside the tree is exit 2.
+// any cwd (a symlinked spelling of the tree included) and is folded lexically, an in-tree
+// symlink scoping by its own location, never its target; one escaping the tree is exit 2.
 #[test]
 fn touching_paths_resolve_against_the_cwd() {
     let fixture = built();
-    let absolute = fixture.path("apps/web/lib/billing/x.ex");
-    let absolute = absolute.to_str().unwrap();
-    for (dir, path) in [
-        ("apps/web/lib", "billing"),
-        ("apps/web/lib/store", "../billing/x.ex"),
-        ("apps/web/lib/store", absolute),
+    let at = |rel: &str| fixture.path(rel).to_str().unwrap().to_owned();
+    std::os::unix::fs::symlink(
+        std::env::temp_dir(),
+        fixture.path("apps/web/lib/billing/ext"),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("apps/web/lib/billing", fixture.path("alias")).unwrap();
+    for (dir, path, owned) in [
+        ("apps/web/lib", "billing".into(), true),
+        ("apps/web/lib/store", "../billing/x.ex".into(), true),
+        ("apps/web/lib/store", at("apps/web/lib/billing/x.ex"), true),
+        ("", at("apps/web/lib/billing/ext/f.rs"), true),
+        ("", at("nope/../apps/web/lib/billing/x.ex"), true),
+        ("", at("alias/x.ex"), false),
+        ("", "alias/x.ex".into(), false),
     ] {
-        let out = fixture
-            .run_in(dir, &["invariants", "--touching", path])
-            .stdout;
-        assert!(
-            out.contains("apps/web/lib/billing · refund-cap"),
-            "{dir}: {out}"
+        let out = fixture.run_in(dir, &["invariants", "--touching", &path]);
+        assert_eq!(
+            (
+                out.code,
+                out.stdout.contains("apps/web/lib/billing · refund-cap")
+            ),
+            (0, owned),
+            "{dir} {path}: {}",
+            out.combined()
         );
     }
-    let outside = fixture.run(&["invariants", "--touching", "/"]);
-    assert_eq!(outside.code, 2, "{}", outside.combined());
-    assert!(
-        outside.stderr.contains("outside the work tree"),
-        "{}",
-        outside.combined()
-    );
+    for path in ["/".into(), at("nope/../../.."), "../x".into()] {
+        let outside = fixture.run(&["invariants", "--touching", &path]);
+        assert_eq!(outside.code, 2, "{path}: {}", outside.combined());
+        assert!(
+            outside.stderr.contains("outside the work tree"),
+            "{}",
+            outside.combined()
+        );
+    }
 }
 
 // Probe 11 — `stele --version` prints `stele <CARGO_PKG_VERSION>` to stdout and exits 0

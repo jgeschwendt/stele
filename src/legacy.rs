@@ -232,18 +232,26 @@ fn rewrite_comment_spans(line: &str, in_comment: &mut bool) -> String {
 /// `router` — the default name (§3.1) — drops to `<!-- @stele -->`. An annotation always
 /// survives verbatim, `router` included, so the root's `· generated … · do not hand-edit`
 /// note is never silently deleted. Bytes before the marker (indentation) and after its
-/// first `-->` (the one-line empty form's closer) are preserved.
+/// first `-->` (the one-line empty form's closer) are preserved. Like the region parser,
+/// a marker must open its line — and a closer be all of it, or all after the opener — so
+/// one quoted mid-line in prose stays a quotation.
 fn rewrite_region_markers(line: &str) -> String {
-    let out = line.replace(REGION_END, REGION_END_MARKER);
-    let Some(start) = out.find(REGION_BEGIN) else {
-        return out;
+    let closer = |rest: &str| {
+        if rest.trim() == REGION_END {
+            rest.replace(REGION_END, REGION_END_MARKER)
+        } else {
+            rest.to_string()
+        }
     };
-    let after = &out[start + REGION_BEGIN.len()..];
+    let start = line.len() - line.trim_start().len();
+    let Some(after) = line[start..].strip_prefix(REGION_BEGIN) else {
+        return closer(line);
+    };
     if !after.starts_with([' ', '\t']) {
-        return out;
+        return line.to_string();
     }
     let Some(close) = after.find(MARKER_CLOSE) else {
-        return out;
+        return line.to_string();
     };
     let inner = after[..close].trim();
     let (name, annotation) = match inner.find(char::is_whitespace) {
@@ -262,8 +270,8 @@ fn rewrite_region_markers(line: &str) -> String {
     };
     format!(
         "{}{marker}{}",
-        &out[..start],
-        &after[close + MARKER_CLOSE.len()..]
+        &line[..start],
+        closer(&after[close + MARKER_CLOSE.len()..])
     )
 }
 
@@ -531,10 +539,11 @@ mod tests {
 
     #[test]
     fn a_region_marker_inside_a_fence_is_quoted_code() {
-        // So are a glued word and a marker with no `-->`.
+        // So are a glued word, a marker with no `-->`, and markers quoted mid-line in prose.
         for src in [
             format!("```markdown\n{REGION_BEGIN} router -->\n```\n"),
             format!("{REGION_BEGIN}ish -->\n{REGION_BEGIN} router\n"),
+            format!("closed with `{REGION_END}`; opened by `{REGION_BEGIN} router -->`.\n"),
         ] {
             assert!(rewrite(SourceKind::Node, &src).is_none(), "{}", node(&src));
         }

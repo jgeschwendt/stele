@@ -56,6 +56,39 @@ fn a_non_utf8_source_without_a_nul_is_still_scanned() {
     assert!(check.stdout.contains("a imports b"), "{}", check.combined());
 }
 
+// Lossy decoding maps every invalid byte to U+FFFD, so swapping one Latin-1 byte for
+// another inside a bound region left the digest unchanged: a false green. The digest of a
+// non-UTF-8 source also covers its raw bytes, so the swap stales the claim.
+#[test]
+fn a_byte_swap_in_a_non_utf8_region_stales_its_claim() {
+    let fixture = Fixture::bare();
+    fixture.write(
+        "AGENTS.md",
+        "# root\n\n```stele\nkind: system\ninvariants:\n  - claim: f returns e\n    anchor: ※ view\n```\n",
+    );
+    let source = |byte: u8| {
+        [
+            b"# caf\xe9\n# \xe2\x80\xbb view\ndef f():\n    return \"",
+            &[byte][..],
+            b"\"\n",
+        ]
+        .concat()
+    };
+    std::fs::write(fixture.path("x.py"), source(0xe9)).expect("write latin-1");
+    fixture.commit("a latin-1 anchored source");
+    assert_eq!(fixture.run(&["build"]).code, 0);
+    fixture.commit("lock");
+    std::fs::write(fixture.path("x.py"), source(0xe8)).expect("write latin-1");
+    fixture.commit("swap one latin-1 byte");
+    let check = fixture.run(&["check"]);
+    assert_eq!(check.code, 1, "{}", check.combined());
+    assert!(
+        check.stdout.contains("swap one latin-1 byte"),
+        "{}",
+        check.combined()
+    );
+}
+
 // A node source (AGENTS.md) is NOT a binary blob to skip: invalid UTF-8 there is a hard
 // §5.3 input error (exit 2) naming the file, never a silent drop of a declared node.
 #[test]

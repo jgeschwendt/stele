@@ -1586,10 +1586,9 @@ fn churn_count(root: &Path, file: &str, verified_sha: &str) -> Result<usize> {
 
 /// The blob of `file` at commit `sha` (`git show <sha>:<file>`), or `None` when the
 /// path did not exist at that commit.
-fn git_show(root: &Path, sha: &str, file: &str) -> Result<Option<String>> {
+fn git_show(root: &Path, sha: &str, file: &str) -> Result<Option<Vec<u8>>> {
     let output = git(root, "show", &[&format!("{sha}:{file}")])?;
-    let contents = String::from_utf8_lossy(&output.stdout).into_owned();
-    Ok(output.status.success().then_some(contents))
+    Ok(output.status.success().then_some(output.stdout))
 }
 
 /// A commit's short sha + subject line (`git show -s --format=%s`) for the §4.5 render.

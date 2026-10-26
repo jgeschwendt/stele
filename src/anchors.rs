@@ -20,7 +20,7 @@
 
 use crate::model::{
     AnchorData, ClaimAnchor, LANDMARK_ANCHOR_PREFIX, Occurrence, Result, SteleError,
-    is_claim_address, is_valid_slug, normalize_id, read_text,
+    is_claim_address, is_valid_slug, normalize_id, read_source, read_text,
 };
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -602,16 +602,18 @@ pub fn region_digest_for_claim(
     let Some(lang) = extension(path).as_deref().and_then(lang_for_extension) else {
         return Ok(None);
     };
-    // A binary file (a NUL in its first 8 KiB, per `read_text`) has no parse-able region;
+    // A binary file (a NUL in its first 8 KiB, per `read_source`) has no parse-able region;
     // fall to the §4.5 churn path (`None`), the same treatment a parser-less file gets above.
-    let Some(contents) = read_text(&root.join(path), file)? else {
+    let Some(raw) = read_source(&root.join(path), file)? else {
         return Ok(None);
     };
+    let contents = String::from_utf8_lossy(&raw);
     let mut parser = Parser::new();
     let tree = parse(&mut parser, lang, &contents, file)?;
     // A landmark line came from `resolved`, so binding never fails here.
     Ok(region_digest_bound(
         tree.root_node(),
+        &raw,
         contents.as_bytes(),
         lang,
         anchor,
@@ -622,18 +624,20 @@ pub fn region_digest_for_claim(
 
 /// The §4.5 digest AND region name of a claim's bound definition computed against a
 /// caller-supplied file `contents` (a historical `git show <sha>:<file>` blob, for
-/// the `stele blame`/staling-commit walk, §5.1). `None` for a parser-less file, an
+/// the `stele blame`/staling-commit walk, §5.1), raw bytes as on disk. `None` for a parser-less file, an
 /// unparseable blob, or a landmark anchor whose token is absent from this
 /// version (the region did not yet exist → the digest is treated as divergent).
-pub fn region_digest_of_source(anchor: &str, file: &str, contents: &str) -> Option<RegionDigest> {
+pub fn region_digest_of_source(anchor: &str, file: &str, raw: &[u8]) -> Option<RegionDigest> {
     let lang = extension(Path::new(file))
         .as_deref()
         .and_then(lang_for_extension)?;
+    let contents = String::from_utf8_lossy(raw);
     let mut parser = Parser::new();
     parser.set_language(&language(lang)).ok()?;
-    let tree = parser.parse(contents, None)?;
+    let tree = parser.parse(&*contents, None)?;
     region_digest_bound(
         tree.root_node(),
+        raw,
         contents.as_bytes(),
         lang,
         anchor,
@@ -646,9 +650,12 @@ pub fn region_digest_of_source(anchor: &str, file: &str, contents: &str) -> Opti
 /// landmark anchor, `lm_line` (1-based) locates the landmark comment when known (the
 /// working-tree path); when `None` the token is scanned for in `src` (the historical
 /// path), yielding `None` if it is absent. A `<path>#<symbol>` anchor binds to the
-/// symbol's definition, falling back to the whole file.
+/// symbol's definition, falling back to the whole file. `src` is `raw` decoded lossily;
+/// when they differ (non-UTF-8) the digest also covers `raw`, since lossy decoding maps
+/// every invalid byte to U+FFFD and a byte swap would otherwise keep the digest.
 fn region_digest_bound(
     root_node: Node,
+    raw: &[u8],
     src: &[u8],
     lang: Lang,
     anchor: &str,
@@ -669,7 +676,10 @@ fn region_digest_bound(
             .unwrap_or(root_node)
     };
     Some(RegionDigest {
-        digest: sha256_hex(&serialize_structure(bound, src)),
+        digest: sha256_hex(match serialize_structure(bound, src) {
+            serialized if src == raw => serialized.into_bytes(),
+            serialized => [serialized.as_bytes(), raw].concat(),
+        }),
         name: region_name(bound, src, lang, file),
     })
 }
@@ -870,8 +880,8 @@ fn serialize_structure(bound: Node, src: &[u8]) -> String {
 }
 
 /// Lowercase-hex sha256 of `serialized` (§4.5 digest emission).
-fn sha256_hex(serialized: &str) -> String {
-    let digest = Sha256::digest(serialized.as_bytes());
+fn sha256_hex(serialized: Vec<u8>) -> String {
+    let digest = Sha256::digest(serialized);
     let mut hex = String::with_capacity(digest.len() * 2);
     for byte in digest {
         hex.push_str(&format!("{byte:02x}"));

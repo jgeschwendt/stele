@@ -279,29 +279,109 @@ pub fn run(args: &[String]) -> i32 {
     }
 }
 
+/// One verb's §5.1 grammar beyond the global `--json` (stripped before dispatch): `(name,
+/// entry point taking argv with `args[0]` the verb, positional count, switches, value-taking
+/// flags, usage)`.
+type Verb = (
+    &'static str,
+    fn(&Workspace, &[&str]) -> Result<CommandOutput>,
+    usize,
+    &'static [&'static str],
+    &'static [&'static str],
+    &'static str,
+);
+
+/// Every verb (§5.1), each held to its own [`Verb`] grammar.
+const VERBS: &[Verb] = &[
+    ("blame", blame, 1, &[], &[], "stele blame <node-id>/<slug>"),
+    ("build", build, 0, &[], &[], "stele build"),
+    (
+        "check",
+        check,
+        0,
+        &[FREEZE_FLAG, REPORT_FLAG, RUN_COMMANDS_FLAG],
+        &["--only"],
+        "stele check [--only <class>] [--freeze | --run-commands] [--report]",
+    ),
+    (
+        "emit",
+        emit,
+        0,
+        &[EMIT_CHECK_FLAG, EMIT_CLAUDE_RULES_FLAG],
+        &[],
+        "stele emit [--check] [--claude-rules]",
+    ),
+    (
+        "hazards",
+        hazards,
+        0,
+        &[],
+        &["--node"],
+        "stele hazards [--node <id>]",
+    ),
+    (
+        "init",
+        init,
+        0,
+        &[UNDERCOVER_FLAG],
+        &[],
+        "stele init [--undercover]",
+    ),
+    (
+        "invariants",
+        invariants,
+        0,
+        &[],
+        &["--touching"],
+        "stele invariants [--touching <path>]",
+    ),
+    ("migrate", migrate, 0, &[], &[], "stele migrate"),
+    ("node", node, 1, &[], &[], "stele node <id>"),
+    (
+        "nodes",
+        nodes,
+        0,
+        &[],
+        &["--kind"],
+        "stele nodes [--kind <kind>]",
+    ),
+    ("root", cmd_root, 0, &[], &[], "stele root"),
+    (
+        "unfold",
+        unfold,
+        1,
+        &[],
+        &["--depth"],
+        "stele unfold <id> [--depth N]",
+    ),
+];
+
+/// Run the verb `args[0]` names, after holding its argv to the [`VERBS`] grammar: any token
+/// past its positionals that is no flag of its own is a §5.3 bad flag (exit 2), surfaced
+/// BEFORE the verb runs — a mistyped `check --run-command` never silently skips liveness, a
+/// mistyped `init --help` never scaffolds a live tree. A missing positional or flag value is
+/// left to the verb's own usage error.
 fn dispatch(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
-    // `--undercover` (§3.5) is an `init`-only flag. The read verbs otherwise tolerate
-    // unknown tokens (they scan for their own flags), so reject it explicitly here rather than
-    // let a mistyped `stele check --undercover` run and silently ignore the intent (exit 2).
-    if args.first().copied() != Some("init") && args.contains(&UNDERCOVER_FLAG) {
-        return Err(SteleError::input_msg(format!(
-            "{UNDERCOVER_FLAG} is only valid on `stele init` (§3.5)"
-        )));
-    }
     match args.first().copied() {
-        Some("blame") => blame(ws, args),
-        Some("build") => build(ws, args),
-        Some("check") => check(ws, args),
-        Some("emit") => emit(ws, args),
-        Some("hazards") => hazards(ws, args),
-        Some("init") => init(ws, args),
-        Some("invariants") => invariants(ws, args),
-        Some("migrate") => migrate(ws, args),
-        Some("node") => node(ws, args),
-        Some("nodes") => nodes(ws, args),
-        Some("root") => cmd_root(ws),
-        Some("unfold") => unfold(ws, args),
-        Some(other) => Err(SteleError::input_msg(format!("unknown command: {other:?}"))),
+        Some(verb) => {
+            let (_, run, arity, switches, valued, usage) = VERBS
+                .iter()
+                .find(|v| v.0 == verb)
+                .ok_or_else(|| SteleError::input_msg(format!("unknown command: {verb:?}")))?;
+            let (mut tokens, mut positionals) = (args[1..].iter(), 0);
+            while let Some(token) = tokens.next() {
+                if valued.contains(token) {
+                    tokens.next();
+                } else if positionals < *arity && !token.starts_with("--") {
+                    positionals += 1;
+                } else if !switches.contains(token) {
+                    return Err(SteleError::input_msg(format!(
+                        "unexpected argument {token:?}; usage: {usage} [--json]"
+                    )));
+                }
+            }
+            run(ws, args)
+        }
         None => Err(SteleError::input_msg(
             "usage: stele root | node <id> | unfold <id> | invariants | hazards | nodes | \
              check | emit | blame | build | init | migrate | serve | --version   (add --json \
@@ -392,27 +472,11 @@ fn error_data(error: &SteleError) -> Value {
 const UNBORN_HEAD_NOTICE: &str = "stele build: no commit yet (unborn HEAD) — every claim left verified:null; commit, then \
      re-run stele build to stamp watermarks";
 
-/// The mutating verbs (§5.3 `stele build | init`, and `emit` once its own two flags are
-/// filtered out) accept ONLY the global `--json` flag
-/// (already stripped from `args` before dispatch) and no other token. `args[0]` is the
-/// verb; any further argument is a §5.3 input error (exit 2) surfaced BEFORE any
-/// filesystem effect — an unknown flag must never silently run the mutation (e.g. a
-/// mistyped `stele init --help` overwriting a live tree).
-fn reject_extra_args(args: &[&str], usage: &str) -> Result<()> {
-    if let Some(extra) = args.get(1) {
-        return Err(SteleError::input_msg(format!(
-            "unexpected argument {extra:?}; usage: {usage}"
-        )));
-    }
-    Ok(())
-}
-
 /// `stele build` (§5.1): sources → in-memory graph → atomically written lock.
 /// Any input error aborts before a single byte is written (§5.3 atomicity).
 /// `build` never reads `.stele/config.toml` — config tunes `check`/`emit`, not the
 /// graph (§3.4).
-fn build(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
-    reject_extra_args(args, "stele build [--json]")?;
+fn build(ws: &Workspace, _: &[&str]) -> Result<CommandOutput> {
     // Mutual exclusion (§3.5): a tracked shared graph coexisting with the undercover marker is
     // exit 2. Runs BEFORE `build_graph` and the lock write so no partial lock is ever left on
     // disk (§5.3 build atomicity) — an undercover repo that later adopts a shared committed
@@ -665,12 +729,6 @@ const CLAUDE_LOCAL_SHIM: &str = "CLAUDE.local.md";
 /// path-scoped `.claude/rules/*.md` (§3.3, opt-in). Like `node`/`blame` it trusts the
 /// committed lock and does not byte-compare — staleness is `check`'s job (§5.3).
 fn emit(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
-    let stray: Vec<&str> = args
-        .iter()
-        .filter(|a| ![EMIT_CHECK_FLAG, EMIT_CLAUDE_RULES_FLAG].contains(a))
-        .copied()
-        .collect();
-    reject_extra_args(&stray, "stele emit [--check] [--claude-rules] [--json]")?;
     let _config = config::load(&ws.home)?;
     let on_disk = read_committed_lock(&ws.home)?;
     require_lock_version(&on_disk)?;
@@ -1107,7 +1165,7 @@ fn load_committed(root: &Path) -> Result<Lock> {
 /// (identity, commands) render from the system node here; items 3–6 (hazards, router,
 /// indexes, engine) reuse the `emit` region renderer so `root` and the materialized
 /// root AGENTS.md never diverge.
-fn cmd_root(ws: &Workspace) -> Result<CommandOutput> {
+fn cmd_root(ws: &Workspace, _: &[&str]) -> Result<CommandOutput> {
     let lock = load_committed(&ws.home)?;
     let system = lock.nodes.get(SYSTEM_ID).ok_or_else(|| {
         SteleError::input_msg("the repo root declares no `kind: system` node; nothing to render")
@@ -1138,7 +1196,7 @@ const DEFAULT_UNFOLD_DEPTH: u32 = 1;
 /// `depth` hops as `id · kind · purpose` summaries. A neighbour is a child (`contains`)
 /// or a `depends` target; depth 2 expands each neighbour's neighbours in turn.
 fn unfold(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
-    // `--depth` where the id belongs is a missing id; any other `--…` may be a node id.
+    // `--depth` where the id belongs is a missing id.
     let Some(query) = args.get(1).filter(|a| **a != "--depth") else {
         return Err(SteleError::input_msg(
             "usage: stele unfold <id> [--depth N]",
@@ -1645,19 +1703,11 @@ const UNDERCOVER_MARKER_CONTENT: &str = "stele undercover\n";
 /// claim. `init` never deletes content, never writes inside a generated region, and never
 /// writes the lock.
 fn init(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
-    // `--undercover` (§3.5) is the ONE extra token `init` accepts beyond `--json`; any other
-    // is still an exit-2 input error, and the flag is inert on every other verb. With it,
-    // init forks to the overlay scaffold; without it, normal init is byte-identical to today.
+    // `--undercover` (§3.5) forks init to the overlay scaffold; without it, normal init is
+    // byte-identical to today.
     if args.contains(&UNDERCOVER_FLAG) {
-        let rest: Vec<&str> = args
-            .iter()
-            .copied()
-            .filter(|a| *a != UNDERCOVER_FLAG)
-            .collect();
-        reject_extra_args(&rest, "stele init [--undercover] [--json]")?;
         return init_undercover(ws);
     }
-    reject_extra_args(args, "stele init [--json]")?;
     // Normal-mode init scaffolds and stages the WORK tree in place (§7); the git spawns,
     // the tracked reads, and the source writes all target the invoking checkout. (Phase 3
     // forks `init --undercover` to scaffold the `<home>/.stele/tree/` overlay instead, with
@@ -2201,8 +2251,7 @@ struct MigrateTarget {
 /// (every source is read and rewritten in memory before the first byte lands), `3` on an
 /// IO failure; never `1` — `migrate` asserts nothing. A dirty work tree is a WARNING, not
 /// a refusal: the rewrite is meant to be reviewed as a diff.
-fn migrate(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
-    reject_extra_args(args, "stele migrate [--json]")?;
+fn migrate(ws: &Workspace, _: &[&str]) -> Result<CommandOutput> {
     if ws.mode == Mode::Undercover {
         // Self-heal (§3.5) like every other undercover verb: re-ensure the `info/exclude`
         // block so the private graph stays out of `git status`. The managed block's own

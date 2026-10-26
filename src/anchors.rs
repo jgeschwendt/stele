@@ -408,8 +408,9 @@ pub fn resolve_symbol(root: &Path, rel_path: &str, symbol: &str) -> Result<Symbo
     let Some(lang) = ext.as_deref().and_then(lang_for_extension) else {
         return Ok(SymbolResolution::Unresolved);
     };
-    // A binary blob (not valid UTF-8) cannot resolve a symbol; the anchor simply
-    // does not bind (§2.4), same as a missing file — never a hard read failure.
+    // A binary file (a NUL in its first 8 KiB, per `read_text`) cannot resolve a symbol;
+    // the anchor simply does not bind (§2.4), same as a missing file — never a hard read
+    // failure.
     let Some(contents) = read_text(&root.join(path), rel_path)? else {
         return Ok(SymbolResolution::Unresolved);
     };
@@ -601,8 +602,8 @@ pub fn region_digest_for_claim(
     let Some(lang) = extension(path).as_deref().and_then(lang_for_extension) else {
         return Ok(None);
     };
-    // A binary blob (not valid UTF-8) has no parse-able region; fall to the §4.5
-    // churn path (`None`), the same treatment a parser-less file gets above.
+    // A binary file (a NUL in its first 8 KiB, per `read_text`) has no parse-able region;
+    // fall to the §4.5 churn path (`None`), the same treatment a parser-less file gets above.
     let Some(contents) = read_text(&root.join(path), file)? else {
         return Ok(None);
     };

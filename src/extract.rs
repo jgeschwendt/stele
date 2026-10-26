@@ -76,7 +76,7 @@ impl<'a> Ctx<'a> {
         self.files.iter().filter(move |f| basename(f) == name)
     }
 
-    /// Read a tracked source as UTF-8, or `None` when the extractor should see nothing
+    /// Read a tracked source (lossy UTF-8), or `None` when binary or untracked
     /// ([`read_text`] — parity with the anchor scan, §2.4).
     fn read(&self, rel: &str) -> Result<Option<String>> {
         read_text(&self.root.join(rel), rel)

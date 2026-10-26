@@ -35,6 +35,28 @@ fn steleignored_tracked_guard_satisfies_enforced_by() {
             .unwrap();
         assert!(status.success(), "{var}=1");
     }
+    // Mid-merge, git lists the conflicted guard once per stage; it is still tracked.
+    fixture.git(&["checkout", "-q", "-b", "side"]);
+    fixture.write("vendor/guard.sh", "side\n");
+    fixture.commit("side");
+    fixture.git(&["checkout", "-q", "-"]);
+    fixture.write("vendor/guard.sh", "main\n");
+    fixture.commit("main");
+    let merge = isolate_git(std::process::Command::new("git").current_dir(fixture.path("")))
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "merge",
+            "-q",
+            "side",
+        ])
+        .output()
+        .unwrap();
+    assert!(!merge.status.success());
+    let conflicted = fixture.run(&["check", "--only", "referential"]);
+    assert_eq!(conflicted.code, 0, "{}", conflicted.combined());
 }
 
 /// An `exhaustiveness.exclude` entry reads as a gitignore line (§4.3): `./`, a leading or

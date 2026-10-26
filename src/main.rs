@@ -17,7 +17,12 @@ fn main() {
     unsafe {
         signal(13, 0);
     }
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // Lossy, never `env::args` (it panics on a non-UTF-8 argument, outside the guard below);
+    // dispatch refuses the U+FFFD it leaves as a §5.3 bad flag.
+    let args: Vec<String> = std::env::args_os()
+        .skip(1)
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
     let code = std::panic::catch_unwind(|| stele::cli::run(&args)).unwrap_or_else(|_| {
         eprintln!("stele: internal error (unexpected panic)");
         ExitCode::Internal as i32

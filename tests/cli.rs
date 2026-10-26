@@ -380,6 +380,36 @@ fn bad_command_lines_exit_2() {
     }
 }
 
+// A non-UTF-8 argument is a bad flag (exit 2, one `--json` envelope), never a panic (101)
+// nor a lossy path that matches nothing (exit 0).
+#[cfg(unix)]
+#[test]
+fn non_utf8_arguments_exit_2() {
+    use std::os::unix::ffi::OsStrExt;
+    let fixture = built();
+    let bad = std::ffi::OsStr::from_bytes(b"src/\xff.rs");
+    for args in [&["invariants", "--touching"][..], &["node", "--json"]] {
+        let out = common::isolate_git(
+            std::process::Command::new(common::BIN)
+                .args(&args[..1])
+                .arg(bad)
+                .args(&args[1..])
+                .current_dir(&fixture.root),
+        )
+        .output()
+        .unwrap();
+        let (stdout, stderr) = (
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        );
+        assert_eq!(out.status.code(), Some(2), "{args:?}: {stdout}{stderr}");
+        assert!(
+            format!("{stdout}{stderr}").contains("is not valid UTF-8"),
+            "{args:?}: {stdout}{stderr}"
+        );
+    }
+}
+
 // A graph with no system node (§2.1): `root` has nothing to render (exit 2), `emit` writes no
 // CLAUDE.md shim, and a `--touching` path no node owns surfaces no invariants.
 #[test]

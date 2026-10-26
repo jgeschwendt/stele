@@ -374,6 +374,12 @@ const VERBS: &[Verb] = &[
 /// verb reads one value, so `--only a --only b` would drop `b`). A missing positional or flag
 /// value is left to the verb's own usage error.
 fn dispatch(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
+    // `main` decodes argv lossily, so U+FFFD marks a non-UTF-8 byte: no verb, id or path.
+    if let Some(token) = args.iter().find(|a| a.contains('\u{fffd}')) {
+        return Err(SteleError::input_msg(format!(
+            "argument {token:?} is not valid UTF-8"
+        )));
+    }
     match args.first().copied() {
         Some(verb) => {
             let (_, run, arity, switches, valued, usage) = VERBS

@@ -792,11 +792,11 @@ fn is_definition_node(lang: Lang, node: Node, src: &[u8]) -> bool {
 /// Serialize a bound node's structure (§4.5): a pre-order walk emitting
 /// `(<kind> …children…)` for interior nodes and `(<kind> <token-text>)` for leaves,
 /// over ALL children (named and anonymous, so operators and punctuation count).
-/// Comment subtrees are dropped entirely and whitespace-only leaves are skipped, so
-/// the digest is stable across formatting and comment churn yet changes on any
-/// token-level semantic edit (flipped constant, reordered guard, changed field
-/// list). Whitespace never enters the digest; the same node always yields the same
-/// bytes, so the sha256 is reproducible.
+/// Comment subtrees are dropped entirely and anonymous whitespace-only leaves are
+/// skipped, so the digest is stable across formatting and comment churn yet changes on
+/// any token-level semantic edit (flipped constant, reordered guard, changed field
+/// list). Formatting whitespace never enters the digest; the same node always yields
+/// the same bytes, so the sha256 is reproducible.
 fn serialize_structure(bound: Node, src: &[u8]) -> String {
     let mut out = String::new();
     // Interior nodes still awaiting their `)`: entering a node at `depth` closes every
@@ -817,7 +817,8 @@ fn serialize_structure(bound: Node, src: &[u8]) -> String {
             return true;
         }
         let text = node.utf8_text(src).unwrap_or("");
-        if !text.trim().is_empty() {
+        // A named leaf is token content (a `" "` literal's string body), never formatting.
+        if node.is_named() || !text.trim().is_empty() {
             out.push('(');
             out.push_str(node.kind());
             out.push(' ');

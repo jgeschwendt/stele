@@ -105,6 +105,29 @@ fn comment_churn_inside_bound_region_is_stable() {
     assert_eq!(base, elixir_cap_digest(&churned).unwrap());
 }
 
+/// A whitespace-only string literal is token content, not formatting: `" "`, `"  "` and
+/// `""` digest apart in every grammar.
+#[test]
+fn whitespace_only_string_content_enters_the_digest() {
+    for (name, template) in [
+        ("m.py", "def f(w):\n    return S.join(w)\n"),
+        ("m.rs", "fn f() -> &'static str { S }\n"),
+        ("m.ts", "function f() { return S; }\n"),
+        ("m.ex", "def f, do: S\n"),
+    ] {
+        let digest = |s| {
+            digest_inline(
+                name,
+                &template.replace('S', s),
+                &format!("{name}#f"),
+                &format!("{name}:1"),
+            )
+        };
+        assert_ne!(digest("\" \""), digest("\"\""), "{name}");
+        assert_ne!(digest("\" \""), digest("\"  \""), "{name}");
+    }
+}
+
 /// A parser-less language (markdown) or a binary blob yields no digest — the §2.4
 /// churn-count fallback (Phase D5), a different mechanism from the (d) AST binding
 /// fallback below.

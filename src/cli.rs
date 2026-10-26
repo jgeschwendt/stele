@@ -2592,12 +2592,15 @@ fn read_node_source(source: &Path, rel: &Path) -> Result<String> {
 /// `※ <slug>` landmark anchor resolves to the winning landmark occurrence (or stays `null`
 /// when the slug has zero occurrences — build stays 0, §4.1 fails it later). A
 /// `<path>#<symbol>` anchor resolves via tree-sitter: exactly one definition →
-/// its line; zero or many → `null` plus the §4.1 unresolved-vs-ambiguous marker.
+/// its line; zero or many → `null` plus the §4.1 unresolved-vs-ambiguous marker. Its path
+/// binds only when git tracks it byte for byte — `.steleignore`d or not, since a named path
+/// is not scanned — so an untracked file or a case-folded spelling never resolves.
 fn resolve_claim_anchors(
     root: &Path,
     nodes: &mut [Node],
     anchors: &crate::model::AnchorData,
 ) -> Result<()> {
+    let named = git_ls_files(root, &[])?;
     for node in nodes.iter_mut() {
         for claim in node.invariants.iter_mut().chain(node.hazards.iter_mut()) {
             if let Some(slug) = claim
@@ -2612,7 +2615,12 @@ fn resolve_claim_anchors(
                     None => claim.resolution = Resolution::Unresolved,
                 }
             } else if let Some((path, symbol)) = claim.anchor.rsplit_once('#') {
-                match anchors::resolve_symbol(root, path, symbol)? {
+                let tracked = named.iter().any(|file| file.as_os_str() == path);
+                let resolution = tracked.then(|| anchors::resolve_symbol(root, path, symbol));
+                match resolution
+                    .transpose()?
+                    .unwrap_or(SymbolResolution::Unresolved)
+                {
                     SymbolResolution::Resolved(line) => {
                         claim.resolved = Some(format!("{path}:{line}"));
                         claim.resolution = Resolution::Resolved;

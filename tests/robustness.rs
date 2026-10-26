@@ -33,6 +33,29 @@ fn tracked_binary_file_does_not_abort_the_scan() {
     }
 }
 
+// A legacy-encoded source (Latin-1 here) is not a blob: only a NUL marks one. Its ASCII
+// imports still extract, so an undeclared edge stays red — skipping the file was a false
+// green.
+#[test]
+fn a_non_utf8_source_without_a_nul_is_still_scanned() {
+    let fixture = Fixture::bare();
+    fixture.write("AGENTS.md", "# root\n\n```stele\nkind: system\n```\n");
+    for node in ["a", "b"] {
+        fixture.write(
+            &format!("{node}/AGENTS.md"),
+            "```stele\nkind: component\n```\n",
+        );
+    }
+    std::fs::write(fixture.path("a/x.py"), b"# caf\xe9\nimport b\n").expect("write latin-1");
+    fixture.write("b/__init__.py", "def f():\n    return 1\n");
+    fixture.commit("a latin-1 source importing an undeclared node");
+    assert_eq!(fixture.run(&["build"]).code, 0);
+    fixture.commit("lock");
+    let check = fixture.run(&["check", "--only", "structural"]);
+    assert_eq!(check.code, 1, "{}", check.combined());
+    assert!(check.stdout.contains("a imports b"), "{}", check.combined());
+}
+
 // A node source (AGENTS.md) is NOT a binary blob to skip: invalid UTF-8 there is a hard
 // §5.3 input error (exit 2) naming the file, never a silent drop of a declared node.
 #[test]

@@ -116,7 +116,7 @@ fn probe5_runner_variety_npm_cargo_just() {
     );
     fixture.write(
         "justfile",
-        "alias b := build\nbuild:\n\techo hi\n@deploy target:\n\techo {{target}}\n",
+        "alias b := build\nv := \"1\"\nbuild:\n\techo hi\n@deploy target:\n\techo {{target}}\n",
     );
     add_root_commands(
         &fixture,

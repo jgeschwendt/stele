@@ -350,10 +350,22 @@ fn referential(ctx: &Context) -> Result<Vec<Finding>> {
         }
     }
 
-    // (c) an ADR id names one file: twins (parallel branches each adding 0003) leave
-    // `§ 0003` ambiguous, and the lock keeps only one of them.
+    // (c) a referenced ADR id names one file: twins (parallel branches each adding
+    // 0003) leave `§ 0003` ambiguous, and the lock keeps only one of them. Unreferenced
+    // twins (log4brains' same-day `20240101-*`) are ambiguous to no one.
+    let referenced: BTreeSet<&str> = graph
+        .nodes
+        .iter()
+        .flat_map(|node| &node.edges.decided_by)
+        .filter_map(|target| crate::model::decision_number(target).ok())
+        .collect();
     let mut adr_files: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for adr in &graph.adrs {
+    for adr in graph.adrs.iter().filter(|adr| {
+        adr.id
+            .rsplit('/')
+            .next()
+            .is_some_and(|n| referenced.contains(n))
+    }) {
         adr_files.entry(&adr.id).or_default().push(&adr.path);
     }
     for (id, paths) in adr_files.iter().filter(|(_, paths)| paths.len() > 1) {

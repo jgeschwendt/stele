@@ -1762,33 +1762,103 @@ fn short_digest(digest: &str) -> String {
 
 // ─── liveness (§4.6) ───────────────────────────────────────────────────────────
 
-/// A pragmatic set of `mix` builtin tasks (§4.6). Not exhaustive — a curated list of
-/// the tasks a team actually wires into `commands:`; anything else must be a `mix.exs`
-/// alias to resolve. Alpha-sorted.
-const MIX_BUILTINS: [&str; 16] = [
+/// The `mix` builtin tasks (§4.6): the stock Mix tasks `mix help` lists (Elixir 1.20.2,
+/// archive tasks such as `hex.*`/`phx.*` excluded) plus `docs` and `loadpaths`; anything
+/// else must be a `mix.exs` alias to resolve. Alpha-sorted.
+const MIX_BUILTINS: [&str; 43] = [
+    "app.config",
+    "app.start",
+    "app.tree",
+    "archive",
+    "archive.build",
+    "archive.install",
+    "archive.uninstall",
     "clean",
     "cmd",
     "compile",
+    "deps",
     "deps.clean",
     "deps.compile",
     "deps.get",
     "deps.tree",
+    "deps.unlock",
     "deps.update",
+    "do",
     "docs",
+    "escript",
     "escript.build",
+    "escript.install",
+    "escript.uninstall",
+    "eval",
     "format",
     "help",
+    "loadconfig",
     "loadpaths",
+    "local",
+    "local.hex",
+    "local.rebar",
+    "new",
+    "profile.cprof",
+    "profile.eprof",
+    "profile.fprof",
+    "profile.tprof",
     "release",
+    "release.init",
     "run",
+    "source",
     "test",
+    "test.coverage",
+    "xref",
 ];
 
-/// A pragmatic set of `cargo` builtin subcommands (§4.6), same curation rationale as
-/// [`MIX_BUILTINS`]; anything else must be a `.cargo/config.toml` `[alias]`. Alpha-sorted.
-const CARGO_BUILTINS: [&str; 19] = [
-    "add", "bench", "build", "check", "clean", "clippy", "doc", "fetch", "fix", "fmt", "init",
-    "install", "new", "publish", "remove", "run", "test", "tree", "update",
+/// The `cargo` builtin subcommands (§4.6): those with a man page in the toolchain's
+/// share/man/man1, the built-in aliases `cargo --list` names (b, c, d, r, rm, t), and the
+/// rustup components `clippy`/`fmt`; anything else must be a `.cargo/config.toml`
+/// `[alias]`. Alpha-sorted.
+const CARGO_BUILTINS: [&str; 43] = [
+    "add",
+    "b",
+    "bench",
+    "build",
+    "c",
+    "check",
+    "clean",
+    "clippy",
+    "d",
+    "doc",
+    "fetch",
+    "fix",
+    "fmt",
+    "generate-lockfile",
+    "help",
+    "info",
+    "init",
+    "install",
+    "locate-project",
+    "login",
+    "logout",
+    "metadata",
+    "new",
+    "owner",
+    "package",
+    "pkgid",
+    "publish",
+    "r",
+    "remove",
+    "report",
+    "rm",
+    "run",
+    "rustc",
+    "rustdoc",
+    "search",
+    "t",
+    "test",
+    "tree",
+    "uninstall",
+    "update",
+    "vendor",
+    "version",
+    "yank",
 ];
 
 /// The shell builtins the liveness resolver (§4.6) treats as always-resolved — rung (a),

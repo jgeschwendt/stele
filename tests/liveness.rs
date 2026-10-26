@@ -124,6 +124,8 @@ fn probe5_runner_variety_npm_cargo_just() {
          js-bad: yarn run missing\n  \
          rs-ok: cargo xtask\n  \
          rs-builtin: cargo build\n  \
+         rs-stock: cargo metadata --format-version 1 && cargo b\n  \
+         mix-stock: mix local.hex --force && mix deps.unlock --unused\n  \
          rs-bad: cargo frobnicate\n  \
          just-ok: just deploy prod\n  \
          just-alias: just b\n  \
@@ -151,8 +153,8 @@ fn probe5_runner_variety_npm_cargo_just() {
         out.contains("`just teardown` — recipe not found in justfile"),
         "{out}"
     );
-    // Only the three missing tasks fail; the five valid ones (script, alias, builtin,
-    // quiet recipe, recipe alias) resolve.
+    // Only the three missing tasks fail; the valid ones (script, alias, builtins, stock
+    // cargo/mix subcommands, quiet recipe, recipe alias) resolve.
     assert_eq!(liveness_lines(&out), 3, "{out}");
 }
 

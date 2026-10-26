@@ -2,8 +2,10 @@
 
 mod common;
 
-use common::Fixture;
+use common::{BIN, Fixture, isolate_git};
 use serde_json::{Value, json};
+use std::fs::File;
+use std::process::Command;
 
 /// Feed `messages` to `stele serve` as newline-delimited stdin, closed for EOF shutdown
 /// (§lifecycle), and parse stdout: one response per request, in order.
@@ -195,8 +197,9 @@ fn malformed_and_unknown_inputs_are_resilient() {
 }
 
 /// Undercover with no lock: the stderr note, a tool-error result (its line padded with
-/// non-JSON whitespace), a skipped blank line, a parse error, then a non-UTF-8 line ends the
-/// stream as a stdio error (exit 3).
+/// non-JSON whitespace), a skipped blank line, and a parse error for a non-JSON line and for a
+/// non-UTF-8 one, which never ends the stream; only a stdio error does (exit 3: a directory
+/// for stdin fails the read).
 #[test]
 fn raw_stream_survives_until_a_stdio_error() {
     let fixture = Fixture::bare();
@@ -205,15 +208,10 @@ fn raw_stream_survives_until_a_stdio_error() {
     let mut stdin = format!("\u{a0}{check}\u{b}\n \t\nnot json\n").into_bytes();
     stdin.extend(b"\xff\n");
     let out = fixture.run_with_stdin(&["serve"], stdin);
-    assert_eq!(out.code, 3, "{}", out.combined());
+    assert_eq!(out.code, 0, "{}", out.combined());
     assert!(out.stderr.contains("undercover mode"), "{}", out.stderr);
-    assert!(
-        out.stderr.contains("stele serve: stdio error"),
-        "{}",
-        out.stderr
-    );
     let responses = responses(&out.stdout);
-    assert_eq!(responses.len(), 2, "{responses:?}");
+    assert_eq!(responses.len(), 3, "{responses:?}");
     assert_eq!(responses[0]["result"]["isError"], true, "{}", responses[0]);
     assert!(
         responses[0]["result"]["content"][0]["text"]
@@ -222,10 +220,22 @@ fn raw_stream_survives_until_a_stdio_error() {
         "{}",
         responses[0]
     );
-    assert_eq!(
-        [&responses[1]["id"], &responses[1]["error"]["code"]],
-        [&Value::Null, &json!(-32700)]
-    );
+    for response in &responses[1..] {
+        assert_eq!(
+            [&response["id"], &response["error"]["code"]],
+            [&Value::Null, &json!(-32700)]
+        );
+    }
+    let out = isolate_git(
+        Command::new(BIN)
+            .arg("serve")
+            .current_dir(&fixture.root)
+            .stdin(File::open(&fixture.root).unwrap()),
+    )
+    .output()
+    .unwrap();
+    assert_eq!(out.status.code(), Some(3));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("stele serve: stdio error"));
 }
 
 /// `--json` is a bad flag and a non-repo cwd is refused: exit 2, stdout (reserved for

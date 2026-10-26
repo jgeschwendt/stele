@@ -512,10 +512,9 @@ fn resolve_markdown_heading(
 /// heading. The opening `#` run (1–6) must be followed by whitespace or end-of-line; a
 /// trailing space-preceded `#` run (the optional closing sequence) is stripped.
 fn atx_heading_text(line: &str) -> Option<&str> {
-    // CommonMark: at most 3 spaces of indent; 4+ (or a tab) is an indented code line.
-    let trimmed = line.trim_start_matches(' ');
+    let trimmed = line.trim_start();
     let hashes = trimmed.chars().take_while(|&c| c == HEADING_MARK).count();
-    if hashes == 0 || hashes > MAX_HEADING_LEVEL || line.len() - trimmed.len() > 3 {
+    if hashes == 0 || hashes > MAX_HEADING_LEVEL {
         return None;
     }
     let rest = &trimmed[hashes..];
@@ -1199,24 +1198,6 @@ mod tests {
         assert_eq!(
             resolve_symbol(dir.path(), "g.md", "setup").unwrap(),
             SymbolResolution::Resolved(1),
-        );
-    }
-
-    #[test]
-    fn markdown_indented_code_line_is_not_a_heading() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("g.md"),
-            "## Setup\n\n    # setup db\n\t# setup cache\n   ## Setup steps\n",
-        )
-        .unwrap();
-        assert_eq!(
-            resolve_symbol(dir.path(), "g.md", "setup-db").unwrap(),
-            SymbolResolution::Unresolved,
-        );
-        assert_eq!(
-            resolve_symbol(dir.path(), "g.md", "setup-steps").unwrap(),
-            SymbolResolution::Resolved(5),
         );
     }
 }

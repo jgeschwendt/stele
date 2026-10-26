@@ -204,7 +204,8 @@ fn gallery_8_5_budget() {
 }
 
 // 8.6a Exhaustiveness: a new apps/api/ directory with 14 files and no AGENTS.md is
-// covered by no node.
+// covered by no node. So is a new top-level tools/ — reported within the depth D, where
+// apps/api, reached through the apps/ pass-through, is reported regardless of D.
 #[test]
 fn gallery_8_6a_exhaustiveness_uncovered_dir() {
     let fixture = Fixture::acme();
@@ -214,7 +215,8 @@ fn gallery_8_6a_exhaustiveness_uncovered_dir() {
             &format!("defmodule AcmeApi.Endpoint{i} do\n  def call(conn), do: conn\nend\n"),
         );
     }
-    fixture.commit("add apps/api with 14 uncovered source files");
+    fixture.write("tools/release.sh", "echo release\n");
+    fixture.commit("add apps/api with 14 uncovered source files, and tools/");
 
     assert_eq!(
         fixture.run(&["build"]).code,
@@ -226,11 +228,19 @@ fn gallery_8_6a_exhaustiveness_uncovered_dir() {
     assert_eq!(check.code, 1, "{out}");
     assert!(out.contains("exhaustiveness"), "{out}");
     assert!(out.contains("apps/api"), "{out}");
+    assert!(out.contains("tools (1 file)"), "{out}");
+
+    // D = 0 drops the top-level tools/, never the pass-through's apps/api.
+    fixture.write(".stele/config.toml", "[exhaustiveness]\ndepth = 0\n");
+    let shallow = fixture.run(&["check", "--only", "exhaustiveness"]);
+    let out = shallow.combined();
+    assert_eq!(shallow.code, 1, "{out}");
+    assert!(out.contains("apps/api") && !out.contains("tools"), "{out}");
 
     // The fix's second branch: an `exhaustiveness.exclude` glob matching the segment.
     fixture.write(
         ".stele/config.toml",
-        "[exhaustiveness]\nexclude = [\"a?i*\"]\n",
+        "[exhaustiveness]\ndepth = 0\nexclude = [\"a?i*\"]\n",
     );
     let excluded = fixture.run(&["check", "--only", "exhaustiveness"]);
     assert_eq!(excluded.code, 0, "{}", excluded.combined());

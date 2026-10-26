@@ -52,8 +52,8 @@ impl Steleignore {
     /// Load the root `.steleignore` (§2.4). Absent → an empty matcher (ignore nothing),
     /// which is why a repo without one behaves exactly as before this feature.
     pub fn load(root: &Path) -> Result<Self> {
-        match std::fs::read_to_string(root.join(STELEIGNORE_FILE)) {
-            Ok(contents) => Ok(Self::parse(&contents)),
+        match std::fs::read(root.join(STELEIGNORE_FILE)) {
+            Ok(bytes) => Ok(Self::parse(&String::from_utf8_lossy(&bytes))),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(SteleError::internal(format!(
                 "read {STELEIGNORE_FILE}: {e}"

@@ -190,12 +190,17 @@ fn one_line_empty_region_form_is_accepted() {
 
 // A Windows editor's BOM (U+FEFF) before line 1 hid a first-line ```stele fence (the
 // node dropped out, so `init` prepended a second skeleton), failed a package.json's JSON
-// parse (its package drew no edge), and glued itself to `.steleignore`'s first pattern.
+// parse (its package drew no edge), and glued itself to `.steleignore`'s first pattern. A
+// Latin-1 `.steleignore` comment decodes lossily, as git reads it, never an exit 3.
 #[test]
 fn leading_bom_is_skipped_in_node_package_and_ignore_files() {
     let fixture = Fixture::bare();
     fixture.write("AGENTS.md", "\u{feff}```stele\nkind: system\n```\n");
-    fixture.write(".steleignore", "\u{feff}ghost/\n");
+    std::fs::write(
+        fixture.path(".steleignore"),
+        b"\xef\xbb\xbfghost/\n# vendored by Ren\xe9\n",
+    )
+    .unwrap();
     fixture.write("ghost/AGENTS.md", "```stele\nkind: container\n```\n");
     for name in ["shared", "web"] {
         fixture.write(

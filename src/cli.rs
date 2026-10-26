@@ -370,8 +370,9 @@ const VERBS: &[Verb] = &[
 /// Run the verb `args[0]` names, after holding its argv to the [`VERBS`] grammar: any token
 /// past its positionals that is no flag of its own is a §5.3 bad flag (exit 2), surfaced
 /// BEFORE the verb runs — a mistyped `check --run-command` never silently skips liveness, a
-/// mistyped `init --help` never scaffolds a live tree. A missing positional or flag value is
-/// left to the verb's own usage error.
+/// mistyped `init --help` never scaffolds a live tree, a repeated valued flag is refused (the
+/// verb reads one value, so `--only a --only b` would drop `b`). A missing positional or flag
+/// value is left to the verb's own usage error.
 fn dispatch(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
     match args.first().copied() {
         Some(verb) => {
@@ -379,9 +380,10 @@ fn dispatch(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
                 .iter()
                 .find(|v| v.0 == verb)
                 .ok_or_else(|| SteleError::input_msg(format!("unknown command: {verb:?}")))?;
-            let (mut tokens, mut positionals) = (args[1..].iter(), 0);
+            let (mut tokens, mut positionals, mut seen) = (args[1..].iter(), 0, vec![]);
             while let Some(token) = tokens.next() {
-                if valued.contains(token) {
+                if valued.contains(token) && !seen.contains(&token) {
+                    seen.push(token);
                     tokens.next();
                 } else if positionals < *arity && !token.starts_with("--") {
                     positionals += 1;

@@ -327,7 +327,8 @@ fn lock_gate_and_report_and_json_envelope() {
 // token outside its grammar — a misspelled `check --run-command` never silently skips the
 // liveness run, nor `invariants --touchng` return the unscoped list, nor `serve --bogus`
 // serve; `--freeze` baselines alone, never beside a liveness run or `--only` it would skip;
-// `--undercover` is an `init`-only flag (§3.5).
+// `--undercover` is an `init`-only flag (§3.5); a valued flag given twice is refused, never
+// half-read.
 #[test]
 fn bad_command_lines_exit_2() {
     let fixture = built();
@@ -364,6 +365,10 @@ fn bad_command_lines_exit_2() {
             "unknown --only class \"vibes\"",
         ),
         (&["check", "--only"], "--only requires a class argument"),
+        (
+            &["check", "--only", "budget", "--only", "referential"],
+            "unexpected argument \"--only\"",
+        ),
         (
             &["unfold", "apps/web", "--depth", "0"],
             "positive integer, got \"0\"",

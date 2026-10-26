@@ -647,6 +647,41 @@ fn claude_rules_prune_stale_files_and_are_checked() {
     assert_eq!(check.code, 0, "{}", check.combined());
 }
 
+// A case-only id rename (`Billing` → `billing`) leaves the new rule in place: stale files
+// are pruned BEFORE the write, so on a case-folding filesystem the write (which keeps the
+// old entry's case) is never then pruned as `Billing.md`.
+#[test]
+fn claude_rules_survive_a_case_only_rename() {
+    let fixture = Fixture::bare();
+    let region = "\n<!-- @stele -->\n<!-- @end -->\n";
+    fixture.write(
+        "AGENTS.md",
+        &format!("```stele\nkind: system\n```\n{region}"),
+    );
+    fixture.write("Billing/x.md", "# h\n");
+    fixture.write(
+        "Billing/AGENTS.md",
+        &format!("```stele\nkind: container\ninvariants:\n  - claim: c\n    anchor: x.md#h\n```\n{region}"),
+    );
+    fixture.commit("a Billing node");
+    assert_eq!(fixture.run(&["build"]).code, 0);
+    assert_eq!(fixture.run(&["emit", "--claude-rules"]).code, 0);
+    fixture.commit("emit");
+    fixture.git(&["mv", "Billing", "tmp"]);
+    fixture.git(&["mv", "tmp", "billing"]);
+    fixture.commit("rename");
+    assert_eq!(fixture.run(&["build"]).code, 0);
+    let emit = fixture.run(&["emit", "--claude-rules"]);
+    assert_eq!(emit.code, 0, "{}", emit.combined());
+    assert!(
+        fixture
+            .read(".claude/rules/billing.md")
+            .contains("node: billing")
+    );
+    let check = fixture.run(&["emit", "--check", "--claude-rules"]);
+    assert_eq!(check.code, 0, "{}", check.combined());
+}
+
 // ─── §4.4 budget chain counts plain (non-node) AGENTS.md on the path (F6) ─────
 
 // A VCS-tracked AGENTS.md that declares no `stele` node is still a SPEC §3.1 degradation

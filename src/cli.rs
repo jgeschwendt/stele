@@ -1068,18 +1068,21 @@ fn shim_import_path(work: &Path, home: &Path) -> PathBuf {
     rel
 }
 
-/// Render one `.claude/rules/<slug>.md` per node that declares claims (§3.3, opt-in), then
-/// remove every marker-stamped file no node renders any more. Each write is gated on the
+/// Remove every marker-stamped `.claude/rules/` file no node renders any more, then render
+/// one `.claude/rules/<slug>.md` per node that declares claims (§3.3, opt-in). Each write is gated on the
 /// stele marker: a target that is absent or already opens with [`emit::CLAUDE_RULE_MARKER`]
 /// is (re)generated; a foreign file (a hand-authored rule with no marker) is NEVER clobbered
 /// nor pruned — clobbering it is an exit-2 input error naming the file.
 fn write_claude_rules(root: &Path, rules: &BTreeMap<String, (&str, String)>) -> Result<()> {
-    for (name, (_, content)) in rules {
-        write_under_root(root, CLAUDE_RULES_DIR, name, content)?;
-    }
+    // Prune first: on a case-folding filesystem a write keeps an existing entry's case, so
+    // after a case-only rename (`Billing` → `billing`) a later prune of `Billing.md` would
+    // delete the rule just written.
     for name in stale_claude_rules(root, rules) {
         std::fs::remove_file(root.join(CLAUDE_RULES_DIR).join(&name))
             .map_err(|e| SteleError::internal(format!("remove {CLAUDE_RULES_DIR}/{name}: {e}")))?;
+    }
+    for (name, (_, content)) in rules {
+        write_under_root(root, CLAUDE_RULES_DIR, name, content)?;
     }
     Ok(())
 }

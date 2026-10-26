@@ -181,13 +181,14 @@ fn git_stdout(cwd: &Path, flag: &str) -> String {
 }
 
 /// `path`, typed relative to the cwd, as a top-level-relative path: joined onto the cwd's
-/// `--show-prefix` with `.`/`..` folded lexically (a `..` above the top level is dropped).
+/// `--show-prefix` with `.`/`..` folded lexically (a `..` above the top level is kept, for
+/// [`repo_relative`] to refuse).
 fn rebase_on_cwd(prefix: &str, path: &str) -> String {
     let mut out: Vec<&str> = Vec::new();
     for segment in prefix.split('/').chain(path.split('/')) {
         match segment {
             "" | "." => {}
-            ".." => {
+            ".." if out.last().is_some_and(|s| *s != "..") => {
                 out.pop();
             }
             other => out.push(other),
@@ -1352,24 +1353,28 @@ fn flag_value<'a>(args: &'a [&str], name: &str) -> Result<Option<&'a str>> {
     }
 }
 
-/// `path` relative to the work-tree top level `work`. An absolute path is resolved through
-/// its longest existing ancestor's canonical form, so a symlinked spelling of the tree
-/// (macOS `/var` → `/private/var`) still lands inside it; one outside the tree is exit 2.
-/// A relative path is already top-level-relative (`run` rebased it on the cwd).
+/// `path` relative to the work-tree top level `work`, lexically (§3.5): an absolute path is
+/// folded, then stripped of its shortest ancestor that canonicalizes to the top level — so a
+/// symlinked spelling of the tree (macOS `/var` → `/private/var`) lands inside it while an
+/// in-tree symlink scopes by its own location, never its target. A relative path is already
+/// folded top-level-relative (`run` rebased it on the cwd). One escaping the tree is exit 2.
 fn repo_relative(work: &Path, path: &str) -> Result<String> {
-    let absolute = Path::new(path);
-    if absolute.is_relative() {
-        return Ok(path.to_string());
-    }
-    let canonical = absolute
-        .ancestors()
-        .find_map(|a| Some(a.canonicalize().ok()?.join(absolute.strip_prefix(a).ok()?)));
-    canonical
-        .zip(work.canonicalize().ok())
-        .and_then(|(full, root)| Some(full.strip_prefix(root).ok()?.to_string_lossy().into()))
-        .ok_or_else(|| {
-            SteleError::input_msg(format!("--touching {path:?} is outside the work tree"))
-        })
+    let relative = if Path::new(path).is_relative() {
+        (!Path::new(path).starts_with("..")).then(|| path.to_string())
+    } else {
+        let (folded, root) = (
+            Path::new("/").join(rebase_on_cwd("", path)),
+            work.canonicalize().ok(),
+        );
+        let top = folded
+            .ancestors()
+            .filter(|a| a.canonicalize().ok() == root)
+            .last();
+        top.and_then(|top| Some(folded.strip_prefix(top).ok()?.to_string_lossy().into()))
+    };
+    relative.ok_or_else(|| {
+        SteleError::input_msg(format!("--touching {path:?} is outside the work tree"))
+    })
 }
 
 /// Parse `unfold --depth N` (§5.1): a positive integer, defaulting to

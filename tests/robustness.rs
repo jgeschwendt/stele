@@ -64,34 +64,36 @@ fn invalid_utf8_node_source_is_a_hard_input_error() {
 
 // A `@stele`/`@end` pair inside a fenced code block is literal example text,
 // not a generated region. Before the fix, `find_region` matched it and `emit` overwrote
-// the authored bytes between the fenced markers (silent data loss).
+// the authored bytes between the fenced markers (silent data loss). A fence nested in a
+// list item sits 4+ spaces in, past the fence scanner's indent limit — its marker lines
+// are indented the same, so they are never markers either.
 #[test]
 fn region_markers_inside_a_fence_are_not_a_real_region() {
-    let fixture = Fixture::bare();
-    let authored = "# root\n\n\
-         ```stele\nkind: system\n```\n\n\
-         Example of the marker syntax:\n\n\
-         ```markdown\n\
-         <!-- @stele -->\n\
-         HAND-AUTHORED EXAMPLE — emit must never clobber this\n\
-         <!-- @end -->\n\
-         ```\n";
-    fixture.write("AGENTS.md", authored);
-    fixture.commit("root whose only markers live inside a fence");
+    for example in [
+        "```markdown\n<!-- @stele -->\nHAND-AUTHORED EXAMPLE\n<!-- @end -->\n```\n",
+        "1. Add these lines:\n\n    ```markdown\n    <!-- @stele -->\n    <!-- @end -->\n    ```\n",
+    ] {
+        let fixture = Fixture::bare();
+        let authored = format!(
+            "# root\n\n```stele\nkind: system\n```\n\nExample of the marker syntax:\n\n{example}"
+        );
+        fixture.write("AGENTS.md", &authored);
+        fixture.commit("root whose only markers live inside a fence");
 
-    assert_eq!(fixture.run(&["build"]).code, 0);
+        assert_eq!(fixture.run(&["build"]).code, 0);
 
-    // No real region: emit points at `stele init` (exit 2) rather than rendering into
-    // the fenced example.
-    let emit = fixture.run(&["emit"]);
-    assert_eq!(emit.code, 2, "{}", emit.combined());
-    assert!(
-        emit.combined().to_lowercase().contains("init"),
-        "{}",
-        emit.combined()
-    );
-    // The authored bytes are untouched — the data loss the fix prevents.
-    assert_eq!(fixture.read("AGENTS.md"), authored);
+        // No real region: emit points at `stele init` (exit 2) rather than rendering into
+        // the fenced example.
+        let emit = fixture.run(&["emit"]);
+        assert_eq!(emit.code, 2, "{}", emit.combined());
+        assert!(
+            emit.combined().to_lowercase().contains("init"),
+            "{}",
+            emit.combined()
+        );
+        // The authored bytes are untouched — the data loss the fix prevents.
+        assert_eq!(fixture.read("AGENTS.md"), authored);
+    }
 }
 
 // ─── F13: concurrent builds must not collide on the temp lock (§5.3) ──────────

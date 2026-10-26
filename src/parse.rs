@@ -376,6 +376,11 @@ pub fn find_region(rel_path: &Path, contents: &str) -> Result<Option<Region>> {
             fence = Some((fence_char, open_len));
             continue;
         }
+        // A marker indented past a fence's limit is a nested (list-item) quotation.
+        let lead = raw.len() - raw.trim_start().len();
+        if lead > MAX_FENCE_INDENT {
+            continue;
+        }
         let line = raw.trim();
         if let Some((name, consumed)) = parse_begin_marker(line) {
             if open.is_some() || region.is_some() {
@@ -389,7 +394,6 @@ pub fn find_region(rel_path: &Path, contents: &str) -> Result<Option<Region>> {
                 // The one-line empty form (§3.1/§7): begin immediately followed by end on
                 // one line. The region owns no bytes — content_start == content_end sits
                 // just past the begin marker, so `emit` reproduces the whole line verbatim.
-                let lead = raw.len() - raw.trim_start().len();
                 let after_begin = line_start + lead + consumed;
                 region = Some(Region {
                     content_end: after_begin,

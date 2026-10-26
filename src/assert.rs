@@ -1800,12 +1800,14 @@ const CARGO_BUILTINS: [&str; 19] = [
 /// and `dot` appear as their command tokens `:` and `.`, `test` as both `test` and `[`.
 /// Arguments past the first token are not inspected, consistent with the rest of §4.6.
 /// Source: pubs.opengroup.org/onlinepubs/9699919799/utilities/V3_chap02.html#tag_18_14
-/// (special built-ins) + .../V3_chap04.html (cd, echo, false, printf, pwd, read, test,
-/// true, type, ulimit, umask, wait). Alpha-sorted (ASCII).
-const SHELL_BUILTINS: [&str; 28] = [
-    ".", ":", "[", "break", "cd", "continue", "echo", "eval", "exec", "exit", "export", "false",
-    "printf", "pwd", "read", "readonly", "return", "set", "shift", "test", "times", "trap", "true",
-    "type", "ulimit", "umask", "unset", "wait",
+/// (special built-ins) + .../V3_chap04.html (alias, bg, cd, command, echo, false, fg,
+/// getopts, hash, jobs, printf, pwd, read, test, true, type, ulimit, umask, unalias,
+/// wait). Alpha-sorted (ASCII).
+const SHELL_BUILTINS: [&str; 36] = [
+    ".", ":", "[", "alias", "bg", "break", "cd", "command", "continue", "echo", "eval", "exec",
+    "exit", "export", "false", "fg", "getopts", "hash", "jobs", "printf", "pwd", "read",
+    "readonly", "return", "set", "shift", "test", "times", "trap", "true", "type", "ulimit",
+    "umask", "unalias", "unset", "wait",
 ];
 
 /// The liveness class (§4.6). For every declared command on every node: parse it into

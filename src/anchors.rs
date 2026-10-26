@@ -249,7 +249,11 @@ fn scan_markdown_line(
                 }
             }
         } else {
-            let tick = rest.find('`').unwrap_or(rest.len());
+            // A backtick after an odd run of backslashes is escaped: literal, never a span.
+            let tick = (rest.match_indices('`'))
+                .map(|(at, _)| at)
+                .find(|&at| (at - rest[..at].trim_end_matches('\\').len()).is_multiple_of(2))
+                .unwrap_or(rest.len());
             match rest.find(HTML_COMMENT_OPEN) {
                 Some(open) if open < tick => {
                     rest = &rest[open + HTML_COMMENT_OPEN.len()..];

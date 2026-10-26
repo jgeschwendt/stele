@@ -1,6 +1,6 @@
 //! Paths the user names resolve as named: an `enforced_by` guard (SPEC §4.1d) is not
 //! scanned, so `.steleignore` (§2.4) never makes a git-tracked guard read as untracked, nor
-//! an inherited `GIT_LITERAL_PATHSPECS=1`;
+//! an inherited `GIT_*_PATHSPECS=1`;
 //! an `exhaustiveness.exclude` glob (§3.4) matches as its gitignore spelling reads.
 
 mod common;
@@ -23,12 +23,18 @@ fn steleignored_tracked_guard_satisfies_enforced_by() {
     fixture.commit("lock");
     let check = fixture.run(&["check", "--only", "referential"]);
     assert_eq!(check.code, 0, "{}", check.combined());
-    let literal = isolate_git(std::process::Command::new(BIN).current_dir(fixture.path("")))
-        .args(["check", "--only", "referential"])
-        .env("GIT_LITERAL_PATHSPECS", "1")
-        .status()
-        .unwrap();
-    assert!(literal.success());
+    for var in [
+        "GIT_LITERAL_PATHSPECS",
+        "GIT_GLOB_PATHSPECS",
+        "GIT_ICASE_PATHSPECS",
+    ] {
+        let status = isolate_git(std::process::Command::new(BIN).current_dir(fixture.path("")))
+            .args(["check", "--only", "referential"])
+            .env(var, "1")
+            .status()
+            .unwrap();
+        assert!(status.success(), "{var}=1");
+    }
 }
 
 /// An `exhaustiveness.exclude` entry reads as a gitignore line (§4.3): `./`, a leading or

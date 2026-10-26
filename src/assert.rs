@@ -241,8 +241,7 @@ impl Context<'_> {
     /// Whether `rel` (a repo-root-relative POSIX path) is a VCS-tracked file (§4.1
     /// enforced_by: tracked implies committed). Asks git, not [`Self::tracked`]: that is
     /// the `.steleignore`-filtered scan roster, and a referenced guard is not scanned. The
-    /// global `--literal-pathspecs` (never `:(literal)` magic, which an inherited
-    /// `GIT_LITERAL_PATHSPECS=1` reads as part of the name) keeps a glob character literal.
+    /// global `--literal-pathspecs` keeps a glob character literal.
     fn tracks(&self, rel: &str) -> Result<bool> {
         let output = git(self.root, "--literal-pathspecs ls-files -z --", &[rel])?;
         Ok(output.stdout == format!("{rel}\0").as_bytes())
@@ -1491,9 +1490,15 @@ fn staling_commit(
 
 /// Run `git <cmd> <args>` from the repo root (§4.5). A spawn failure is a §5.3 internal
 /// error naming `git <cmd>`.
+/// An inherited `GIT_*_PATHSPECS` is dropped: stele's paths are literal, and git refuses
+/// `--literal-pathspecs` beside a glob or icase setting.
 fn git(root: &Path, cmd: &str, args: &[&str]) -> Result<Output> {
     let output = Command::new("git")
         .args(cmd.split(' ').chain(args.iter().copied()))
+        .env_remove("GIT_GLOB_PATHSPECS")
+        .env_remove("GIT_ICASE_PATHSPECS")
+        .env_remove("GIT_LITERAL_PATHSPECS")
+        .env_remove("GIT_NOGLOB_PATHSPECS")
         .current_dir(root)
         .output();
     output.map_err(|e| SteleError::internal(format!("run `git {cmd}`: {e}")))

@@ -382,6 +382,7 @@ pub struct Region {
 /// begin without end, end without begin, or a second begin (two regions or nesting)
 /// — is a §5.3 input error (exit 2) naming the file.
 pub fn find_region(rel_path: &Path, contents: &str) -> Result<Option<Region>> {
+    use crate::anchors::{HTML_COMMENT_CLOSE, HTML_COMMENT_OPEN};
     // (name, content_start, begin_line) of an open, not-yet-closed begin marker.
     let mut open: Option<(String, usize, usize)> = None;
     let mut region: Option<Region> = None;
@@ -389,6 +390,8 @@ pub fn find_region(rel_path: &Path, contents: &str) -> Result<Option<Region>> {
     // marker-lookalike inside a ``` fence is literal content, never a real region
     // boundary — otherwise `emit` would overwrite authored bytes between them (§3.1).
     let mut fence: Option<(char, usize)> = None;
+    // Inside an HTML comment block nothing is a fence, as in scan_fences.
+    let mut comment = false;
     let mut offset = 0;
     // A line keeps its `\n`/`\r\n`: every test below trims trailing whitespace anyway.
     for (index, raw) in contents.split_inclusive('\n').enumerate() {
@@ -399,6 +402,10 @@ pub fn find_region(rel_path: &Path, contents: &str) -> Result<Option<Region>> {
             if is_close_fence(raw, fence_char, open_len) {
                 fence = None;
             }
+            continue;
+        }
+        if comment {
+            comment = !raw.contains(HTML_COMMENT_CLOSE);
             continue;
         }
         if let Some((fence_char, open_len, _)) = open_fence(raw) {
@@ -449,6 +456,9 @@ pub fn find_region(rel_path: &Path, contents: &str) -> Result<Option<Region>> {
                     ));
                 }
             }
+        } else if let Some(rest) = line.strip_prefix(HTML_COMMENT_OPEN) {
+            // Markers are comments too, so a line is a comment opener only once neither.
+            comment = !rest.contains(HTML_COMMENT_CLOSE);
         }
     }
     if let Some((_, _, begin_line)) = open {
@@ -754,6 +764,21 @@ mod tests {
             .expect("one-line region");
         assert_eq!(region.name, "router");
         assert_eq!(region.content_start, region.content_end);
+    }
+
+    #[test]
+    fn a_fence_inside_an_html_comment_hides_no_region() {
+        // As in scan_fences: a commented-out fence opener never swallows the markers below.
+        for opener in ["````sh", "~~~"] {
+            let contents = format!(
+                "<!--\n{opener}\necho old\n-->\n<!-- x -->\n<!-- @stele --><!-- @end -->\n"
+            );
+            assert_eq!(
+                region_name(&contents).as_deref(),
+                Some("router"),
+                "{opener}"
+            );
+        }
     }
 
     #[test]

@@ -366,6 +366,10 @@ fn bad_command_lines_exit_2() {
         ),
         (&["check", "--only"], "--only requires a class argument"),
         (
+            &["nodes", "--kind", "contianer"],
+            "unknown --kind \"contianer\"",
+        ),
+        (
             &["check", "--only", "budget", "--only", "referential"],
             "unexpected argument \"--only\"",
         ),

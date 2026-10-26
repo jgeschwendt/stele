@@ -233,12 +233,6 @@ fn scan_markdown_line(
     file: &str,
     data: &mut AnchorData,
 ) -> bool {
-    // Outside a comment, a line indented four columns (any leading tab reaches them) is
-    // indented code, or a list item's nested code — a quotation either way.
-    let lead = &line[..line.len() - line.trim_start_matches([' ', '\t']).len()];
-    if !in_comment && (lead.len() >= 4 || lead.contains('\t')) {
-        return false;
-    }
     let mut rest = line;
     loop {
         if in_comment {

@@ -251,11 +251,10 @@ fn superseded_lock_versions_are_exit_2_naming_their_fix() {
     }
 }
 
-// §2.5 markdown quotation: a `<!--` in an inline code span or an indented code block is
-// code, not a comment — the quoted token declares nothing, and an unclosed backticked
+// §2.5 markdown quotation: a `<!--` in an inline code span is code, not a comment — the quoted token declares nothing, and an unclosed backticked
 // `<!--` never opens a comment that would swallow later prose.
 #[test]
-fn markdown_code_spans_and_indented_code_quote_comments() {
+fn markdown_code_spans_quote_comments() {
     let fixture = Fixture::bare();
     fixture.write(
         "AGENTS.md",
@@ -263,8 +262,7 @@ fn markdown_code_spans_and_indented_code_quote_comments() {
          \x20 - claim: a is capped\n    anchor: ※ cap-a\n\
          \x20 - claim: prose declares nothing\n    anchor: ※ stray-prose\n```\n\n\
          Declare with ``<!-- ※ cap-a -->`` in markdown; comments are written `<!--`;\n\
-         ``a`b`` nests, a lone ` is literal.\n\n\
-         \x20   <!-- ※ cap-a -->\n\n※ stray-prose\n",
+         ``a`b`` nests, a lone ` is literal.\n\n※ stray-prose\n",
     );
     fixture.write("m.ts", "// ※ cap-a\nexport function a() {}\n");
     fixture.commit("quote the comment syntax");
@@ -276,6 +274,27 @@ fn markdown_code_spans_and_indented_code_quote_comments() {
     assert_eq!(check.code, 1, "{out}");
     assert!(out.contains("anchor ※ stray-prose unresolved"), "{out}");
     assert!(!out.contains("cap-a"), "{out}");
+}
+
+// §2.5: indented code is not distinguished — a comment indented four columns in a nested
+// list, a list item's content or a paragraph continuation still declares.
+#[test]
+fn indented_markdown_comments_declare() {
+    let fixture = Fixture::bare();
+    fixture.write(
+        "AGENTS.md",
+        "# p\n\n```stele\nkind: system\npurpose: p\ninvariants:\n\
+         \x20 - claim: nested holds\n    anchor: ※ nested\n\
+         \x20 - claim: item holds\n    anchor: ※ item\n\
+         \x20 - claim: lazy holds\n    anchor: ※ lazy\n```\n\n\
+         - a\n  - b\n    <!-- ※ nested -->\n\n1.  item\n\n    <!-- ※ item -->\n\n\
+         Some prose\n    <!-- ※ lazy -->\n",
+    );
+    fixture.commit("import");
+    assert_eq!(fixture.run(&["build"]).code, 0);
+    fixture.commit("lock");
+    let check = fixture.run(&["check"]);
+    assert_eq!(check.code, 0, "{}", check.combined());
 }
 
 // §2.4 × §3.1: a heading anchor resolves over the authored bytes only — the generated

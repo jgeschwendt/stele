@@ -300,17 +300,18 @@ fn indented_markdown_comments_declare() {
     assert_eq!(check.code, 0, "{}", check.combined());
 }
 
-// §2.4 × §3.1: a heading anchor resolves over the authored bytes only — the generated
-// region's headings (`## Map`, …) never collide with an authored one, and the lines it
-// fills never move a heading below it — so build → emit → commit leaves check green.
+// §2.4 × §3.1: the generated region's headings in a node AGENTS.md are not candidates, so
+// emit's `## Map` never makes an authored one ambiguous; a heading's `resolved` stays its
+// on-disk line, and in any other markdown file a marker pair hides nothing.
 #[test]
-fn heading_anchors_ignore_the_generated_region() {
+fn heading_anchors_skip_only_a_node_files_generated_headings() {
     let fixture = Fixture::bare();
     fixture.write(
         "AGENTS.md",
         "# p\n\n```stele\nkind: system\npurpose: p\ninvariants:\n\
          \x20 - claim: the map holds\n    anchor: AGENTS.md#map\n\
-         \x20 - claim: release steps hold\n    anchor: AGENTS.md#release\n```\n\n\
+         \x20 - claim: release steps hold\n    anchor: AGENTS.md#release\n\
+         \x20 - claim: inside holds\n    anchor: doc.md#inside\n```\n\n\
          ## Map\n\n<!-- @stele --><!-- @end -->\n\n## Release\n",
     );
     fixture.write(
@@ -318,12 +319,26 @@ fn heading_anchors_ignore_the_generated_region() {
         "# src\n\n```stele\nkind: component\npurpose: s\n```\n\n<!-- @stele --><!-- @end -->\n",
     );
     fixture.write("src/main.rs", "fn main() {}\n");
+    fixture.write(
+        "doc.md",
+        "# d\n\n<!-- @stele -->\n\n## Inside\n\n<!-- @end -->\n",
+    );
     fixture.commit("import");
     assert_eq!(fixture.run(&["build"]).code, 0);
     assert_eq!(fixture.run(&["emit"]).code, 0);
-    fixture.commit("build and emit");
+    assert_eq!(fixture.run(&["build"]).code, 0);
+    fixture.commit("build, emit, build");
 
-    assert!(fixture.read("AGENTS.md").matches("## Map").count() == 2);
+    let agents = fixture.read("AGENTS.md");
+    assert_eq!(agents.matches("## Map").count(), 2);
+    let release = agents.lines().position(|l| l == "## Release").unwrap() + 1;
+    let lock = fixture.read(".stele/graph.lock");
+    for resolved in [format!("AGENTS.md:{release}"), "doc.md:5".into()] {
+        assert!(
+            lock.contains(&format!("\"resolved\": \"{resolved}\"")),
+            "{lock}"
+        );
+    }
     let check = fixture.run(&["check"]);
     assert_eq!(check.code, 0, "{}", check.combined());
 }

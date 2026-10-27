@@ -3,7 +3,7 @@
 //! This module is the shell: it resolves the [`Workspace`] (§3.5), holds each verb to its
 //! §5.1 grammar, and prints the result as human text or the one `--json` envelope (§5.3);
 //! [`serve_render`] gives `serve` the same path. It also loads the committed lock the read
-//! verbs share and guards undercover mode against a tracked shared graph. The verbs live in submodules:
+//! verbs share and guards undercover mode against a tracked shared graph. Submodules:
 //!
 //! - `gate` — `build`, the sole writer of `.stele/graph.lock`; `check`, which rebuilds in
 //!   memory, byte-compares against the committed lock, then runs the six §4 assertion
@@ -16,7 +16,8 @@
 //!   `nodes`.
 //! - `init` — the adoption scaffold (§7), normal and `--undercover` (§3.5).
 //! - `fs` — the shared write primitives: `write_atomic` (the lock's writer),
-//!   `write_under_root`, `in_tree_target`, and the undercover `info/exclude` block.
+//!   `write_under_root`, `in_tree_target`, `append_separator`, and the undercover
+//!   `info/exclude` block.
 //! - `migrate` — the in-place rewrite of pre-0.3.0 notation (§2.5).
 
 mod emit;

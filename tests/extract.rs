@@ -163,6 +163,35 @@ fn ts_records_relative_cross_node_and_workspace_package() {
     assert_eq!(imports["shared"], vec!["web"]);
 }
 
+// TS: `.mts`/`.cts` sources are scanned with the TypeScript grammar and probed as targets,
+// `import x = require(…)` is a reference, and a NodeNext specifier naming the emitted
+// `.js`/`.jsx`/`.mjs`/`.cjs` resolves to its tracked `.ts`/`.tsx`/`.mts`/`.cts` source.
+#[test]
+fn ts_resolves_node_next_specifiers_and_import_require() {
+    let fixture = Fixture::bare();
+    fixture.write("AGENTS.md", ROOT_BLOCK);
+    for node in ["a", "b", "c", "d", "e", "f"] {
+        fixture.write(&format!("{node}/AGENTS.md"), &node_block(node));
+    }
+    fixture.write(
+        "a/main.cts",
+        "import b = require(\"../b/lib\");\nimport { c } from \"../c/y.js\";\nexport { b, c };\n",
+    );
+    fixture.write(
+        "a/esm.mts",
+        "import { d } from \"../d/v.jsx\";\nimport { e } from \"../e/z.mjs\";\nimport { f } from \"../f/w.cjs\";\nexport { d, e, f };\n",
+    );
+    fixture.write("b/lib.mts", "export const b = 1;\n");
+    fixture.write("c/y.ts", "export const c = 1;\n");
+    fixture.write("d/v.tsx", "export const d = 1;\n");
+    fixture.write("e/z.mts", "export const e = 1;\n");
+    fixture.write("f/w.cts", "export const f = 1;\n");
+    fixture.commit("node next fixture");
+
+    let imports = imports_of(&fixture);
+    assert_eq!(imports["a"], vec!["b", "c", "d", "e", "f"]);
+}
+
 // ─── Rust ─────────────────────────────────────────────────────────────────────
 
 // Rust: a `use` or `extern crate` whose head is another workspace member's crate name

@@ -465,9 +465,11 @@ fn collect_rust_crate_heads(root: Node, src: &[u8], out: &mut Vec<(String, usize
     walk(root, |node, _| {
         match node.kind() {
             "use_declaration" => {
-                if let Some(head) = use_head_segment(node, src) {
-                    out.push((head, node.start_position().row));
-                }
+                let row = node.start_position().row;
+                let clause = node.child_by_field_name("argument");
+                clause
+                    .into_iter()
+                    .for_each(|c| use_heads(c, src, &mut |head| out.push((head, row))));
             }
             "extern_crate_declaration" => {
                 if let Some(head) = extern_crate_name(node, src) {
@@ -480,21 +482,27 @@ fn collect_rust_crate_heads(root: Node, src: &[u8], out: &mut Vec<(String, usize
     });
 }
 
-/// The head segment of a `use` path (`foo` in `use foo::bar::Baz`), or `None` for
-/// an intra-crate root.
-fn use_head_segment(node: Node, src: &[u8]) -> Option<String> {
-    let mut cursor = node.walk();
-    let path = node.children(&mut cursor).find(|c| {
-        !matches!(
-            c.kind(),
-            "use" | ";" | "attribute_item" | "visibility_modifier"
-        )
-    })?;
-    let head = first_path_segment(path.utf8_text(src).ok()?);
-    if matches!(head, "crate" | "self" | "super" | "") {
-        None
-    } else {
-        Some(head.to_string())
+/// Emit the head segment of every path a `use` clause names (`foo` in
+/// `use foo::bar::Baz`), skipping intra-crate roots. A brace-rooted list
+/// (`use {a::x, b::y}`, `use ::{a::x}`) names one head per item.
+fn use_heads(clause: Node, src: &[u8], emit: &mut dyn FnMut(String)) {
+    let list = match clause.kind() {
+        "use_list" => Some(clause),
+        "scoped_use_list" if clause.child_by_field_name("path").is_none() => {
+            clause.child_by_field_name("list")
+        }
+        _ => None,
+    };
+    if let Some(list) = list {
+        let mut cursor = list.walk();
+        for item in list.named_children(&mut cursor) {
+            use_heads(item, src, emit);
+        }
+        return;
+    }
+    let head = clause.utf8_text(src).map_or("", first_path_segment);
+    if !matches!(head, "crate" | "self" | "super" | "") {
+        emit(head.to_string());
     }
 }
 

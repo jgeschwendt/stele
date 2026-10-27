@@ -146,6 +146,20 @@ fn parserless_language_has_no_digest() {
     }
 }
 
+/// `.mts`/`.cts` ride the TypeScript parser: a landmark there digests its definition.
+#[test]
+fn mts_and_cts_landmarks_have_a_digest() {
+    for name in ["m.mts", "m.cts"] {
+        let digest = digest_inline(
+            name,
+            "// ※ note\nexport function cap(): number {\n  return 1;\n}\n",
+            "※ note",
+            &format!("{name}:1"),
+        );
+        assert!(digest.as_deref().is_some_and(is_sha256_hex), "{name}");
+    }
+}
+
 /// The landmark binds the NEXT definition (`changeset/1`), not the enclosing module
 /// or the later `other/1`: edits OUTSIDE the bound region leave the digest stable
 /// (the `@castable_fields` value, `other/1`'s body), an edit INSIDE it fires.

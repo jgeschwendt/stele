@@ -71,14 +71,14 @@ enum Lang {
 
 /// The grammar for a file extension (lowercased, no dot), or `None` for a
 /// parser-less file. `.jsx` rides the JavaScript grammar; `.tsx` needs the TSX
-/// dialect, `.ts` the plain TypeScript one.
+/// dialect, `.ts`/`.mts`/`.cts` the plain TypeScript one.
 fn lang_for_extension(ext: &str) -> Option<Lang> {
     match ext {
         "cjs" | "js" | "jsx" | "mjs" => Some(Lang::Javascript),
         "ex" | "exs" => Some(Lang::Elixir),
         "py" => Some(Lang::Python),
         "rs" => Some(Lang::Rust),
-        "ts" => Some(Lang::Typescript),
+        "cts" | "mts" | "ts" => Some(Lang::Typescript),
         "tsx" => Some(Lang::Tsx),
         _ => None,
     }

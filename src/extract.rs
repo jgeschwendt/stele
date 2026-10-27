@@ -217,8 +217,9 @@ fn collect_defmodules(root: Node, src: &[u8], sink: &mut impl FnMut(String)) {
 // ─── TypeScript / JavaScript ──────────────────────────────────────────────────
 
 /// TS/JS extraction (§9): `import`/`export … from` sources and string-literal
-/// `require(…)`/dynamic `import(…)` calls are resolved either by relative path-probing
-/// (`./x`, `../x` against `.ts/.tsx/.js/.jsx/.cjs/.mjs` and `index.*`) or, for a bare
+/// `require(…)`/dynamic `import(…)` calls and TS `import x = require(…)` are resolved
+/// either by relative path-probing (`./x`, `../x` against `.ts/.tsx/.js/.jsx/.cjs/.mjs/
+/// .mts/.cts` and `index.*`, a NodeNext `./y.js` also naming `y.ts`) or, for a bare
 /// specifier, against the workspace package-name map built from tracked `package.json`
 /// `name` fields.
 struct TsJs;
@@ -241,7 +242,7 @@ struct Package {
 
 impl Extractor for TsJs {
     fn extract(&self, ctx: &Ctx) -> Result<Vec<FileRef>> {
-        const EXTS: [&str; 6] = ["cjs", "js", "jsx", "mjs", "ts", "tsx"];
+        const EXTS: [&str; 8] = ["cjs", "cts", "js", "jsx", "mjs", "mts", "ts", "tsx"];
         let packages = workspace_packages(ctx)?;
 
         file_refs(
@@ -278,8 +279,8 @@ fn workspace_packages(ctx: &Ctx) -> Result<Vec<Package>> {
 }
 
 /// Collect every module specifier paired with its 0-based line: the `string` source
-/// of an `import`/`export … from` statement and the first string argument of a
-/// `require(…)` or dynamic `import(…)` call.
+/// of an `import`/`export … from` statement or a TS `import x = require(…)`, and the
+/// first string argument of a `require(…)` or dynamic `import(…)` call.
 fn collect_ts_sources(root: Node, src: &[u8], out: &mut Vec<(String, usize)>) {
     walk(root, |node, _| {
         match node.kind() {
@@ -287,6 +288,14 @@ fn collect_ts_sources(root: Node, src: &[u8], out: &mut Vec<(String, usize)>) {
                 if let Some(source) = string_child(node, src) {
                     out.push((source, node.start_position().row));
                 }
+            }
+            "import_require_clause" => {
+                let source = node.child_by_field_name("source");
+                out.extend(
+                    source
+                        .and_then(|s| string_text(s, src))
+                        .map(|s| (s, node.start_position().row)),
+                );
             }
             "call_expression" => {
                 if let Some(source) = call_source(node, src) {
@@ -356,11 +365,29 @@ fn resolve_ts(ctx: &Ctx, from: &str, source: &str, packages: &[Package]) -> Opti
 }
 
 /// Path-probe a module target (an extensionless or exact path) against the tracked
-/// set: the exact path, then `target.<ext>`, then `target/index.<ext>` (§9).
+/// set: the exact path, then its TS source under NodeNext's output-extension mapping
+/// (`y.js` → `y.ts`/`y.tsx`, `.jsx` → `.tsx`, `.mjs` → `.mts`, `.cjs` → `.cts`), then
+/// `target.<ext>`, then `target/index.<ext>` (§9).
 fn probe_ts(ctx: &Ctx, target: &str) -> Option<String> {
-    const EXTS: [&str; 6] = ["ts", "tsx", "js", "jsx", "cjs", "mjs"];
+    const EXTS: [&str; 8] = ["ts", "tsx", "js", "jsx", "cjs", "mjs", "mts", "cts"];
+    const NODE_NEXT: [(&str, &[&str]); 4] = [
+        (".cjs", &[".cts"]),
+        (".js", &[".ts", ".tsx"]),
+        (".jsx", &[".tsx"]),
+        (".mjs", &[".mts"]),
+    ];
     if ctx.is_tracked(target) {
         return Some(target.to_string());
+    }
+    for (js, sources) in NODE_NEXT {
+        if let Some(stem) = target.strip_suffix(js)
+            && let Some(found) = sources
+                .iter()
+                .map(|ts| format!("{stem}{ts}"))
+                .find(|c| ctx.is_tracked(c))
+        {
+            return Some(found);
+        }
     }
     for ext in EXTS {
         let candidate = format!("{target}.{ext}");
@@ -377,11 +404,11 @@ fn probe_ts(ctx: &Ctx, target: &str) -> Option<String> {
     None
 }
 
-/// The tree-sitter grammar for a TS/JS file: `.tsx` needs the TSX dialect, `.ts` the
-/// plain TypeScript one, every other extension the JavaScript grammar.
+/// The tree-sitter grammar for a TS/JS file: `.tsx` needs the TSX dialect, `.ts`/`.mts`/
+/// `.cts` the plain TypeScript one, every other extension the JavaScript grammar.
 fn ts_language(file: &str) -> Language {
     match ext_of(file).as_deref() {
-        Some("ts") => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+        Some("cts" | "mts" | "ts") => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
         Some("tsx") => tree_sitter_typescript::LANGUAGE_TSX.into(),
         _ => tree_sitter_javascript::LANGUAGE.into(),
     }

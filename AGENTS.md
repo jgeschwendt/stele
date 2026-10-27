@@ -38,12 +38,12 @@ This repo eats its own convention: the block above is a real stele node — `ste
 
 ## Map
 
-| node     | kind      | purpose                                                                                                                                                                                         | unfold                                                 |
-| -------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| research | container | Evidence base for SPEC's [Cn] citations. claims.md is the ledger every citation stays licensed by (status per claim); report.md the synthesis, findings/ the primary-source notes.              | `stele unfold research` · or read `research/AGENTS.md` |
-| scripts  | container | Distribution scripts. install.sh/uninstall.sh land or remove the single stele binary; release.sh assembles the per-platform tarball + sha256 the release workflow publishes on a v* tag.        | `stele unfold scripts` · or read `scripts/AGENTS.md`   |
-| src      | container | The stele engine. cli.rs is the command pipeline; model.rs the typed graph, anchors.rs the §2.5 scanner, assert.rs the six §4 checks, extract.rs the extractors, legacy.rs the migrate rewrite. | `stele unfold src` · or read `src/AGENTS.md`           |
-| tests    | container | Integration + unit suite and the CI oracle. common/mod.rs is the git-repo harness; gallery.rs mirrors EXAMPLE §8's failure gallery. fixtures/ (steleignored) is the acme worked example.        | `stele unfold tests` · or read `tests/AGENTS.md`       |
+| node     | kind      | purpose                                                                                                                                                                                             | unfold                                                 |
+| -------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| research | container | Evidence base for SPEC's [Cn] citations. claims.md is the ledger every citation stays licensed by (status per claim); report.md the synthesis, findings/ the primary-source notes.                  | `stele unfold research` · or read `research/AGENTS.md` |
+| scripts  | container | Distribution scripts. install.sh/uninstall.sh land or remove the single stele binary; release.sh assembles the per-platform tarball + sha256 the release workflow publishes on a v* tag.            | `stele unfold scripts` · or read `scripts/AGENTS.md`   |
+| src      | container | The stele engine. cli/ is the command pipeline by verb; model.rs the typed graph, anchors.rs the §2.5 scanner, assert/ the six §4 checks, extract.rs the extractors, legacy.rs the migrate rewrite. | `stele unfold src` · or read `src/AGENTS.md`           |
+| tests    | container | Integration + unit suite and the CI oracle. common/mod.rs is the git-repo harness; gallery.rs mirrors EXAMPLE §8's failure gallery. fixtures/ (steleignored) is the acme worked example.            | `stele unfold tests` · or read `tests/AGENTS.md`       |
 
 ## Indexes
 

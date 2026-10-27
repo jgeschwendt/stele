@@ -25,7 +25,7 @@
           "text": "every [Cn] citation must stay licensed by research/claims.md's status for that claim — never state a `reported` claim as settled fact",
           "verified": {
             "digest": null,
-            "sha": "e5ff882ff4dd8f5313aef49a26a4f5371c4e22e3"
+            "sha": "c854260dd7be7c90eda395d83009e64cd2be0533"
           }
         },
         {
@@ -37,7 +37,7 @@
           "text": "docs/spec.html outranks everything here — code and examples conform to it; changing behavior means revising the spec (and its decision log) first",
           "verified": {
             "digest": null,
-            "sha": "e5ff882ff4dd8f5313aef49a26a4f5371c4e22e3"
+            "sha": "c854260dd7be7c90eda395d83009e64cd2be0533"
           }
         }
       ],
@@ -116,7 +116,7 @@
       },
       "id": "src",
       "kind": "container",
-      "purpose": "The stele engine. cli.rs is the command pipeline; model.rs the typed graph, anchors.rs the §2.5 scanner, assert.rs the six §4 checks, extract.rs the extractors, legacy.rs the migrate rewrite.",
+      "purpose": "The stele engine. cli/ is the command pipeline by verb; model.rs the typed graph, anchors.rs the §2.5 scanner, assert/ the six §4 checks, extract.rs the extractors, legacy.rs the migrate rewrite.",
       "source": "src/AGENTS.md"
     },
     "tests": {

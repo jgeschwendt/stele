@@ -4,9 +4,9 @@
 use super::{
     CHECK_USAGE, CommandOutput, FREEZE_FLAG, LOCK_DIR, LOCK_FILE, Mode, REPORT_FLAG,
     RUN_BUILD_HINT, RUN_COMMANDS_FLAG, TREE_DIR, Workspace,
+    fs::{ensure_info_exclude, write_atomic},
     graph::{build_graph, build_graph_and_warn, stamp_verified, tracked_files},
-    init::{ensure_info_exclude, reject_shared_graph_conflict, write_atomic},
-    read_committed_lock, require_lock_version,
+    read_committed_lock, reject_shared_graph_conflict, require_lock_version,
 };
 use crate::assert::{self, Context};
 use crate::config::{self, AssertionClass};

@@ -3,7 +3,7 @@
 //! This module is the shell: it resolves the [`Workspace`] (§3.5), holds each verb to its
 //! §5.1 grammar, and prints the result as human text or the one `--json` envelope (§5.3);
 //! [`serve_render`] gives `serve` the same path. It also loads the committed lock the read
-//! verbs share. The verbs live in submodules:
+//! verbs share and guards undercover mode against a tracked shared graph. The verbs live in submodules:
 //!
 //! - `gate` — `build`, the sole writer of `.stele/graph.lock`; `check`, which rebuilds in
 //!   memory, byte-compares against the committed lock, then runs the six §4 assertion
@@ -15,9 +15,12 @@
 //! - `query` — the lock-reading verbs: `root`, `node`, `unfold`, `invariants`, `hazards`,
 //!   `nodes`.
 //! - `init` — the adoption scaffold (§7), normal and `--undercover` (§3.5).
+//! - `fs` — the shared write primitives: `write_atomic` (the lock's writer),
+//!   `write_under_root`, `in_tree_target`, and the undercover `info/exclude` block.
 //! - `migrate` — the in-place rewrite of pre-0.3.0 notation (§2.5).
 
 mod emit;
+mod fs;
 mod gate;
 mod graph;
 mod init;
@@ -30,7 +33,7 @@ use crate::model::{ExitCode, Result, SteleError};
 use emit::{EMIT_CHECK_FLAG, EMIT_CLAUDE_RULES_FLAG, emit};
 use gate::{blame, build, check};
 use graph::git_ls_files;
-use init::{UNDERCOVER_FLAG, init};
+use init::{UNDERCOVER_FLAG, existing_node_dirs, init};
 use migrate::migrate;
 use query::{cmd_root, hazards, invariants, node, nodes, unfold};
 use serde::Serialize;
@@ -224,6 +227,24 @@ pub fn resolve_workspace(cwd: &Path) -> Workspace {
         mode,
         work,
     }
+}
+
+/// The mutual-exclusion guard for `init --undercover` (§3.5): a repo already carrying a
+/// shared, committed graph — any tracked `AGENTS.md` with a stele block, or any tracked path
+/// under `.stele/` — cannot also run undercover (mixing is a v2 concern). Exit 2, no write.
+fn reject_shared_graph_conflict(work: &Path, tracked: &[PathBuf]) -> Result<()> {
+    let has_tracked_node = !existing_node_dirs(work, tracked)?.is_empty();
+    let has_tracked_stele = tracked.iter().any(|rel| {
+        let posix = rel.to_string_lossy().replace('\\', "/");
+        posix == LOCK_DIR || posix.starts_with(&format!("{LOCK_DIR}/"))
+    });
+    if has_tracked_node || has_tracked_stele {
+        return Err(SteleError::input_msg(
+            "repo already carries a shared stele graph; undercover mode cannot coexist \
+             (mixing is v2)",
+        ));
+    }
+    Ok(())
 }
 
 /// Run the CLI, returning the §5.3 process exit code (`0` success, else the error's

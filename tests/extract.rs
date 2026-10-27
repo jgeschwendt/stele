@@ -229,6 +229,30 @@ fn rust_records_workspace_member_use_ignores_std_and_intra_crate() {
     assert!(imports["crates/shared"].is_empty());
 }
 
+// Rust: a brace-rooted `use {…}` list (bare, `::`-rooted or nested) names one head per
+// item, aliases and globs included; intra-crate items inside it stay dropped.
+#[test]
+fn rust_brace_rooted_use_list_names_each_head() {
+    let fixture = Fixture::bare();
+    fixture.write("AGENTS.md", ROOT_BLOCK);
+    for name in ["a", "b", "c", "d", "e"] {
+        fixture.write(&format!("{name}/AGENTS.md"), &node_block(name));
+        fixture.write(
+            &format!("{name}/Cargo.toml"),
+            &format!("[package]\nname = \"{name}-core\"\nversion = \"0.1.0\"\n"),
+        );
+        fixture.write(&format!("{name}/src/lib.rs"), "pub fn f() {}\n");
+    }
+    fixture.write(
+        "a/src/main.rs",
+        "use {b_core::f, crate::g, self::h};\nuse ::{c_core::f as cf};\nuse {{d_core::*}, e_core::{f as ef}};\nfn g() {}\nmod h {}\n",
+    );
+    fixture.commit("brace use fixture");
+
+    let imports = imports_of(&fixture);
+    assert_eq!(imports["a"], vec!["b", "c", "d", "e"]);
+}
+
 // ─── Python ───────────────────────────────────────────────────────────────────
 
 // Python: an `import`/`from`-`import` naming a dotted module another node defines

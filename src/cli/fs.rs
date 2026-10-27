@@ -1,11 +1,12 @@
 //! Shared filesystem primitives for the verbs that write: the atomic replace, the
-//! under-root writer, the in-tree symlink resolver, and the undercover `info/exclude` block.
+//! under-root writer, the in-tree symlink resolver, the separator-aware appender, and the
+//! undercover `info/exclude` block.
 
 use super::read_if_present;
 use crate::model::{Result, SteleError};
 use std::path::{Path, PathBuf};
 
-/// The marker-fenced managed block `init --undercover` maintains in `<common-dir>/info/exclude`
+/// The marker-fenced managed block the undercover writers maintain in `<common-dir>/info/exclude`
 /// (§3.5): its begin/end lines bracket the two unconditional exclude entries so the overlay
 /// and the shim never surface in `git status`. Rewritten in place, never touching a line
 /// outside the fence.

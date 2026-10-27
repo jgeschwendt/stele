@@ -3,7 +3,7 @@
 //! A committed root `.steleignore` hides paths from ALL build/check source scanning:
 //! node discovery (§3.1), the anchor scan (§2.4), import extraction (§4.2), AND the
 //! §4.3 exhaustiveness directory walk. Every one of those consumes the same tracked-
-//! file list, so filtering that single list at its source (`tracked_files`, cli.rs) is
+//! file list, so filtering that single list at its source (`tracked_files`, cli/graph.rs) is
 //! the whole integration: an ignored subtree contributes no files, hence no nodes, no
 //! anchors, no imports, and — the reading the task pins down — no directory the
 //! exhaustiveness scan can call a recall failure. An ignored dir is INVISIBLE, not

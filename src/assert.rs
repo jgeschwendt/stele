@@ -690,7 +690,7 @@ pub fn write_freeze(ctx: &Context) -> Result<usize> {
 /// The two dir names always dropped from the walk (§4.3): the VCS metadata dir and
 /// stele's own committed home. Gitignored paths, untracked dot-dirs, and every path a
 /// committed root `.steleignore` matches never appear — the scan is built from the
-/// filtered tracked-file list (`tracked_files`, cli.rs), so a `.steleignore`d subtree
+/// filtered tracked-file list (`tracked_files`, cli/graph.rs), so a `.steleignore`d subtree
 /// contributes no files, hence no directory here: an ignored dir is INVISIBLE, never an
 /// unmapped recall failure (§2.4). None of the three needs an explicit entry.
 pub(crate) const IGNORED_DIRS: [&str; 2] = [".git", ".stele"];

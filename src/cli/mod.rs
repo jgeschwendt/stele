@@ -187,7 +187,7 @@ fn git_stdout(cwd: &Path, flag: &str) -> String {
 
 /// `path`, typed relative to the cwd, as a top-level-relative path: joined onto the cwd's
 /// `--show-prefix` with `.`/`..` folded lexically (a `..` above the top level is kept, for
-/// [`query::repo_relative`] to refuse).
+/// `query::repo_relative` to refuse).
 fn rebase_on_cwd(prefix: &str, path: &str) -> String {
     let mut out: Vec<&str> = Vec::new();
     for segment in prefix.split('/').chain(path.split('/')) {
@@ -497,6 +497,8 @@ fn read_if_present(path: &Path, shown: &dyn std::fmt::Display) -> Result<Option<
     }
 }
 
+// ─── the committed lock (§5.3) ────────────────────────────────────────────────
+
 /// Reject a committed lock this engine cannot read (§3.2/§5.3). A version-1 lock is
 /// the pre-0.3.0 `stele:` grammar, so its fix line names `migrate` before `build`
 /// (there is no dual-read); a newer version needs a newer engine (a rebuild would
@@ -525,8 +527,6 @@ fn load_committed(root: &Path) -> Result<Lock> {
     require_lock_version(&on_disk)?;
     lock::parse_lock(&on_disk)
 }
-
-// ─── the committed lock (§5.3) ────────────────────────────────────────────────
 
 /// Read the committed lock, mapping a missing file to the §5.3 input error (exit
 /// 2 + `run stele build`) that `check`/`emit`/`node` share. A genuine IO failure

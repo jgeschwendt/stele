@@ -1,5 +1,5 @@
 //! The gate verbs (§5.1): `build` writes the lock, `check` byte-compares it and runs the
-//! §4 assertions, `blame` reports a claim's watermark (§4.5).
+//! §4 assertions, `blame` names the commit that staled a claim (§4.5).
 
 use super::{
     CHECK_USAGE, CommandOutput, FREEZE_FLAG, LOCK_DIR, LOCK_FILE, Mode, REPORT_FLAG,

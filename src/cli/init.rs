@@ -1,5 +1,7 @@
 //! `stele init` (§7): the adoption scaffold — node blocks, empty generated regions, and the
-//! private `--undercover` overlay with its `info/exclude` block (§3.5).
+//! private `--undercover` overlay with its `info/exclude` block (§3.5). It also owns the
+//! write and undercover guards the other verbs share: `write_atomic` (the lock's writer),
+//! `ensure_info_exclude`, `reject_shared_graph_conflict`, `in_tree_target`.
 
 use super::{
     CommandOutput, LOCK_DIR, TREE_DIR, Workspace,

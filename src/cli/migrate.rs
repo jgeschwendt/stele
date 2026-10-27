@@ -3,8 +3,8 @@
 
 use super::{
     CommandOutput, LOCK_DIR, Mode, TREE_DIR, Workspace,
+    fs::{ensure_info_exclude, write_atomic},
     graph::{overlay_sources, tracked_files},
-    init::{ensure_info_exclude, write_atomic},
 };
 use crate::legacy;
 use crate::model::{Result, SteleError};

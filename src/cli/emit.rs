@@ -3,7 +3,7 @@
 
 use super::{
     CommandOutput, Mode, RUN_BUILD_HINT, TREE_DIR, Workspace,
-    init::{ensure_info_exclude, in_tree_target, write_atomic},
+    fs::{ensure_info_exclude, in_tree_target, write_atomic, write_under_root},
     read_committed_lock, read_if_present, require_lock_version,
 };
 use crate::config;
@@ -241,15 +241,6 @@ fn require_region(path: &Path, contents: &str) -> Result<parse::Region> {
              run stele init to scaffold it (§3.1)",
         )
     })
-}
-
-/// Write a file under a repo-root-relative directory, creating the directory tree.
-pub(super) fn write_under_root(root: &Path, dir: &str, name: &str, content: &str) -> Result<()> {
-    let dir_path = root.join(dir);
-    std::fs::create_dir_all(&dir_path)
-        .map_err(|e| SteleError::internal(format!("create {dir}: {e}")))?;
-    std::fs::write(dir_path.join(name), content)
-        .map_err(|e| SteleError::internal(format!("write {dir}/{name}: {e}")))
 }
 
 /// Ensure the harness shims exist when the graph declares a system node (§3.3/§3.5),

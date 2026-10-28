@@ -3,7 +3,7 @@
   "landmarks": {
     "decision-log": {
       "file": "docs/spec.html",
-      "line": 440,
+      "line": 441,
       "node": "/"
     },
     "refund-cap": {
@@ -33,7 +33,7 @@
           "enforced_by": null,
           "id": "decision-log",
           "kind": "invariant",
-          "resolved": "docs/spec.html:440",
+          "resolved": "docs/spec.html:441",
           "text": "docs/spec.html outranks everything here — code and examples conform to it; changing behavior means revising the spec (and its decision log) first",
           "verified": {
             "digest": null,

@@ -21,6 +21,10 @@ pub(crate) const STELE_INFO: &str = "stele";
 const MIN_FENCE_LEN: usize = 3;
 /// CommonMark: an opening fence may be indented at most this many spaces.
 const MAX_FENCE_INDENT: usize = 3;
+/// §2.2's YAML subset: the most bytes a block body may hold.
+const BODY_MAX_BYTES: usize = 64 * 1024;
+/// §2.2's YAML subset: the deepest a block may nest sequences and mappings.
+const DEPTH_MAX: usize = 64;
 
 /// Parse one AGENTS.md. `Ok(None)` = a valid file that declares no node (§3.1:
 /// zero `stele` blocks is the plain-AGENTS.md degradation). `Ok(Some)` = the
@@ -33,6 +37,7 @@ pub fn parse_agents_file(rel_path: &Path, contents: &str) -> Result<Option<Node>
         return Ok(None);
     };
 
+    subset(rel_path, &block)?;
     let raw: RawBlock = serde_yaml_ng::from_str(&block.body).map_err(|e| {
         // `location()` lines are 1-based within the block body; body line 1 sits at
         // file line `fence_line + 1`, so file_line = fence_line + location.line().
@@ -49,6 +54,108 @@ pub fn parse_agents_file(rel_path: &Path, contents: &str) -> Result<Option<Node>
 
     validate(rel_path, &block, &raw)?;
     assemble(rel_path, &block, raw).map(Some)
+}
+
+// ─── the YAML subset (§2.2) ─────────────────────────────────────────────────
+
+/// Hold the block body to §2.2's YAML subset before serde reads it, since deserializing is
+/// where an untrusted block costs: an alias re-expands its anchor at every use, and a deep
+/// nest is parsed whole before its type error. The body is at most [`BODY_MAX_BYTES`],
+/// holds no alias, nests at most [`DEPTH_MAX`] deep, and no scalar carries a control
+/// character but tab and newline (an escape such as `\e` included), so no authored string
+/// reaches a terminal or an emitted file as one. Each refusal is an input error at its line;
+/// a syntax error stops the scan and is left to serde's own message.
+fn subset(rel_path: &Path, block: &SteleBlock) -> Result<()> {
+    let bytes = block.body.len();
+    if bytes > BODY_MAX_BYTES {
+        return Err(SteleError::input(
+            rel_path,
+            block.fence_line,
+            format!("stele block is {bytes} bytes; the ceiling is {BODY_MAX_BYTES} (§2.2)"),
+        ));
+    }
+    let mut depth = 0;
+    let refusal = first_refusal(&block.body, |event| {
+        match event {
+        Event::Alias => Some("a YAML alias; the stele block allows none (§2.2)".into()),
+        Event::Open if depth == DEPTH_MAX => {
+            Some(format!("the stele block nests deeper than {DEPTH_MAX} levels (§2.2)"))
+        }
+        Event::Open => {
+            depth += 1;
+            None
+        }
+        Event::Close => {
+            depth -= 1;
+            None
+        }
+        Event::Scalar(text) => String::from_utf8_lossy(text)
+            .chars()
+            .find(|c| c.is_control() && !matches!(c, '\t' | '\n'))
+            .map(|c| format!("control character U+{:04X}; the stele block allows tab and newline only (§2.2)", c as u32)),
+    }
+    });
+    match refusal {
+        Some((line, message)) => Err(SteleError::input(
+            rel_path,
+            block.fence_line + 1 + line,
+            message,
+        )),
+        None => Ok(()),
+    }
+}
+
+/// What [`subset`] reads of one libyaml event.
+enum Event<'a> {
+    Alias,
+    Close,
+    Open,
+    Scalar(&'a [u8]),
+}
+
+/// Feed `body`'s libyaml events to `visit` until it refuses one, returning that refusal with
+/// the event's 0-based body line; `None` once the stream ends or its syntax fails. libyaml is
+/// the parser serde_yaml_ng runs on, so both read the same events.
+fn first_refusal(
+    body: &str,
+    mut visit: impl FnMut(Event) -> Option<String>,
+) -> Option<(usize, String)> {
+    use std::mem::MaybeUninit;
+    use unsafe_libyaml::*;
+    let mut parser = MaybeUninit::<yaml_parser_t>::uninit();
+    let mut event = MaybeUninit::<yaml_event_t>::uninit();
+    let mut refusal = None;
+    // SAFETY: the parser is initialized before use and deleted once; `body` outlives it; an
+    // event is read only after a successful parse filled it, and deleted before the next.
+    unsafe {
+        let parser = parser.as_mut_ptr();
+        // It fails only on a null allocation, and unsafe-libyaml's allocator aborts instead.
+        assert!(yaml_parser_initialize(parser).ok);
+        yaml_parser_set_input_string(parser, body.as_ptr(), body.len() as _);
+        while refusal.is_none() && yaml_parser_parse(parser, event.as_mut_ptr()).ok {
+            let ev = &*event.as_ptr();
+            let end = ev.type_ == YAML_STREAM_END_EVENT;
+            let seen = match ev.type_ {
+                YAML_ALIAS_EVENT => Some(Event::Alias),
+                YAML_MAPPING_START_EVENT | YAML_SEQUENCE_START_EVENT => Some(Event::Open),
+                YAML_MAPPING_END_EVENT | YAML_SEQUENCE_END_EVENT => Some(Event::Close),
+                YAML_SCALAR_EVENT => Some(Event::Scalar(std::slice::from_raw_parts(
+                    ev.data.scalar.value,
+                    ev.data.scalar.length as usize,
+                ))),
+                _ => None,
+            };
+            refusal = seen
+                .and_then(&mut visit)
+                .map(|why| (ev.start_mark.line as usize, why));
+            yaml_event_delete(event.as_mut_ptr());
+            if end {
+                break;
+            }
+        }
+        yaml_parser_delete(parser);
+    }
+    refusal
 }
 
 // ─── strict deserialization layer (§2.2, §5.3) ──────────────────────────────
@@ -810,6 +917,12 @@ mod tests {
     #[test]
     fn every_block_gate_is_exit_2_at_its_line() {
         let long = format!("kind: component\npurpose: {}\n", "x".repeat(201));
+        let deep = format!(
+            "kind: component\npurpose: {}{}\n",
+            "[".repeat(64),
+            "]".repeat(64)
+        );
+        let big = format!("kind: component\n#{}\n", "x".repeat(65536));
         for (body, line, needle) in [
             ("kind: [\n", 4, "kind"),
             (long.as_str(), 3, "ceiling"),
@@ -853,6 +966,15 @@ mod tests {
                 5,
                 "a map of command names",
             ),
+            ("kind: &k component\npurpose: *k\n", 5, "alias"),
+            (deep.as_str(), 5, "nests deeper than 64"),
+            ("kind: component\npurpose: \"a\\eb\"\n", 5, "U+001B"),
+            (
+                "kind: component\nhazards:\n  - claim: \"\\x9b\"\n",
+                6,
+                "U+009B",
+            ),
+            (big.as_str(), 3, "ceiling is 65536"),
         ] {
             let err = parse(body).unwrap_err();
             assert_eq!(err.exit, ExitCode::Input, "{body}");
@@ -867,6 +989,27 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.line, Some(4));
         assert!(err.message.contains("line 1"), "{err}");
+    }
+
+    /// The subset refuses only what it names: a tab, a block scalar's newlines, CRLF line
+    /// ends, a non-control character such as NBSP and quoted `*`/`&` text all parse.
+    #[test]
+    fn the_yaml_subset_keeps_ordinary_blocks() {
+        for body in [
+            "kind: component\npurpose: \"a\\tb\"\n",
+            "kind: component\npurpose: |\n  one\n  two\n",
+            "kind: component\r\npurpose: a\u{a0}b\r\n",
+            "kind: component\nhazards:\n  - claim: '*x &y'\n    anchor: x#y\n",
+        ] {
+            assert!(parse(body).is_ok(), "{body:?}: {:?}", parse(body).err());
+        }
+        // 63 deep passes the subset; its type error is serde's.
+        let nest = format!(
+            "kind: component\npurpose: {}{}\n",
+            "[".repeat(63),
+            "]".repeat(63)
+        );
+        assert!(!parse(&nest).unwrap_err().message.contains("§2.2"));
     }
 
     #[test]

@@ -241,7 +241,16 @@ fn tools_call(ws: &Workspace, params: Option<&Value>) -> Outcome {
         INVALID_PARAMS,
         "Invalid params: tools/call requires a tool name".into(),
     ))?;
-    let argv = argv_for_tool(name, params.get("arguments"))
+    let empty = serde_json::Map::new();
+    let arguments = match params.get("arguments") {
+        None | Some(Value::Null) => &empty,
+        Some(Value::Object(arguments)) => arguments,
+        Some(_) => {
+            let why = "Invalid params: tools/call arguments must be an object";
+            return Err((INVALID_PARAMS, why.into()));
+        }
+    };
+    let argv = argv_for_tool(name, arguments)
         .ok_or_else(|| (INVALID_PARAMS, format!("Unknown tool: {name}")))?;
     let VerbRender { exit, mut text } = match argv {
         Ok(argv) => cli::serve_render(ws, &argv.iter().map(String::as_str).collect::<Vec<_>>()),
@@ -262,18 +271,16 @@ fn tools_call(ws: &Workspace, params: Option<&Value>) -> Outcome {
 /// The CLI argv for a tool call, derived from its `inputSchema` (§5.2: CLI flags map to
 /// named tool parameters): required string args as positionals, then each optional one as
 /// its `--flag`. Every argument is validated against the schema first (MCP: servers MUST
-/// validate tool inputs) — a non-object `arguments`, an undeclared key, a wrong JSON type or
-/// an integer below its `minimum` is `Err` naming it, a tool-error result; a missing required
+/// validate tool inputs) — an undeclared key, a wrong JSON type or an integer below its
+/// `minimum` is `Err` naming it, a tool-error result; a missing required
 /// arg is left to the verb's own usage check. `None` only for an unknown tool name.
-fn argv_for_tool(name: &str, arguments: Option<&Value>) -> Option<Result<Vec<String>, String>> {
+fn argv_for_tool(
+    name: &str,
+    args: &serde_json::Map<String, Value>,
+) -> Option<Result<Vec<String>, String>> {
     let tools = tool_definitions();
     let schema = &tools.as_array()?.iter().find(|t| t["name"] == name)?["inputSchema"];
     let empty = serde_json::Map::new();
-    let args = match arguments {
-        None | Some(Value::Null) => &empty,
-        Some(Value::Object(args)) => args,
-        Some(_) => return Some(Err(format!("{name}: arguments must be an object"))),
-    };
     let props = schema["properties"].as_object().unwrap_or(&empty);
     for (key, value) in args {
         let Some(prop) = props.get(key) else {

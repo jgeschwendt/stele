@@ -219,7 +219,7 @@ fn malformed_and_unknown_inputs_are_resilient() {
                 15,
                 refused("check: argument `run_commands` must be a boolean")
             ],
-            [16, refused("root: arguments must be an object")],
+            [16, -32602],
             [17, refused("usage: stele node <id>")],
             [7, {}],
         ])

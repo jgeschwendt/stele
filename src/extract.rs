@@ -622,7 +622,7 @@ fn file_refs(
     resolve: &(dyn Fn(&str, &str) -> Option<String> + Sync),
 ) -> Result<Vec<FileRef>> {
     let files: Vec<_> = ctx.with_ext(exts).collect();
-    let per_file = crate::assert::par_map(&files, |file| {
+    let per_file = crate::par::par_map(&files, |file| {
         let Some(src) = ctx.read(file)? else {
             return Ok(Vec::new());
         };

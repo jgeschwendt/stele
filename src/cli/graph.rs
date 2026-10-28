@@ -3,14 +3,14 @@
 
 use super::{Mode, TREE_DIR, Workspace};
 use crate::anchors::{self, SymbolResolution};
-use crate::assert;
 use crate::extract;
+use crate::git;
 use crate::model::{AdrEntry, Graph, Node, Resolution, Result, SteleError, Verified};
+use crate::par;
 use crate::parse;
 use crate::steleignore::Steleignore;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// One node source (§2.4/§3.5): `rel` is the repo-root-relative path fed to
 /// [`parse::parse_agents_file`] (so node id and territory come out identical in both
@@ -96,7 +96,7 @@ pub(super) fn build_graph(ws: &Workspace, tracked: &[PathBuf]) -> Result<Graph> 
     // the two tree-sitter passes dominate a build — and its error still surfaces last.
     let territory = graph.territory();
     let (anchors, extraction) = std::thread::scope(|scope| {
-        let extraction = assert::spawn(scope, || {
+        let extraction = par::spawn(scope, || {
             extract::extract_imports(root, tracked, &territory)
         });
         (anchors::scan(root, tracked), extraction())
@@ -121,7 +121,7 @@ pub(super) fn build_graph(ws: &Workspace, tracked: &[PathBuf]) -> Result<Graph> 
 /// the tree-sitter passes; a build error still surfaces first and suppresses every warning.
 pub(super) fn build_graph_and_warn(ws: &Workspace, tracked: &[PathBuf]) -> Result<Graph> {
     let (graph, others) = std::thread::scope(|scope| {
-        let others = assert::spawn(scope, || {
+        let others = par::spawn(scope, || {
             git_ls_files(&ws.work, &["--others", "--exclude-standard"])
         });
         (build_graph(ws, tracked), others())
@@ -209,7 +209,7 @@ pub(super) fn stamp_verified(root: &Path, graph: &mut Graph) -> Result<bool> {
         .flat_map(|node| node.invariants.iter_mut().chain(&mut node.hazards))
         .filter(|claim| claim.resolved.is_some())
         .collect();
-    let digests = assert::par_map(&claims, |claim| {
+    let digests = par::par_map(&claims, |claim| {
         anchors::digest_for_claim(root, &claim.anchor, claim.resolved.as_deref().unwrap())
     });
     for (claim, digest) in claims.into_iter().zip(digests) {
@@ -227,11 +227,7 @@ pub(super) fn stamp_verified(root: &Path, graph: &mut Graph) -> Result<bool> {
 /// "no commit", never "not a git repo". A genuine spawn failure stays a §5.3 internal
 /// error.
 fn head_sha(root: &Path) -> Result<Option<String>> {
-    let output = Command::new("git")
-        .args(["rev-parse", "--verify", "HEAD"])
-        .current_dir(root)
-        .output()
-        .map_err(|e| SteleError::internal(format!("run `git rev-parse --verify HEAD`: {e}")))?;
+    let output = git::run(root, "rev-parse --verify HEAD", &[])?;
     if !output.status.success() {
         return Ok(None);
     }
@@ -302,15 +298,10 @@ fn warn_untracked_node_files(ws: &Workspace, others: Vec<PathBuf>) -> Result<()>
 /// Repo-root-relative and sorted, NUL-delimited to survive unusual filenames.
 pub(super) fn git_ls_files(root: &Path, args: &[&str]) -> Result<Vec<PathBuf>> {
     // Messages name the command by its first flag: `git ls-files`, `git ls-files --others`.
-    let cmd = ["git ls-files"].into_iter().chain(args.first().copied());
+    let cmd = ["ls-files"].into_iter().chain(args.first().copied());
     let cmd = cmd.collect::<Vec<_>>().join(" ");
-    let output = Command::new("git")
-        .arg("ls-files")
-        .args(args)
-        .arg("-z")
-        .current_dir(root)
-        .output()
-        .map_err(|e| SteleError::internal(format!("run `{cmd}`: {e}")))?;
+    let rest = [args.get(1..).unwrap_or_default(), &["-z"]].concat();
+    let output = git::run(root, &cmd, &rest)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         // Outside a work tree git prints "fatal: not a git repository …" — a user
@@ -323,7 +314,7 @@ pub(super) fn git_ls_files(root: &Path, args: &[&str]) -> Result<Vec<PathBuf>> {
             ));
         }
         return Err(SteleError::internal(format!(
-            "`{cmd}` failed: {}",
+            "`git {cmd}` failed: {}",
             stderr.trim()
         )));
     }

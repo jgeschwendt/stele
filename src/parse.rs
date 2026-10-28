@@ -75,12 +75,11 @@ fn subset(rel_path: &Path, block: &SteleBlock) -> Result<()> {
         ));
     }
     let mut depth = 0;
-    let refusal = first_refusal(&block.body, |event| {
-        match event {
+    let refusal = first_refusal(&block.body, |event| match event {
         Event::Alias => Some("a YAML alias; the stele block allows none (§2.2)".into()),
-        Event::Open if depth == DEPTH_MAX => {
-            Some(format!("the stele block nests deeper than {DEPTH_MAX} levels (§2.2)"))
-        }
+        Event::Open if depth == DEPTH_MAX => Some(format!(
+            "the stele block nests deeper than {DEPTH_MAX} levels (§2.2)"
+        )),
         Event::Open => {
             depth += 1;
             None
@@ -92,8 +91,12 @@ fn subset(rel_path: &Path, block: &SteleBlock) -> Result<()> {
         Event::Scalar(text) => String::from_utf8_lossy(text)
             .chars()
             .find(|c| c.is_control() && !matches!(c, '\t' | '\n'))
-            .map(|c| format!("control character U+{:04X}; the stele block allows tab and newline only (§2.2)", c as u32)),
-    }
+            .map(|c| {
+                let code = c as u32;
+                format!(
+                    "control character U+{code:04X}; the block allows tab and newline only (§2.2)"
+                )
+            }),
     });
     match refusal {
         Some((line, message)) => Err(SteleError::input(

@@ -209,3 +209,23 @@ fn init_after_a_failed_stage_neither_claims_it_nor_doubles_the_skeleton() {
         "stele init: scaffolded 0 node(s)"
     );
 }
+
+// Every git spawn reads stele's paths literally (src/git.rs): a `:c/` directory is no
+// pathspec magic, so `init` stages its scaffold where `git add` once failed on it, and
+// `check-ignore` (which refuses literal mode, so it gets a `./` path) never reads `:c/` as
+// `c/`, which this `.gitignore` names.
+#[test]
+fn init_takes_a_colon_directory_literally() {
+    let fixture = Fixture::bare();
+    fixture.write("src/lib.rs", "fn a() {}\n");
+    fixture.write(":c/z.md", "z\n");
+    fixture.write(".gitignore", "c/\n");
+    fixture.commit("a colon directory beside an ignored c/");
+
+    let init = fixture.run(&["init"]);
+    assert_eq!(init.code, 0, "{}", init.combined());
+    assert!(!init.stderr.contains("skipped"), "{}", init.combined());
+    assert!(fixture.path(":c/AGENTS.md").exists(), "{}", init.combined());
+    assert!(init.stdout.contains("staged"), "{}", init.combined());
+    assert!(!init.combined().contains("unstaged"), "{}", init.combined());
+}

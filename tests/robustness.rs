@@ -582,7 +582,7 @@ fn a_sparse_checkout_is_refused_by_every_verb() {
     fixture.git(&["update-index", "--no-skip-worktree", "b/y.rs"]);
 
     fixture.git(&["sparse-checkout", "set", "a"]);
-    for verb in ["check", "nodes", "emit", "build"] {
+    for verb in ["check", "nodes", "emit", "build", "serve"] {
         let run = fixture.run(&[verb]);
         assert_eq!(run.code, 2, "{verb}: {}", run.combined());
         assert!(

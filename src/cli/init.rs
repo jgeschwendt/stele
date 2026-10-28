@@ -204,7 +204,8 @@ fn skip_if_ignored(root: &Path, path: &str) -> Result<bool> {
 /// any other status is treated as "not ignored" so the scaffold proceeds. A spawn failure
 /// is a §5.3 internal error.
 fn git_check_ignore(root: &Path, path: &str) -> Result<bool> {
-    let output = git::run(root, "check-ignore", &["-q", "--", path])?;
+    // `./` keeps a leading `:` a directory name: check-ignore refuses literal mode.
+    let output = git::run(root, "check-ignore", &["-q", "--", &format!("./{path}")])?;
     Ok(output.status.code() == Some(0))
 }
 

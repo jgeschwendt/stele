@@ -101,7 +101,7 @@ fn tool_calls_match_cli_stdout() {
     fixture.commit("store imports billing (undeclared edge); a failing command");
     assert_eq!(fixture.run(&["build"]).code, 0);
 
-    let rows: [(&[&str], Value, &str); 8] = [
+    let rows: [(&[&str], Value, &str); 9] = [
         (&["root"], json!({"name":"root"}), ""),
         (
             &["node", "billing"],
@@ -111,6 +111,11 @@ fn tool_calls_match_cli_stdout() {
         (
             &["unfold", "apps/web", "--depth", "2"],
             json!({"name":"unfold","arguments":{"id":"apps/web","depth":2}}),
+            "",
+        ),
+        (
+            &["unfold", "apps/web", "--depth", "2"],
+            json!({"name":"unfold","arguments":{"id":"apps/web","depth":2.0}}),
             "",
         ),
         (
@@ -176,7 +181,7 @@ fn malformed_and_unknown_inputs_are_resilient() {
             ),
             call(
                 13,
-                json!({"name":"unfold","arguments":{"id":"x","depth":2.0}}),
+                json!({"name":"unfold","arguments":{"id":"x","depth":1.5}}),
             ),
             call(
                 14,

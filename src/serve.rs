@@ -135,7 +135,7 @@ fn initialize_result(params: Option<&Value>) -> Value {
         // client qualifies as `stele.<verb>`.
         "serverInfo": { "name": "stele", "version": env!("CARGO_PKG_VERSION") },
         "instructions": "stele MCP server (SPEC §5.2): eight read-only query tools over the \
-            committed graph lock. Mutating verbs (build/init/emit) are shell/CI-only and not \
+            committed graph lock. Mutating verbs (build/init/emit/migrate) are shell/CI-only and not \
             exposed here.",
     })
 }
@@ -288,9 +288,11 @@ fn argv_for_tool(
         };
         let (fits, want) = match prop["type"].as_str() {
             Some("integer") => {
-                let min = prop["minimum"].as_i64().unwrap_or(i64::MIN);
+                // JSON Schema's integer is any number with no fraction, `2.0` included.
+                let min = prop["minimum"].as_f64().unwrap_or(f64::MIN);
+                let whole = value.as_f64().filter(|n| n.fract() == 0.0);
                 (
-                    value.as_i64().is_some_and(|n| n >= min),
+                    whole.is_some_and(|n| n >= min),
                     format!("an integer ≥ {min}"),
                 )
             }
@@ -313,7 +315,10 @@ fn argv_for_tool(
         match value {
             Value::String(s) => argv.extend([flag, s.clone()]),
             Value::Bool(on) => argv.extend(on.then_some(flag)),
-            number => argv.extend([flag, number.to_string()]),
+            number => argv.extend([
+                flag,
+                (number.as_f64().unwrap_or_default() as i64).to_string(),
+            ]),
         }
     }
     Some(Ok(argv))

@@ -101,7 +101,7 @@ fn tool_calls_match_cli_stdout() {
     fixture.commit("store imports billing (undeclared edge); a failing command");
     assert_eq!(fixture.run(&["build"]).code, 0);
 
-    let rows: [(&[&str], Value, &str); 9] = [
+    let rows: [(&[&str], Value, &str); 8] = [
         (&["root"], json!({"name":"root"}), ""),
         (
             &["node", "billing"],
@@ -111,11 +111,6 @@ fn tool_calls_match_cli_stdout() {
         (
             &["unfold", "apps/web", "--depth", "2"],
             json!({"name":"unfold","arguments":{"id":"apps/web","depth":2}}),
-            "",
-        ),
-        (
-            &["unfold", "apps/web"],
-            json!({"name":"unfold","arguments":{"id":"apps/web","depth":"2"}}),
             "",
         ),
         (
@@ -161,6 +156,7 @@ fn tool_calls_match_cli_stdout() {
 
 #[test]
 fn malformed_and_unknown_inputs_are_resilient() {
+    let refused = |text: &str| json!({"content":[{"type":"text","text":text}],"isError":true});
     let responses = exchange(
         &Fixture::bare(),
         &[
@@ -171,8 +167,27 @@ fn malformed_and_unknown_inputs_are_resilient() {
             json!({"jsonrpc":"2.0","id":8}),
             json!({"jsonrpc":"2.0","id":9,"method":"tools/call"}),
             call(10, json!({})),
-            // An ill-typed required argument is left out, so the verb's own usage line answers.
+            // Arguments are validated against the tool's schema, each refusal naming its key;
+            // a missing required one is left to the verb's own usage line.
             call(11, json!({"name":"node","arguments":{"id":5}})),
+            call(
+                12,
+                json!({"name":"invariants","arguments":{"touchng":"src"}}),
+            ),
+            call(
+                13,
+                json!({"name":"unfold","arguments":{"id":"x","depth":2.0}}),
+            ),
+            call(
+                14,
+                json!({"name":"unfold","arguments":{"id":"x","depth":0}}),
+            ),
+            call(
+                15,
+                json!({"name":"check","arguments":{"run_commands":"yes"}}),
+            ),
+            call(16, json!({"name":"root","arguments":[]})),
+            call(17, json!({"name":"node","arguments":null})),
             json!({"jsonrpc":"2.0","method":"notifications/unknown"}),
             json!({"jsonrpc":"2.0","id":7,"method":"ping"}),
         ],
@@ -190,7 +205,22 @@ fn malformed_and_unknown_inputs_are_resilient() {
             [8, -32600],
             [9, -32602],
             [10, -32602],
-            [11, {"content":[{"type":"text","text":"usage: stele node <id>"}],"isError":true}],
+            [11, refused("node: argument `id` must be a string")],
+            [12, refused("invariants: unknown argument `touchng`")],
+            [
+                13,
+                refused("unfold: argument `depth` must be an integer ≥ 1")
+            ],
+            [
+                14,
+                refused("unfold: argument `depth` must be an integer ≥ 1")
+            ],
+            [
+                15,
+                refused("check: argument `run_commands` must be a boolean")
+            ],
+            [16, refused("root: arguments must be an object")],
+            [17, refused("usage: stele node <id>")],
             [7, {}],
         ])
     );

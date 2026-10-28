@@ -243,8 +243,13 @@ fn tools_call(ws: &Workspace, params: Option<&Value>) -> Outcome {
     ))?;
     let argv = argv_for_tool(name, params.get("arguments"))
         .ok_or_else(|| (INVALID_PARAMS, format!("Unknown tool: {name}")))?;
-    let argv_refs: Vec<&str> = argv.iter().map(String::as_str).collect();
-    let VerbRender { exit, mut text } = cli::serve_render(ws, &argv_refs);
+    let VerbRender { exit, mut text } = match argv {
+        Ok(argv) => cli::serve_render(ws, &argv.iter().map(String::as_str).collect::<Vec<_>>()),
+        Err(text) => VerbRender {
+            exit: ExitCode::Input as i32,
+            text,
+        },
+    };
     // §5.3 input/internal errors (e.g. a missing lock) are `isError` results carrying the
     // CLI's message (§5.2); check otherwise gets its exit appended — clean runs print nothing.
     let is_error = exit >= ExitCode::Input as i32;
@@ -256,28 +261,53 @@ fn tools_call(ws: &Workspace, params: Option<&Value>) -> Outcome {
 
 /// The CLI argv for a tool call, derived from its `inputSchema` (§5.2: CLI flags map to
 /// named tool parameters): required string args as positionals, then each optional one as
-/// its `--flag`. Absent or ill-typed args are omitted, leaving a missing required arg to
-/// the verb's own usage check. `None` only for an unknown tool name.
-fn argv_for_tool(name: &str, arguments: Option<&Value>) -> Option<Vec<String>> {
+/// its `--flag`. Every argument is validated against the schema first (MCP: servers MUST
+/// validate tool inputs) — a non-object `arguments`, an undeclared key, a wrong JSON type or
+/// an integer below its `minimum` is `Err` naming it, a tool-error result; a missing required
+/// arg is left to the verb's own usage check. `None` only for an unknown tool name.
+fn argv_for_tool(name: &str, arguments: Option<&Value>) -> Option<Result<Vec<String>, String>> {
     let tools = tool_definitions();
     let schema = &tools.as_array()?.iter().find(|t| t["name"] == name)?["inputSchema"];
+    let empty = serde_json::Map::new();
+    let args = match arguments {
+        None | Some(Value::Null) => &empty,
+        Some(Value::Object(args)) => args,
+        Some(_) => return Some(Err(format!("{name}: arguments must be an object"))),
+    };
+    let props = schema["properties"].as_object().unwrap_or(&empty);
+    for (key, value) in args {
+        let Some(prop) = props.get(key) else {
+            return Some(Err(format!("{name}: unknown argument `{key}`")));
+        };
+        let (fits, want) = match prop["type"].as_str() {
+            Some("integer") => {
+                let min = prop["minimum"].as_i64().unwrap_or(i64::MIN);
+                (
+                    value.as_i64().is_some_and(|n| n >= min),
+                    format!("an integer ≥ {min}"),
+                )
+            }
+            Some("boolean") => (value.is_boolean(), "a boolean".into()),
+            _ => (value.is_string(), "a string".into()),
+        };
+        if !fits {
+            return Some(Err(format!("{name}: argument `{key}` must be {want}")));
+        }
+    }
     let required = schema["required"].as_array().cloned().unwrap_or_default();
-    let arg = |key: &str| arguments.and_then(|a| a.get(key));
     let mut argv = vec![name.to_string()];
     argv.extend(
         required
             .iter()
-            .filter_map(|k| Some(arg(k.as_str()?)?.as_str()?.to_string())),
+            .filter_map(|k| Some(args.get(k.as_str()?)?.as_str()?.into())),
     );
-    let optional = schema["properties"].as_object().into_iter().flatten();
-    for (key, prop) in optional.filter(|(k, _)| !required.contains(&json!(k))) {
+    for (key, value) in args.iter().filter(|(k, _)| !required.contains(&json!(k))) {
         let flag = format!("--{}", key.replace('_', "-"));
-        match (prop["type"].as_str(), arg(key)) {
-            (Some("string"), Some(Value::String(s))) => argv.extend([flag, s.clone()]),
-            (Some("integer"), Some(v)) if v.is_i64() => argv.extend([flag, v.to_string()]),
-            (Some("boolean"), Some(Value::Bool(true))) => argv.push(flag),
-            _ => {}
+        match value {
+            Value::String(s) => argv.extend([flag, s.clone()]),
+            Value::Bool(on) => argv.extend(on.then_some(flag)),
+            number => argv.extend([flag, number.to_string()]),
         }
     }
-    Some(argv)
+    Some(Ok(argv))
 }

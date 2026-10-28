@@ -191,8 +191,8 @@ fn resolve_claim_anchors(
 }
 
 /// Stamp `verified = {sha, digest}` on every claim whose anchor RESOLVES (§4.5),
-/// using the full 40-hex [`head_sha`] watermark (deterministic within a commit, so two
-/// builds byte-match) and the tree-sitter structural digest of the claim's bound definition
+/// using the full 40-hex `HEAD` sha (deterministic within a commit, so two builds
+/// byte-match) and the tree-sitter structural digest of the claim's bound definition
 /// (§4.5; `null` only where the anchored file's language has no bundled parser).
 /// Unresolved claims stay `verified:null`. `build` is the sole stamper — `check`
 /// carries `verified` over instead (§4.5). Returns `false` when HEAD is unborn (no
@@ -221,21 +221,19 @@ pub(super) fn stamp_verified(root: &Path, graph: &mut Graph) -> Result<bool> {
     Ok(true)
 }
 
-/// The §4.5 watermark: the newest commit HEAD shares with the default branch (`git
-/// merge-base HEAD origin/HEAD`), so a branch landed by rebase never stamps a commit the
-/// landing orphans; HEAD itself on a repo with no `origin/HEAD` or no shared history.
-/// `None` when HEAD is unborn — a repo with no commit yet (§7 greenfield). `git rev-parse
-/// --verify HEAD` fails on an unborn HEAD; since `build_graph` already ran `git ls-files`
-/// successfully, that failure means "no commit", never "not a git repo". A genuine spawn
-/// failure stays a §5.3 internal error.
+/// The full `HEAD` commit sha (§4.5 watermark), or `None` when HEAD is unborn — a repo
+/// with no commit yet (§7 greenfield). `git rev-parse --verify HEAD` fails on an unborn
+/// HEAD; since `build_graph` already ran `git ls-files` successfully, that failure means
+/// "no commit", never "not a git repo". A genuine spawn failure stays a §5.3 internal
+/// error.
 fn head_sha(root: &Path) -> Result<Option<String>> {
-    let head = git::run(root, "rev-parse --verify HEAD", &[])?;
-    if !head.status.success() {
+    let output = git::run(root, "rev-parse --verify HEAD", &[])?;
+    if !output.status.success() {
         return Ok(None);
     }
-    let base = git::run(root, "merge-base HEAD", &["refs/remotes/origin/HEAD"])?;
-    let sha = if base.status.success() { base } else { head }.stdout;
-    Ok(Some(String::from_utf8_lossy(&sha).trim().to_string()))
+    Ok(Some(
+        String::from_utf8_lossy(&output.stdout).trim().to_string(),
+    ))
 }
 
 /// The source-scan file set (§2.4 scan scope): VCS-tracked files (so `.gitignore` is

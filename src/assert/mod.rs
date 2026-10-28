@@ -2,8 +2,7 @@
 //! byte-compare (§5.3); any [`Finding`] exits 1, "repo out of spec". This module owns the
 //! finding model with its human (EXAMPLE §8 gallery) and `--json` (§5.3) renders, the
 //! [`Context`] every class reads, the class dispatch honoring `--only` (§5.1) and
-//! `check.disable` (§3.4), the scoped-thread helpers, and the literal-pathspec `git`
-//! runner. Each class lives in its own submodule.
+//! `check.disable` (§3.4). Each class lives in its own submodule.
 
 mod budget;
 mod exhaustiveness;
@@ -19,12 +18,9 @@ pub use structural::write_freeze;
 
 use crate::config::{AssertionClass, Config};
 use crate::lock::Lock;
-use crate::model::{Graph, Result, SteleError};
+use crate::model::{Graph, Result};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
-use std::sync::{Arc, Mutex};
-use std::thread::{Builder, Scope};
 
 /// The six assertion classes in §4 declaration order (§4.1 referential … §4.6
 /// liveness). Order is meaningful — findings are reported in this order, matching the
@@ -232,7 +228,7 @@ impl Context<'_> {
     /// enforced_by: tracked implies committed). Asks git, not [`Self::tracked`]: that is
     /// the `.steleignore`-filtered scan roster, and a referenced guard is not scanned.
     fn tracks(&self, rel: &str) -> Result<bool> {
-        let output = git(self.root, "ls-files -z --", &[rel])?;
+        let output = crate::git::run(self.root, "ls-files -z --", &[rel])?;
         // An unmerged path is listed once per stage; a failed git lists nothing.
         Ok(output.status.success()
             && output
@@ -269,78 +265,5 @@ fn run_class(ctx: &Context, class: AssertionClass) -> Result<Vec<Finding>> {
         AssertionClass::Referential => referential::referential(ctx),
         AssertionClass::Structural => structural::structural(ctx),
         AssertionClass::Liveness => liveness::liveness(ctx),
-    }
-}
-
-/// `f` over `items` on up to one thread per core, in order — each claim's digest re-reads
-/// and re-parses its file, and its churn count spawns git, so the per-claim passes of
-/// `build` and freshness are the engine's widest serial loops.
-pub fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
-    let cores = std::thread::available_parallelism().map_or(1, usize::from);
-    std::thread::scope(|scope| {
-        let chunks: Vec<_> = items
-            .chunks(items.len().div_ceil(cores).max(1))
-            .map(|chunk| spawn(scope, || chunk.iter().map(&f).collect::<Vec<_>>()))
-            .collect();
-        chunks.into_iter().flat_map(|join| join()).collect()
-    })
-}
-
-/// `f` on a thread of `scope`, joined by calling the result — or, when the OS refuses
-/// the thread, run here and now: a parallel pass degrades to the serial one, never a panic.
-pub fn spawn<'s, R: Send + 's>(
-    scope: &'s Scope<'s, '_>,
-    f: impl FnOnce() -> R + Send + 's,
-) -> Box<dyn FnOnce() -> R + 's> {
-    spawn_on(Builder::new(), scope, f)
-}
-
-/// [`spawn`] on `builder` (a test seam: an impossible stack makes the OS refuse).
-fn spawn_on<'s, R: Send + 's>(
-    builder: Builder,
-    scope: &'s Scope<'s, '_>,
-    f: impl FnOnce() -> R + Send + 's,
-) -> Box<dyn FnOnce() -> R + 's> {
-    // A refused spawn drops its closure, so the job is shared to survive it.
-    let job = Arc::new(Mutex::new(Some(f)));
-    let theirs = Arc::clone(&job);
-    match builder.spawn_scoped(scope, move || theirs.lock().unwrap().take().unwrap()()) {
-        Ok(thread) => Box::new(move || thread.join().unwrap()),
-        Err(_) => {
-            let done = job.lock().unwrap().take().unwrap()();
-            Box::new(move || done)
-        }
-    }
-}
-
-/// Run `git <cmd> <args>` from the repo root (§4.5). A spawn failure is a §5.3 internal
-/// error naming `git <cmd>`.
-/// Pathspecs are literal — stele's paths name files, so `:x` is no magic and `[ab]` no
-/// glob — and an inherited glob or icase `GIT_*_PATHSPECS`, which git refuses beside
-/// literal mode, is dropped.
-fn git(root: &Path, cmd: &str, args: &[&str]) -> Result<Output> {
-    let output = Command::new("git")
-        .args(cmd.split(' ').chain(args.iter().copied()))
-        .env_remove("GIT_GLOB_PATHSPECS")
-        .env_remove("GIT_ICASE_PATHSPECS")
-        .env("GIT_LITERAL_PATHSPECS", "1")
-        .env_remove("GIT_NOGLOB_PATHSPECS")
-        .current_dir(root)
-        .output();
-    output.map_err(|e| SteleError::internal(format!("run `git {cmd}`: {e}")))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A thread the OS refuses (here an impossible stack) runs its work inline on the
-    /// calling thread, never panicking the command.
-    #[test]
-    fn refused_thread_runs_inline() {
-        let refused = std::thread::Builder::new().stack_size(usize::MAX);
-        let ran =
-            std::thread::scope(|scope| spawn_on(refused, scope, || std::thread::current().id())());
-        assert_eq!(ran, std::thread::current().id());
     }
 }

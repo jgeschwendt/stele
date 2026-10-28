@@ -8,12 +8,12 @@ use super::{
     graph_home, read_if_present, reject_shared_graph_conflict,
 };
 use crate::assert;
+use crate::git;
 use crate::model::{DECISION_PREFIX, NodeKind, PURPOSE_MAX_CHARS, Result, SteleError};
 use crate::parse;
 use serde_json::json;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// The empty generated region `init` writes (§3.1/§7): the bare one-line form, with no
 /// name and no body between the markers, for `emit` to fill later.
@@ -204,11 +204,7 @@ fn skip_if_ignored(root: &Path, path: &str) -> Result<bool> {
 /// any other status is treated as "not ignored" so the scaffold proceeds. A spawn failure
 /// is a §5.3 internal error.
 fn git_check_ignore(root: &Path, path: &str) -> Result<bool> {
-    let output = Command::new("git")
-        .args(["check-ignore", "-q", "--", path])
-        .current_dir(root)
-        .output()
-        .map_err(|e| SteleError::internal(format!("run `git check-ignore`: {e}")))?;
+    let output = git::run(root, "check-ignore", &["-q", "--", path])?;
     Ok(output.status.code() == Some(0))
 }
 
@@ -423,13 +419,8 @@ fn detect_adr_dir(tracked: &[PathBuf]) -> String {
 /// exits 0). Ignored targets were pre-filtered by [`skip_if_ignored`], so the common
 /// failure mode is already gone. Returns that warning; `None` when the paths staged.
 fn git_add(root: &Path, paths: &[String]) -> Option<String> {
-    let why = match Command::new("git")
-        .arg("add")
-        .arg("--")
-        .args(paths)
-        .current_dir(root)
-        .output()
-    {
+    let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
+    let why = match git::output(root, "add --", &paths) {
         Ok(output) if output.status.success() => return None,
         Ok(output) => String::from_utf8_lossy(&output.stderr).trim().to_string(),
         Err(e) => format!("could not run git: {e}"),
@@ -444,6 +435,7 @@ fn git_add(root: &Path, paths: &[String]) -> Option<String> {
 mod tests {
     use super::*;
     use crate::cli::Mode;
+    use std::process::Command;
 
     /// A normal-mode workspace rooted at `root` — `home` and `work` the identical path,
     /// the only mode a direct verb call exercises (§3.5). Mirrors what [`resolve_workspace`]

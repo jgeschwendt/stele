@@ -1,11 +1,13 @@
 //! Freshness (§4.5): region-digest drift or churn since the lock's `verified`
 //! watermark, the staling-commit walk, and `stele blame` (§5.1), which reuses both.
 
-use super::{Context, Finding, git, par_map};
+use super::{Context, Finding};
 use crate::anchors::{self, RegionDigest};
 use crate::config::{AssertionClass, Config};
+use crate::git::run as git;
 use crate::lock::{Lock, LockVerified};
 use crate::model::{Claim, ClaimLookup, Graph, Node, Resolution, Result, SYSTEM_ID, SteleError};
+use crate::par::par_map;
 use serde_json::{Value, json};
 use std::path::Path;
 

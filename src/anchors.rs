@@ -145,7 +145,7 @@ pub fn scan(root: &Path, tracked: &[PathBuf]) -> Result<AnchorData> {
     // Files scan on every core; merging in file order keeps each slug's occurrences, the
     // claim list and the first error exactly where a serial walk would put them.
     let mut data = AnchorData::default();
-    for file in crate::assert::par_map(tracked, |rel| scan_file(root, rel)) {
+    for file in crate::par::par_map(tracked, |rel| scan_file(root, rel)) {
         let file = file?;
         for (slug, occurrences) in file.landmarks {
             data.landmarks.entry(slug).or_default().extend(occurrences);

@@ -6,11 +6,11 @@ use super::{
     fs::{ensure_info_exclude, write_atomic},
     graph::{overlay_sources, tracked_files},
 };
+use crate::git;
 use crate::legacy;
 use crate::model::{Result, SteleError};
 use serde_json::json;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// One file `migrate` rewrites: where its bytes live, how it is displayed in the report,
 /// and which notation slots it can carry ([`legacy::SourceKind`]).
@@ -157,10 +157,7 @@ fn read_migrate_source(target: &MigrateTarget) -> Result<Option<String>> {
 /// diagnostic — a `git` that cannot be spawned simply produces no warning, and neither
 /// case changes the exit code.
 fn warn_if_dirty(root: &Path) {
-    let dirty = Command::new("git")
-        .args(["status", "--porcelain"])
-        .current_dir(root)
-        .output()
+    let dirty = git::output(root, "status --porcelain", &[])
         .is_ok_and(|out| out.status.success() && !out.stdout.is_empty());
     if dirty {
         eprintln!(

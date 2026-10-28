@@ -29,6 +29,7 @@ mod migrate;
 mod query;
 
 use crate::assert::{self, Finding};
+use crate::git;
 use crate::lock::{self, Lock};
 use crate::model::{ExitCode, Result, SteleError};
 use emit::{EMIT_CHECK_FLAG, EMIT_CLAUDE_RULES_FLAG, emit};
@@ -41,7 +42,6 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// The committed lock, relative to the repo root.
 const LOCK_DIR: &str = ".stele";
@@ -179,10 +179,7 @@ fn work_tree_root(cwd: &Path) -> PathBuf {
 
 /// The trimmed stdout of `git rev-parse <flag>` in `cwd`, empty on any git failure.
 fn git_stdout(cwd: &Path, flag: &str) -> String {
-    Command::new("git")
-        .args(["rev-parse", flag])
-        .current_dir(cwd)
-        .output()
+    git::output(cwd, "rev-parse", &[flag])
         .ok()
         .filter(|out| out.status.success())
         .map(|out| String::from_utf8_lossy(out.stdout.trim_ascii()).into_owned())

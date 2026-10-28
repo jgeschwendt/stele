@@ -558,3 +558,39 @@ fn a_gone_node_source_is_an_input_error() {
         );
     }
 }
+
+// A sparse checkout leaves skip-worktree paths tracked but absent, so the scan read the
+// lock as missing and anchors outside the cone as unresolved. Every verb refuses it with
+// exit 2 (§2.4) until the checkout is full again; a skip-worktree bit set by hand on a
+// non-sparse tree (its file still on disk) is not refused.
+#[test]
+fn a_sparse_checkout_is_refused_by_every_verb() {
+    let fixture = Fixture::bare();
+    fixture.write("AGENTS.md", "# root\n\n```stele\nkind: system\n```\n");
+    fixture.write("a/x.rs", "fn x() {}\n");
+    fixture.write("b/y.rs", "fn y() {}\n");
+    fixture.commit("two dirs");
+    assert_eq!(fixture.run(&["build"]).code, 0);
+    fixture.commit("lock");
+    let full = fixture.run(&["check"]).combined();
+    fixture.git(&["update-index", "--skip-worktree", "b/y.rs"]);
+    assert_eq!(
+        fixture.run(&["check"]).combined(),
+        full,
+        "a hand-set bit is not sparse"
+    );
+    fixture.git(&["update-index", "--no-skip-worktree", "b/y.rs"]);
+
+    fixture.git(&["sparse-checkout", "set", "a"]);
+    for verb in ["check", "nodes", "emit", "build"] {
+        let run = fixture.run(&[verb]);
+        assert_eq!(run.code, 2, "{verb}: {}", run.combined());
+        assert!(
+            run.stderr.contains("sparse-checkout disable"),
+            "{verb}: {}",
+            run.combined()
+        );
+    }
+    fixture.git(&["sparse-checkout", "disable"]);
+    assert_eq!(fixture.run(&["check"]).combined(), full);
+}

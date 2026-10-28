@@ -420,6 +420,7 @@ fn dispatch(ws: &Workspace, args: &[&str]) -> Result<CommandOutput> {
                     )));
                 }
             }
+            refuse_sparse(&ws.work)?;
             run(ws, args)
         }
         None => Err(SteleError::input_msg(
@@ -475,6 +476,24 @@ pub fn serve_render(ws: &Workspace, argv: &[&str]) -> VerbRender {
 /// the same exit-2 input error the CLI verbs give). Reuses the tracked-file probe.
 pub fn ensure_git_repo(root: &Path) -> Result<()> {
     git_ls_files(root, &[])?;
+    refuse_sparse(root)
+}
+
+/// Refuse a sparse checkout (§2.4): its skip-worktree paths are tracked but absent from
+/// disk, so every scan would read them as gone — the lock missing, anchors outside the cone
+/// unresolved. A skip-worktree bit set by hand without `core.sparseCheckout` keeps its file
+/// on disk and passes. An input error, exit 2.
+fn refuse_sparse(work: &Path) -> Result<()> {
+    let config = git::output(work, "config --type=bool --get", &["core.sparseCheckout"]);
+    let sparse = config.is_ok_and(|out| out.stdout.trim_ascii() == b"true")
+        && git::output(work, "ls-files -t -z", &[])
+            .is_ok_and(|out| out.stdout.split(|b| *b == 0).any(|e| e.starts_with(b"S ")));
+    if sparse {
+        return Err(SteleError::input_msg(
+            "stele needs a full checkout: this sparse checkout leaves tracked paths absent \
+             (run git sparse-checkout disable)",
+        ));
+    }
     Ok(())
 }
 

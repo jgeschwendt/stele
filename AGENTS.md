@@ -4,8 +4,7 @@
 kind: system
 purpose: stele — typed agent-doc graph reconciled against extracted code truth. docs/spec.html is the contract; the Rust engine implements it and self-hosts on this repo.
 commands:
-  test: cargo test
-  lint: cargo clippy --all-targets -- -D warnings && cargo fmt --check
+  check: mise run check   # the whole gate — fmt, clippy, test, stele check + emit --check; hk pre-push and CI run it
   graph: cargo run -- build && cargo run -- emit   # local only; CI never runs stele build (§5.1)
 invariants:
   - claim: docs/spec.html outranks everything here — code and examples conform to it; changing behavior means revising the spec (and its decision log) first

@@ -1,2 +1,4 @@
 [toolchain]
 channel = "stable"
+# `mise run check` needs both; rustup installs them on first use, CI included.
+components = ["clippy", "rustfmt"]

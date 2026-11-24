@@ -23,7 +23,8 @@ jobs:
           persist-credentials: false
       # The pinned toolchain (mise.toml + rust-toolchain.toml's components).
       - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
-      # The whole gate, as hk's pre-push runs it: fmt, clippy, tests, then stele's own
-      # graph gate (§5.1: check → emit --check). It never runs `stele build`, the sole
-      # writer of .stele/graph.lock, which would make check's byte-compare trivially pass.
+      # The whole gate, as hk's pre-push runs it: fmt, clippy, tests and stele's own
+      # graph gate (§5.1: check → emit --check), in parallel. It never runs `stele build`,
+      # the sole writer of .stele/graph.lock, which would make check's byte-compare
+      # trivially pass.
       - run: mise run check

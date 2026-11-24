@@ -3,17 +3,26 @@
 hk = "2.5.0"
 rust = "stable"
 
-# The whole gate: hk's pre-push and CI run this, nothing else. Order is load-bearing —
-# the graph gate runs the binary `cargo build` just made. Never `stele build` here: it
-# is the sole writer of .stele/graph.lock and would launder a stale lock (§5.1).
+# The whole gate: hk's pre-push and CI run this, nothing else. Its four parts run in
+# parallel; the first failure stops the rest and fails the run.
 [tasks.check]
-description = "the gate hk's pre-push and CI run: fmt, clippy, tests, then stele check → emit --check"
-run = [
-  "cargo fmt --check",
-  "cargo clippy --all-targets -- -D warnings",
-  "cargo test",
-  "cargo build && ./target/debug/stele check && ./target/debug/stele emit --check",
-]
+depends = ["check:clippy", "check:fmt", "check:graph", "check:test"]
+description = "the gate hk's pre-push and CI run: fmt, clippy, tests and stele check → emit --check, in parallel"
+
+[tasks."check:clippy"]
+run = "cargo clippy --all-targets -- -D warnings"
+
+[tasks."check:fmt"]
+run = "cargo fmt --check"
+
+# Order is load-bearing: the graph gate runs the binary `cargo build` just made. Never
+# `stele build` here: it is the sole writer of .stele/graph.lock and would launder a
+# stale lock (§5.1).
+[tasks."check:graph"]
+run = "cargo build && ./target/debug/stele check && ./target/debug/stele emit --check"
+
+[tasks."check:test"]
+run = "cargo test"
 
 [tasks.figures]
 description = "Render docs/figures/*.png from the Claude Design canvas source"
